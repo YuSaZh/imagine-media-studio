@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('serves the PR 0 App Shell and installable manifest', async ({ page, request }) => {
   await page.goto('/');
   await expect(page).toHaveTitle(/Imagine Media Studio/);
-  await expect(page.getByRole('heading', { name: 'Imagine Media Studio' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Foundation ready.' })).toBeVisible();
 
   const manifestLink = page.locator('link[rel="manifest"]');
   await expect(manifestLink).toHaveAttribute('href', /manifest/);
@@ -39,7 +39,7 @@ test('serves the PR 0 App Shell and installable manifest', async ({ page, reques
   await page.context().setOffline(true);
   try {
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await expect(page.getByRole('heading', { name: 'Imagine Media Studio' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Foundation ready.' })).toBeVisible();
   } finally {
     await page.context().setOffline(false);
   }
