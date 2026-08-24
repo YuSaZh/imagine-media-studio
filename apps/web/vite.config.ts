@@ -44,6 +44,21 @@ export default defineConfig({
             purpose: 'maskable',
           },
         ],
+        screenshots: [
+          {
+            src: '/screenshots/pwa-desktop-1280x720.png',
+            sizes: '1280x720',
+            type: 'image/png',
+            form_factor: 'wide',
+            label: 'Imagine Media Studio PR 0 desktop App Shell',
+          },
+          {
+            src: '/screenshots/pwa-mobile-390x844.png',
+            sizes: '390x844',
+            type: 'image/png',
+            label: 'Imagine Media Studio PR 0 mobile App Shell',
+          },
+        ],
       },
       workbox: {
         cleanupOutdatedCaches: true,

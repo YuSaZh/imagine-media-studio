@@ -27,6 +27,17 @@ test('serves the PR 0 App Shell and installable manifest', async ({ page, reques
     expect(iconResponse.ok()).toBeTruthy();
     expect(iconResponse.headers()['content-type']).toContain(icon.type);
   }
+  expect(manifest.screenshots).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ sizes: '1280x720', form_factor: 'wide' }),
+      expect.objectContaining({ sizes: '390x844' }),
+    ]),
+  );
+  for (const screenshot of manifest.screenshots as Array<{ src: string; type: string }>) {
+    const screenshotResponse = await request.get(screenshot.src);
+    expect(screenshotResponse.ok()).toBeTruthy();
+    expect(screenshotResponse.headers()['content-type']).toContain(screenshot.type);
+  }
 
   const serviceWorkerUrl = await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.ready;
