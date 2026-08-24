@@ -46,6 +46,15 @@ test('serves the PR 0 App Shell and installable manifest', async ({ page, reques
   expect(serviceWorkerUrl).not.toBeNull();
   expect((await request.get(serviceWorkerUrl!)).ok()).toBeTruthy();
 
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send('Page.enable');
+    const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors');
+    expect(installabilityErrors).toEqual([]);
+  } finally {
+    await cdp.detach();
+  }
+
   const screenshotDirectory = resolve('artifacts/pr0');
   await mkdir(screenshotDirectory, { recursive: true });
   await page.screenshot({

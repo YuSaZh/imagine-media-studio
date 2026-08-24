@@ -49,6 +49,22 @@ async function createTestServer(
   return server;
 }
 
+async function reopenTestServer(dataDir: string): Promise<ImagineServer> {
+  const server = await createServer({
+    config: {
+      appPort: 3030,
+      dataDir,
+      logLevel: 'silent',
+      mockProviderEnabled: true,
+      webDistDir: resolve(dataDir, 'missing-web-dist'),
+    },
+    logger: false,
+    migrationsDirectory,
+  });
+  servers.push(server);
+  return server;
+}
+
 describe('Imagine server PR 0 skeleton', () => {
   it('reports health without listening on a host port', async () => {
     const { app } = await createTestServer();
@@ -86,18 +102,23 @@ describe('Imagine server PR 0 skeleton', () => {
     await first.app.close();
     servers.splice(servers.indexOf(first), 1);
 
-    const second = await createServer({
-      config: {
-        appPort: 3030,
-        dataDir,
-        logLevel: 'silent',
-        mockProviderEnabled: true,
-        webDistDir: resolve(dataDir, 'missing-web-dist'),
-      },
-      logger: false,
-      migrationsDirectory,
-    });
-    servers.push(second);
+    const second = await reopenTestServer(dataDir);
+
+    await second.runner.waitForIdle();
+    expect(second.jobs.get(queued.id)?.status).toBe('completed');
+    expect(second.assets.countForJob(queued.id)).toBe(1);
+  });
+
+  it('recovers a queued Mock Job when a new runner starts', async () => {
+    const first = await createTestServer(false);
+    const queued = first.jobs.create(
+      createMockGenerationRequest({ prompt: 'Resume queued after restart' }),
+    );
+    const dataDir = temporaryDirectories.at(-1)!;
+    await first.app.close();
+    servers.splice(servers.indexOf(first), 1);
+
+    const second = await reopenTestServer(dataDir);
 
     await second.runner.waitForIdle();
     expect(second.jobs.get(queued.id)?.status).toBe('completed');
