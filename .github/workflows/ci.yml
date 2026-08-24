@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, typecheck, unit, build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  e2e:
+    name: Playwright PWA smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 7
+
+  docker-smoke:
+    name: Single-container persistence smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Prepare isolated runtime directory
+        run: |
+          runtime_dir=$(mktemp -d "$RUNNER_TEMP/imagine-media.XXXXXXXX")
+          chmod 0700 "$runtime_dir"
+          echo "DATA_HOST_DIR=$runtime_dir" >> "$GITHUB_ENV"
+          echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          echo "APP_SECRET=github-actions-pr0-smoke-secret-not-for-production" >> "$GITHUB_ENV"
+          echo "PUID=$(id -u)" >> "$GITHUB_ENV"
+          echo "PGID=$(id -g)" >> "$GITHUB_ENV"
+          echo "IMAGINE_MEDIA_HOST_PORT=18080" >> "$GITHUB_ENV"
+      - name: Validate and build the single service
+        run: |
+          test "$(docker compose config --services | wc -l | tr -d ' ')" = "1"
+          docker compose build
+      - name: Run persistence and restart smoke test
+        run: bash .github/scripts/docker-smoke.sh
+      - name: Show Compose diagnostics
+        if: failure()
+        run: |
+          docker compose ps --all || true
+          docker compose logs --no-color || true
+      - name: Clean up isolated Compose resources
+        if: always()
+        run: |
+          cleanup_status=0
+          docker compose down --volumes --remove-orphans || cleanup_status=$?
+          case "$DATA_HOST_DIR" in
+            "$RUNNER_TEMP"/imagine-media.*)
+              find "$DATA_HOST_DIR" -mindepth 1 -depth -delete || cleanup_status=$?
+              rmdir "$DATA_HOST_DIR" || cleanup_status=$?
+              ;;
+            *)
+              echo "Refusing to remove unexpected DATA_HOST_DIR: $DATA_HOST_DIR" >&2
+              cleanup_status=1
+              ;;
+          esac
+          exit "$cleanup_status"

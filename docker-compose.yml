@@ -1,0 +1,17 @@
+services:
+  imagine-media:
+    build:
+      context: .
+    ports:
+      - "${IMAGINE_MEDIA_HOST_PORT:-3030}:${APP_PORT:-3030}"
+    user: "${PUID:-1000}:${PGID:-1000}"
+    volumes:
+      - "${DATA_HOST_DIR:-./data}:/data"
+    environment:
+      APP_PORT: "${APP_PORT:-3030}"
+      DATA_DIR: /data
+      APP_SECRET: "${APP_SECRET:-replace-with-a-long-random-secret}"
+      APP_PASSWORD: "${APP_PASSWORD:-}"
+      MOCK_PROVIDER_ENABLED: "${MOCK_PROVIDER_ENABLED:-true}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    restart: unless-stopped

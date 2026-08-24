@@ -1,0 +1,16 @@
+.git
+.github
+.design-reference
+artifacts
+coverage
+data
+node_modules
+playwright-report
+test-results
+**/dist
+*.log
+.env*
+!.env.example
+findings.md
+progress.md
+task_plan.md
