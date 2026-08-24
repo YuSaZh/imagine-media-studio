@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-The project is currently in **PR 0**, which establishes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, minimal PWA, and UI reference process described in [`PLAN.MD`](./PLAN.MD).
+**PR 0 is complete.** It establishes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, minimal PWA, and UI reference process described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -15,6 +15,8 @@ The project is currently in **PR 0**, which establishes the clean monorepo, sing
 - Build, E2E, and Docker smoke verification in GitHub Actions
 
 Real providers and the final Grok Imagine-referenced interface are intentionally out of scope until their planned phases.
+
+The acceptance matrix and reproducible evidence for this phase are recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md).
 
 ## Local Safety
 
