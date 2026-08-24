@@ -47,6 +47,12 @@ jobs:
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+      - if: success() && hashFiles('artifacts/pr0/*.png') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr0-pwa-screenshots
+          path: artifacts/pr0
+          retention-days: 7
       - if: failure() && hashFiles('playwright-report/**') != ''
         uses: actions/upload-artifact@v6
         with:

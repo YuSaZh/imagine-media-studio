@@ -1,6 +1,9 @@
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
 import { expect, test } from '@playwright/test';
 
-test('serves the PR 0 App Shell and installable manifest', async ({ page, request }) => {
+test('serves the PR 0 App Shell and installable manifest', async ({ page, request }, testInfo) => {
   await page.goto('/');
   await expect(page).toHaveTitle(/Imagine Media Studio/);
   await expect(page.getByRole('heading', { name: 'Foundation ready.' })).toBeVisible();
@@ -31,6 +34,13 @@ test('serves the PR 0 App Shell and installable manifest', async ({ page, reques
   });
   expect(serviceWorkerUrl).not.toBeNull();
   expect((await request.get(serviceWorkerUrl!)).ok()).toBeTruthy();
+
+  const screenshotDirectory = resolve('artifacts/pr0');
+  await mkdir(screenshotDirectory, { recursive: true });
+  await page.screenshot({
+    animations: 'disabled',
+    path: resolve(screenshotDirectory, `${testInfo.project.name}.png`),
+  });
 
   await page.reload();
   await expect

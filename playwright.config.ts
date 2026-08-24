@@ -17,8 +17,22 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      name: 'pwa-desktop-1280x720',
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        viewport: { width: 1280, height: 720 },
+      },
+    },
+    {
+      name: 'pwa-mobile-390x844',
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 390, height: 844 },
+      },
     },
   ],
   webServer: {
