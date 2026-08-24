@@ -1,0 +1,33 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Test and browser output
+playwright-report/
+test-results/
+blob-report/
+
+# Local runtime data
+data/*
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+
+# Local configuration and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Local planning records
+task_plan.md
+findings.md
+progress.md
+
+# Editor and operating system files
+.DS_Store
+.idea/
+.vscode/
