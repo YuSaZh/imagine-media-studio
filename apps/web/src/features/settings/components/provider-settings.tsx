@@ -193,6 +193,31 @@ export function modelToForm(model: ModelDto | null, providerId: string): ManualM
   };
 }
 
+export function ManualModelCapabilityField({
+  onChange,
+  value,
+}: {
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label>
+      <span>Capability JSON</span>
+      <textarea
+        aria-describedby="manual-model-capability-help"
+        aria-label="Capability JSON"
+        onChange={(event) => onChange(event.target.value)}
+        rows={10}
+        spellCheck={false}
+        value={value}
+      />
+      <small id="manual-model-capability-help">
+        Include at least one supported operation, such as image.generate.
+      </small>
+    </label>
+  );
+}
+
 export function buildManualModelWriteInput(form: ManualModelFormState): ManualModelCreateInput {
   const modelId = form.modelId.trim();
   const displayName = form.displayName.trim();
@@ -421,19 +446,10 @@ function ModelEditor({
               />
             </label>
           </div>
-          <label>
-            <span>Capability JSON</span>
-            <textarea
-              aria-describedby="manual-model-capability-help"
-              onChange={(event) => update('capabilitiesJson', event.target.value)}
-              rows={10}
-              spellCheck={false}
-              value={form.capabilitiesJson}
-            />
-            <small id="manual-model-capability-help">
-              Include at least one supported operation, such as image.generate.
-            </small>
-          </label>
+          <ManualModelCapabilityField
+            onChange={(value) => update('capabilitiesJson', value)}
+            value={form.capabilitiesJson}
+          />
           <label className="provider-checkbox-row">
             <input
               checked={form.enabled}

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PROVIDER_PROFILE_OPTIONS,
   ProviderApiKeyField,
+  ManualModelCapabilityField,
   buildManualModelWriteInput,
   buildProviderWriteInput,
   modelToForm,
@@ -37,6 +38,17 @@ describe('Provider editor mapping', () => {
     expect(markup.match(/aria-label="API key"/g)).toHaveLength(1);
     expect(markup.match(/type="password"/g)).toHaveLength(1);
     expect(markup).toContain('Write only. Saved credentials are never returned to this page.');
+  });
+
+  it('exposes one stable accessible name for the capability JSON field', () => {
+    const markup = renderToStaticMarkup(createElement(ManualModelCapabilityField, {
+      onChange: () => undefined,
+      value: '{}',
+    }));
+
+    expect(markup.match(/aria-label="Capability JSON"/g)).toHaveLength(1);
+    expect(markup.match(/<textarea/g)).toHaveLength(1);
+    expect(markup).toContain('Include at least one supported operation, such as image.generate.');
   });
 
   it('never places a stored Secret into editor state', () => {
