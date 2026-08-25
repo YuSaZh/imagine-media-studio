@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0 and the PR 1 functional UI Shell are complete.** The current application includes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, installable PWA, responsive Gallery/Composer/Viewer flows, Library routes, and settings shell described in [`PLAN.MD`](./PLAN.MD).
+**PR 0, PR 1, and PR 2 are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, and settings described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -11,13 +11,17 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - React and Vite web app
 - Fastify application server
 - SQLite and Drizzle ORM
+- AES-256-GCM Provider Secret storage
+- Upload, thumbnails, posters, Range delivery, and SSRF-safe result downloads
+- Durable Job state machine, outbox, and one browser SSE connection
+- Optional application-password session gate
 - One Docker service and one `/data` volume
 - Local lint, typecheck, unit, build, and isolated Playwright preflight
 - GitHub Actions quality, E2E, screenshot artifact, and Docker smoke verification
 
-Real providers remain intentionally out of scope until PR 4 and later. PR 1 uses only deterministic Mock fixtures and passed remote functional acceptance. Its strict Grok Imagine L3/L4 classification remains deferred because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
+Real providers remain intentionally out of scope until PR 4 and later. PR 2 production data flows use the deterministic Mock Provider; PR 1 visual fixtures are available only behind an explicit test session key and are never a production fallback. PR 1 strict Grok Imagine L3/L4 classification remains deferred because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
 
-PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
+PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), and PR 2 evidence is recorded in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 
 ## Local Safety
 

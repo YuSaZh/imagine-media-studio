@@ -71,4 +71,4 @@ Internal JSON contracts are strict and versioned through shared schemas. Browser
 
 ## Validation
 
-Local validation is limited to non-listening lint, typecheck, unit tests, and Fastify injection tests. GitHub Actions owns the production build, Playwright browser execution, Docker image build, and isolated single-container restart smoke. The Actions smoke uses a unique Compose project and temporary `0700` data directory and always cleans both.
+Local validation may include lint, typecheck, unit tests, production builds, and Playwright only after its temporary port is confirmed free. Local Docker image or Compose execution remains prohibited. GitHub Actions independently runs the production build, Playwright browser suite, Docker image build, and isolated single-container restart smoke. The Actions smoke uses a unique Compose project and temporary `0700` data directory and always cleans both.
