@@ -17,7 +17,7 @@ test.describe('PR4 Provider settings', () => {
     await providerDialog.getByRole('combobox', { name: 'Provider profile', exact: true })
       .selectOption('xai-imagine-image-v1');
     await providerDialog.getByLabel('Base URL', { exact: true }).fill('https://api.example.test/v1');
-    await providerDialog.getByRole('textbox', { name: /^API key\b/ }).fill('e2e-key-not-for-upstream');
+    await providerDialog.getByLabel(/^API key\b/).fill('e2e-key-not-for-upstream');
     await providerDialog.getByRole('button', { name: 'Save provider', exact: true }).click();
 
     const card = page.locator('.provider-card').filter({ hasText: providerName });
