@@ -51,6 +51,16 @@ interface JobDetailResponse {
   };
 }
 
+async function selectMockImageModel(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Generation parameters' }).click();
+  const model = page.getByRole('combobox', { name: 'Model', exact: true });
+  await expect(model).toBeVisible();
+  await expect(model.locator('option[value="mock-image-v1"]')).toHaveCount(1);
+  await model.selectOption('mock-image-v1');
+  await expect(model).toHaveValue('mock-image-v1');
+  await page.keyboard.press('Escape');
+}
+
 function isPostTo(response: Response, path: string): boolean {
   return response.request().method() === 'POST' && new URL(response.url()).pathname === path;
 }
@@ -107,6 +117,21 @@ test('uploads multiple references and completes a persistent Mask edit', async (
   const generatePrompt = `PR3 multi-reference ${runId}`;
   const editPrompt = `PR3 masked edit ${runId}`;
   const uploadBodies: Array<Promise<AssetResponse>> = [];
+  const mockRefresh = await request.post('/internal/providers/mock/models/refresh');
+  expect(mockRefresh.status()).toBe(200);
+  const mockCatalog = (await mockRefresh.json()) as {
+    readonly items: readonly {
+      readonly capabilities: Readonly<Record<string, unknown>>;
+      readonly modelId: string;
+    }[];
+  };
+  const mockModel = mockCatalog.items.find((item) => item.modelId === 'mock-image-v1');
+  expect(mockModel).toBeDefined();
+  expect(mockModel?.capabilities).toMatchObject({
+    operations: expect.arrayContaining(['image.generate', 'image.edit']),
+    supportsMask: true,
+  });
+  expect(mockModel?.capabilities.maxReferenceImages).toBeGreaterThanOrEqual(2);
   const collectUpload = (response: Response) => {
     if (response.status() === 201 && isPostTo(response, '/internal/assets/upload')) {
       uploadBodies.push(response.json() as Promise<AssetResponse>);
@@ -114,9 +139,15 @@ test('uploads multiple references and completes a persistent Mask edit', async (
   };
 
   page.on('response', collectUpload);
+  // PR4 settings tests run in parallel against the same E2E database. Keep
+  // their model-catalog events from replacing this flow's explicit model.
+  await page.route('**/internal/events', async (route) => {
+    await route.abort();
+  });
   await page.goto('/imagine');
   await dismissPwaNotice(page);
   await expect(page.getByRole('heading', { name: 'Imagine' })).toBeVisible();
+  await selectMockImageModel(page);
   await expect(page.getByRole('button', { name: 'Add reference image' })).toBeEnabled();
   await page.getByLabel('Reference image files').setInputFiles([
     { buffer: PNG, mimeType: 'image/png', name: `reference-a-${runId}.png` },
@@ -162,6 +193,7 @@ test('uploads multiple references and completes a persistent Mask edit', async (
 
   await page.reload();
   await dismissPwaNotice(page);
+  await selectMockImageModel(page);
   const sourceCard = page.locator(`[data-item-id="${source.id}"]`);
   await expect(sourceCard).toBeVisible();
   await sourceCard.locator('.media-card-open').click();
@@ -217,6 +249,7 @@ test('uploads multiple references and completes a persistent Mask edit', async (
   });
 
   await expect(page).toHaveURL(/\/imagine$/);
+  await selectMockImageModel(page);
   const appliedInputs = page.getByLabel('Generation inputs');
   await expect(appliedInputs.getByText('Source', { exact: true })).toBeVisible();
   await expect(appliedInputs.getByText('Mask', { exact: true })).toBeVisible();
