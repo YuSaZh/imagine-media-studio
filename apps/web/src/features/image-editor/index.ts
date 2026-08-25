@@ -1,0 +1,5 @@
+export * from './browser/canvas-renderer.js';
+export * from './browser/png-exporter.js';
+export * from './browser/source-content.js';
+export { MAX_IMAGE_EDITOR_NATURAL_PIXELS } from './model/limits.js';
+export * from './model/mask-editor.js';
