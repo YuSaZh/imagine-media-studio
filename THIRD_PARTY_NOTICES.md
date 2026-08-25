@@ -1,16 +1,42 @@
 # Third-party notices
 
-## PR 0 review status
+## Reviewed repositories and incorporated PR 3 algorithms
 
-As of PR 0, this project has only reviewed the following upstream repositories. It has not copied, rewritten, linked, bundled, or distributed any code, tests, UI, visual assets, or other artifacts from them.
-
-Consequently, no code or assets from these reviewed repositories are incorporated into the product, and no attribution notice for incorporated material from them is currently required. This section records review provenance only; it is not a claim that upstream software is part of this project.
+PR 0 reviewed the repositories below. PR 3 subsequently approved selective adaptation of two pure algorithm subsets from `CookSleep/gpt_image_playground`: Mask target/coverage logic and viewport transform math. No donor UI, pages, components, CSS, Store, icons, media, or visual assets are incorporated. The other repositories remain reference-only.
 
 | Repository | Reviewed revision | License |
 | --- | --- | --- |
 | [`CookSleep/gpt_image_playground`](https://github.com/CookSleep/gpt_image_playground) | [`997d79b35e60406d6ab6da26d0a9179a724820c7`](https://github.com/CookSleep/gpt_image_playground/commit/997d79b35e60406d6ab6da26d0a9179a724820c7) | MIT |
 | [`lidge-jun/ima2-gen`](https://github.com/lidge-jun/ima2-gen) | [`b7369f8a4c042249dcaa282270421d0faa7ed4fe`](https://github.com/lidge-jun/ima2-gen/commit/b7369f8a4c042249dcaa282270421d0faa7ed4fe) | MIT |
 | [`alasano/sora-2-playground`](https://github.com/alasano/sora-2-playground) | [`54d746350c2e0705bbfcec65cf27048aa6cbe556`](https://github.com/alasano/sora-2-playground/commit/54d746350c2e0705bbfcec65cf27048aa6cbe556) | MIT |
+
+### CookSleep/gpt_image_playground MIT notice
+
+The following notice applies to the selectively adapted PR 3 algorithm portions identified in `docs/third-party/reuse-audit.md` and their file-level source headers:
+
+```text
+MIT License
+
+Copyright (c) 2026 CookSleep
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## Runtime dependency notice policy
 

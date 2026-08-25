@@ -2,7 +2,7 @@
 
 Audit date: 2026-08-25 (Asia/Tokyo)
 
-Status: **PR 0 review only**. No upstream source, UI, assets, tests, or generated artifacts have been copied into this repository. Every candidate below remains unapproved until its later implementation PR updates this file with an actual target path and test evidence.
+Status: **PR 3 selective-reuse gate approved for two pure algorithm subsets**. No upstream source, UI, assets, tests, or generated artifacts had been copied when this gate was recorded. The approved implementation must use only the exact source blobs and targets listed below, retain file-level attribution, and satisfy the stated tests.
 
 ## Policy and scope
 
@@ -46,6 +46,29 @@ The following rows are candidates, not reuse decisions. `Target` is deliberately
 - Custom provider mapping is a trust boundary. Arbitrary executable scripts are out of scope unless explicitly enabled for trusted administrators and isolated by a separate security design.
 - Donor types and parameter rules reflect donor product decisions. Local `ProviderAdapter`, `GenerationRequest`, and `ModelCapabilities` remain authoritative.
 - The donor's UI components, including `App.tsx`, `MaskEditorModal.tsx`, input panels/overlays, gallery, Viewer, CSS, and `store.ts`, are explicitly excluded even when they contain embedded logic.
+
+### PR 3 approved selective-reuse gate
+
+The PR 3 audit re-verified the donor `main` and advertised `HEAD` at `997d79b35e60406d6ab6da26d0a9179a724820c7`. The MIT license blob is `7a5b8535d3ca397ab92d8d82d9681fea36779156` and names `Copyright (c) 2026 CookSleep`.
+
+Only these two pure, non-visual subsets are approved before implementation:
+
+| Exact source | Source blob | Reuse mode | Exact target | Approved subset and required adaptation | Required local evidence |
+| --- | --- | --- | --- | --- | --- |
+| `src/lib/mask.ts` | `3feb76d2b23e1f2c827735e091739217a11a3891` | Selective copy and adaptation | `packages/shared/src/mask-target.ts` | Target existence/order and alpha-coverage classification only. Replace donor `InputImage` with local ID-bearing generics, replace user-facing Chinese errors with structured local errors, accept `ArrayLike<number>` rather than DOM `ImageData`, and define the local canonical coverage convention explicitly. | Node unit tests for missing target, stable target-first ordering, empty/partial/full coverage, non-binary alpha, malformed RGBA length, and usable-coverage rejection. |
+| `src/lib/viewportTransform.ts` | `04bef54716c4e4afd86e0ee8e7833cfa2fd103a9` | Selective copy and adaptation | `packages/shared/src/viewport-transform.ts` | Clamp, focal-point zoom, pinch transform, and client-to-canvas mapping only. Add finite/positive input validation and local error behavior. Do not copy `getComfortableInitialTransform` or its donor-specific compact-layout `42%` decision. | Node unit and seeded property tests for clamp bounds, focal-point stability, pinch edge cases, finite results, zero-size rejection, and coordinate round trips. |
+
+The target files must retain a short source header naming the donor repository, pinned revision, source file, source blob, and MIT license. The complete upstream MIT notice is recorded in `THIRD_PARTY_NOTICES.md` before code lands.
+
+All other PR 3 work is clean-room project code:
+
+- drag/drop, paste, directory rejection, count/byte limits, duplicate detection, and durable multipart upload;
+- bounded strict Data URL/Base64 envelopes and Blob conversion;
+- image orientation, resize, codec selection, alpha handling, and metadata stripping;
+- Mask preprocessing, stroke interpolation, erase, command history, undo/redo, clear, serialization, Canvas rendering, and PNG export;
+- every React component, Dialog/Sheet, Composer integration, Viewer integration, CSS rule, icon choice, responsive behavior, state owner, and E2E flow.
+
+`maskPreprocess.ts`, `canvasImage.ts`, `dataUrl.ts`, and `clipboard.ts` are reference-only scenario inputs, not copy sources. Provider request logic in `imageApiShared.ts` remains deferred to PR 4. `transparentImage.ts` is outside PR 3.
 
 ## Reference audit: `ima2-gen`
 
