@@ -197,12 +197,20 @@ export const internalClient = {
     requestJson(`/internal/assets${queryString(options)}`, AssetPageSchema),
   getAsset: async (assetId: string) =>
     requestJson(`/internal/assets/${encodeURIComponent(assetId)}`, AssetResponseSchema),
-  uploadAsset: async (file: File, fields: { parentAssetId?: string; role?: string } = {}) => {
+  uploadAsset: async (
+    file: File,
+    fields: { parentAssetId?: string; role?: string } = {},
+    options: { signal?: AbortSignal } = {},
+  ) => {
     const body = new FormData();
     if (fields.parentAssetId) body.set('parentAssetId', fields.parentAssetId);
     if (fields.role) body.set('role', fields.role);
     body.set('file', file, file.name);
-    return requestJson('/internal/assets/upload', AssetResponseSchema, { method: 'POST', body });
+    return requestJson('/internal/assets/upload', AssetResponseSchema, {
+      method: 'POST',
+      body,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
   },
   patchAsset: async (assetId: string, favorite: boolean) =>
     requestJson(`/internal/assets/${encodeURIComponent(assetId)}`, AssetResponseSchema, {

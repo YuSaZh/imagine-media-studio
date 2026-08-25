@@ -140,15 +140,18 @@ describe('internalClient', () => {
       ),
     );
 
+    const controller = new AbortController();
     await internalClient.uploadAsset(
       new File(['x'], 'fixture.png', { type: 'image/png' }),
       { parentAssetId: 'parent-asset', role: 'reference' },
+      { signal: controller.signal },
     );
     const request = fetchMock.mock.calls[0]?.[1];
     const headers = request?.headers;
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).has('Content-Type')).toBe(false);
     expect(request?.body).toBeInstanceOf(FormData);
+    expect(request?.signal).toBe(controller.signal);
     const body = request?.body as FormData;
     expect([...body.keys()]).toEqual(['parentAssetId', 'role', 'file']);
     expect(body.get('parentAssetId')).toBe('parent-asset');
