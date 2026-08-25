@@ -333,6 +333,13 @@ describe('PR 2 gallery API integration', () => {
           operations: ['image.generate', 'image.edit'],
           aspectRatios: ['1:1', '9:16'],
           maxReferenceImages: 2,
+          inputImageConstraints: {
+            mimeTypes: ['image/jpeg', 'image/png'],
+            maxBytes: 8_000_000,
+            maxPixels: 12_000_000,
+            maxWidth: 2_048,
+            maxHeight: 1_536,
+          },
           supportsBatchCount: true,
           maxBatchCount: 3,
         },
@@ -351,6 +358,15 @@ describe('PR 2 gallery API integration', () => {
           id: 'image-api-v1',
           providerId: 'provider-api',
           mediaKind: 'image',
+          capabilities: expect.objectContaining({
+            inputImagePolicy: expect.objectContaining({
+              allowedMimeTypes: ['image/jpeg', 'image/png'],
+              maxFileBytes: 8_000_000,
+              maxPixels: 12_000_000,
+              maxWidth: 2_048,
+              maxHeight: 1_536,
+            }),
+          }),
         })],
       }),
     );
@@ -385,9 +401,9 @@ describe('PR 2 gallery API integration', () => {
       aspectRatio: '1:1',
       durationSeconds: null,
       referenceCount: 2,
-      referenceAssetIds: ['asset-reference-1'],
+      inputAssets: [{ assetId: 'asset-reference-1', role: 'reference' }],
     }, [model])).toEqual({
-      operation: 'image.edit',
+      operation: 'image.generate',
       providerId: 'provider-api',
       modelId: 'image-api-v1',
       prompt: 'Use one persisted reference',
@@ -395,6 +411,111 @@ describe('PR 2 gallery API integration', () => {
       aspectRatio: '1:1',
       count: 2,
     });
+  });
+
+  it('selects operations from explicit input roles and rejects incompatible inputs', () => {
+    const imageModel: GalleryModel = {
+      id: 'image-edit-v1',
+      providerId: 'provider-api',
+      displayName: 'Image Edit',
+      mediaKind: 'image',
+      capabilities: {
+        operations: ['image.generate', 'image.edit'],
+        aspectRatios: ['1:1'],
+        resolutions: [],
+        durations: [],
+        maxReferenceImages: 2,
+        supportsMask: true,
+        supportsProgress: false,
+        supportsCancel: false,
+        supportsBatchCount: false,
+        maxBatchCount: 1,
+      },
+    };
+    const base: MockSubmission = {
+      mode: 'image',
+      prompt: 'Edit the source',
+      modelId: imageModel.id,
+      providerId: imageModel.providerId,
+      count: 1,
+      aspectRatio: '1:1',
+      durationSeconds: null,
+      referenceCount: 0,
+    };
+    expect(createGenerationRequest({
+      ...base,
+      inputAssets: [
+        { assetId: 'source-1', role: 'source' },
+        { assetId: 'mask-1', role: 'mask' },
+      ],
+    }, [imageModel])).toMatchObject({
+      operation: 'image.edit',
+      inputs: [
+        { assetId: 'source-1', role: 'source' },
+        { assetId: 'mask-1', role: 'mask' },
+      ],
+    });
+    expect(() => createGenerationRequest({
+      ...base,
+      inputAssets: [{ assetId: 'mask-1', role: 'mask' }],
+    }, [imageModel])).toThrow('Mask input');
+    expect(() => createGenerationRequest({
+      ...base,
+      inputAssets: [
+        { assetId: 'reference-1', role: 'reference' },
+        { assetId: 'reference-2', role: 'reference' },
+        { assetId: 'reference-3', role: 'reference' },
+      ],
+    }, [imageModel])).toThrow('at most 2 references');
+  });
+
+  it('uses first_frame rather than reference guessing for image-to-video', () => {
+    const videoModel: GalleryModel = {
+      id: 'video-v1',
+      providerId: 'provider-api',
+      displayName: 'Video',
+      mediaKind: 'video',
+      capabilities: {
+        operations: ['video.generate', 'video.image_to_video'],
+        aspectRatios: ['16:9'],
+        resolutions: [],
+        durations: [5],
+        maxReferenceImages: 1,
+        supportsMask: false,
+        supportsProgress: false,
+        supportsCancel: false,
+        supportsBatchCount: false,
+        maxBatchCount: 1,
+      },
+    };
+    expect(createGenerationRequest({
+      mode: 'video',
+      prompt: 'Move this frame',
+      modelId: videoModel.id,
+      providerId: videoModel.providerId,
+      count: 1,
+      aspectRatio: '16:9',
+      durationSeconds: 5,
+      referenceCount: 0,
+      inputAssets: [{ assetId: 'frame-1', role: 'first_frame' }],
+    }, [videoModel])).toMatchObject({
+      operation: 'video.image_to_video',
+      inputs: [{ assetId: 'frame-1', role: 'first_frame' }],
+    });
+    expect(() => createGenerationRequest({
+      mode: 'video',
+      prompt: 'Conflicting video inputs',
+      modelId: videoModel.id,
+      providerId: videoModel.providerId,
+      count: 1,
+      aspectRatio: '16:9',
+      durationSeconds: 5,
+      referenceCount: 1,
+      inputAssets: [
+        { assetId: 'frame-1', role: 'first_frame' },
+        { assetId: 'reference-1', role: 'reference' },
+      ],
+    }, [videoModel])).toThrow('either a first frame or reference images');
   });
 
   it('executes persisted favorite, collection, job, and delete actions', async () => {

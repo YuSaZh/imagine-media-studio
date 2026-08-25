@@ -2,6 +2,8 @@ import type { AssetDto, JobDto } from '@imagine/shared';
 import { describe, expect, it } from 'vitest';
 
 import { mapInternalGallery } from './api-mapper.js';
+import { storedInputAvailability } from '../../media-input/model/input-compatibility.js';
+import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
 
 const job: JobDto = {
   id: 'job-1',
@@ -66,12 +68,21 @@ describe('mapInternalGallery', () => {
       folderIds: ['collection-1'],
       previewPath: '/internal/assets/asset-1/thumbnail',
       aspectRatio: '16:9',
+      persistedAsset: true,
+      inputDescriptor: {
+        fileSize: 2048,
+        height: 900,
+        mimeType: 'image/png',
+        width: 1600,
+      },
     });
     expect(items[1]).toMatchObject({
       id: 'job-slot-job-1-1',
       status: 'remote_running',
       progress: 42,
       batchCount: 2,
+      persistedAsset: false,
+      inputDescriptor: null,
     });
   });
 
@@ -104,5 +115,15 @@ describe('mapInternalGallery', () => {
       providerId: 'local',
       status: 'completed',
     });
+  });
+
+  it('lets the Composer revalidate a persisted descriptor when model policy changes', () => {
+    const [item] = mapInternalGallery([asset], [job]);
+    expect(item).toBeDefined();
+    expect(storedInputAvailability(item, DEFAULT_IMAGE_INPUT_POLICY, true)).toBe('ready');
+    expect(storedInputAvailability(item, {
+      ...DEFAULT_IMAGE_INPUT_POLICY,
+      maxWidth: 512,
+    }, true)).toBe('incompatible');
   });
 });

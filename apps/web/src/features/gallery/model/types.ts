@@ -1,3 +1,7 @@
+import type { ImageInputPolicy } from '@imagine/shared';
+
+import type { ImageAssetInputDescriptor } from '../../media-input/model/types.js';
+
 export const PR1_JOB_STATUSES = [
   'queued',
   'submitting',
@@ -18,7 +22,8 @@ export type FixtureMediaOperation =
   | 'image.generate'
   | 'image.edit'
   | 'video.generate'
-  | 'video.image_to_video';
+  | 'video.image_to_video'
+  | 'video.reference_to_video';
 
 export type FixtureAspectRatio = '2:3' | '3:2' | '1:1' | '9:16' | '16:9';
 
@@ -33,6 +38,7 @@ export interface FixtureCapabilities {
   readonly supportsCancel: boolean;
   readonly supportsBatchCount: boolean;
   readonly maxBatchCount: number;
+  readonly inputImagePolicy?: ImageInputPolicy;
 }
 
 export interface FixtureModel {
@@ -77,6 +83,8 @@ interface FixtureGalleryItemBase {
   readonly referenceCount: number;
   readonly batchCount: number;
   readonly previewPath: string;
+  readonly inputDescriptor: ImageAssetInputDescriptor | null;
+  readonly persistedAsset: boolean;
 }
 
 export interface FixtureImageItem extends FixtureGalleryItemBase {

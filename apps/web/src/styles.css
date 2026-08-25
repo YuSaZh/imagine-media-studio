@@ -969,12 +969,26 @@ img {
   flex: 0 0 58px;
   overflow: hidden;
   border-radius: var(--radius-card);
+  background: var(--color-surface-subtle);
+}
+
+.reference-preview.is-incompatible {
+  box-shadow: inset 0 0 0 2px var(--color-warning);
+}
+
+.reference-preview.has-error {
+  box-shadow: inset 0 0 0 2px var(--color-danger);
 }
 
 .reference-preview img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.reference-preview.is-incompatible img,
+.reference-preview.has-error img {
+  opacity: 0.58;
 }
 
 .reference-preview .icon-button {
@@ -985,6 +999,70 @@ img {
   height: 20px;
   flex-basis: 20px;
   background: rgba(255, 255, 255, 0.9);
+}
+
+.reference-preview .reference-retry {
+  top: auto;
+  right: 2px;
+  bottom: 2px;
+}
+
+.reference-role {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  max-width: 36px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(18, 19, 18, 0.78);
+  color: var(--color-text-inverse);
+  padding: 2px 3px;
+  font-size: 0.5rem;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-upload-state {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  left: 2px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  border-radius: 3px;
+  background: rgba(18, 19, 18, 0.78);
+  color: var(--color-text-inverse);
+  padding: 3px;
+  font-size: 0.5rem;
+  line-height: 1;
+}
+
+.reference-upload-state > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-preview.has-error .reference-upload-state {
+  right: 23px;
+  color: #ffdadd;
+}
+
+.composer-input-status {
+  overflow: hidden;
+  margin: -2px 7px 5px;
+  color: var(--color-warning);
+  font-size: 0.64rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-input-status[role='alert'] {
+  color: var(--color-danger);
 }
 
 .drop-overlay {
@@ -2289,6 +2367,18 @@ img {
     width: var(--control-touch);
     height: var(--control-touch);
     flex-basis: var(--control-touch);
+  }
+
+  .composer .reference-preview .icon-button {
+    width: var(--control-touch);
+    height: var(--control-touch);
+    flex-basis: var(--control-touch);
+  }
+
+  .composer .reference-preview {
+    width: 96px;
+    height: 96px;
+    flex-basis: 96px;
   }
 
   .segmented-control button {

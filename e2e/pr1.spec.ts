@@ -238,7 +238,7 @@ test('supports Composer, Viewer, filters, and primary routes with Mock data', as
   await page.locator('input[type="file"]').setInputFiles(
     resolve('apps/web/public/mock-media/study-03-square.png'),
   );
-  await expect(page.locator('[aria-label="Reference images"] img')).toHaveCount(1);
+  await expect(page.locator('[aria-label="Generation inputs"] img')).toHaveCount(1);
   await generate.click();
   await expect(prompt).toHaveValue('');
   await expect(gallery).toHaveAttribute('data-total-items', String(totalItemsBeforeSubmit + 2));
@@ -371,7 +371,7 @@ test('returns Viewer continuations to a capability-normalized Composer', async (
     imagePath,
     imagePath,
   ]);
-  await expect(page.locator('[aria-label="Reference images"] img')).toHaveCount(4);
+  await expect(page.locator('[aria-label="Generation inputs"] img')).toHaveCount(4);
 
   const desktopCount = page.getByRole('combobox', { name: 'Result count' });
   if (await desktopCount.isVisible()) {
@@ -394,7 +394,7 @@ test('returns Viewer continuations to a capability-normalized Composer', async (
   const normalizedCount = page.locator('select[aria-label="Result count"]');
   await expect(normalizedCount).toBeDisabled();
   await expect(normalizedCount).toHaveValue('1');
-  await expect(page.locator('[aria-label="Reference images"] img')).toHaveCount(1);
+  await expect(page.locator('[aria-label="Generation inputs"] img')).toHaveCount(1);
 });
 
 test('creates and completes a persistent Mock Job through the server API', async ({ request }) => {

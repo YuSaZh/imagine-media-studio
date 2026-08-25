@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { AssetInput } from '@imagine/shared';
 
 export type ComposerMode = 'image' | 'video';
 
@@ -14,7 +15,7 @@ interface UiState {
   composerMode: ComposerMode;
   composerExpanded: boolean;
   composerParamsOpen: boolean;
-  composerReferenceAssetIds: readonly string[];
+  composerInputs: readonly AssetInput[];
   viewerAssetId: string | null;
   selectedAssetIds: ReadonlySet<string>;
   activeFolderId: string | null;
@@ -26,9 +27,9 @@ interface UiActions {
   setComposerExpanded: (expanded: boolean) => void;
   toggleComposerExpanded: () => void;
   setComposerParamsOpen: (open: boolean) => void;
-  addComposerReference: (assetId: string) => void;
-  limitComposerReferences: (maximum: number) => void;
-  removeComposerReference: (assetId: string) => void;
+  addComposerInput: (input: AssetInput) => void;
+  removeComposerInput: (input: AssetInput) => void;
+  setComposerPrimaryInput: (input: AssetInput & { role: 'first_frame' | 'source' }) => void;
   openViewer: (assetId: string) => void;
   closeViewer: () => void;
   toggleAssetSelection: (assetId: string) => void;
@@ -45,7 +46,7 @@ function createInitialState(): UiState {
     composerMode: 'image',
     composerExpanded: false,
     composerParamsOpen: false,
-    composerReferenceAssetIds: [],
+    composerInputs: [],
     viewerAssetId: null,
     selectedAssetIds: new Set<string>(),
     activeFolderId: null,
@@ -60,22 +61,38 @@ export const useUiStore = create<UiStore>()((set) => ({
   toggleComposerExpanded: () =>
     set((state) => ({ composerExpanded: !state.composerExpanded })),
   setComposerParamsOpen: (composerParamsOpen) => set({ composerParamsOpen }),
-  addComposerReference: (assetId) =>
+  addComposerInput: (input) =>
+    set((state) => {
+      const sameAsset = state.composerInputs.find(
+        (candidate) => candidate.assetId === input.assetId,
+      );
+      if (sameAsset?.role === input.role) return state;
+      if (input.role === 'reference' && sameAsset !== undefined) return state;
+      const withoutSameAsset = state.composerInputs.filter(
+        (candidate) => candidate.assetId !== input.assetId,
+      );
+      return {
+        composerInputs: ['first_frame', 'last_frame', 'mask', 'source'].includes(input.role)
+          ? [...withoutSameAsset.filter((candidate) => candidate.role !== input.role), input]
+          : [...withoutSameAsset, input],
+      };
+    }),
+  removeComposerInput: (input) =>
     set((state) => ({
-      composerReferenceAssetIds: state.composerReferenceAssetIds.includes(assetId)
-        ? state.composerReferenceAssetIds
-        : [...state.composerReferenceAssetIds, assetId].slice(-4),
-    })),
-  limitComposerReferences: (maximum) =>
-    set((state) => ({
-      composerReferenceAssetIds: state.composerReferenceAssetIds.slice(
-        0,
-        Math.max(0, Math.trunc(maximum)),
+      composerInputs: state.composerInputs.filter(
+        (candidate) => candidate.assetId !== input.assetId || candidate.role !== input.role,
       ),
     })),
-  removeComposerReference: (assetId) =>
+  setComposerPrimaryInput: (input) =>
     set((state) => ({
-      composerReferenceAssetIds: state.composerReferenceAssetIds.filter((id) => id !== assetId),
+      composerInputs: [
+        ...state.composerInputs.filter(
+          (candidate) =>
+            candidate.assetId !== input.assetId &&
+            !['first_frame', 'last_frame', 'mask', 'source'].includes(candidate.role),
+        ),
+        input,
+      ],
     })),
   openViewer: (viewerAssetId) => set({ viewerAssetId }),
   closeViewer: () => set({ viewerAssetId: null }),

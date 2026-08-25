@@ -23,6 +23,7 @@ import { IconButton } from '../../../components/icon-button';
 import { useUiStore } from '../../../stores/ui-store';
 import { useGalleryActions } from '../../gallery/api/gallery-query';
 import type { FixtureGalleryItem } from '../../gallery/model/types';
+import { canContinueWithImageInput } from '../../gallery/model/input-eligibility';
 
 interface MediaViewerProps {
   items: readonly FixtureGalleryItem[];
@@ -32,7 +33,8 @@ export function MediaViewer({ items }: MediaViewerProps) {
   const navigate = useNavigate();
   const viewerAssetId = useUiStore((state) => state.viewerAssetId);
   const closeViewer = useUiStore((state) => state.closeViewer);
-  const addComposerReference = useUiStore((state) => state.addComposerReference);
+  const addComposerInput = useUiStore((state) => state.addComposerInput);
+  const setComposerPrimaryInput = useUiStore((state) => state.setComposerPrimaryInput);
   const setComposerMode = useUiStore((state) => state.setComposerMode);
   const setComposerExpanded = useUiStore((state) => state.setComposerExpanded);
   const actions = useGalleryActions();
@@ -81,16 +83,25 @@ export function MediaViewer({ items }: MediaViewerProps) {
     if (normalizedScale === 1) setPosition({ x: 0, y: 0 });
   };
 
-  const continueWith = (mode: 'image' | 'video') => {
+  const continueWith = (intent: 'edit' | 'reference' | 'video') => {
     if (!item) return;
-    addComposerReference(item.id);
-    setComposerMode(mode);
+    if (intent === 'reference') {
+      addComposerInput({ assetId: item.id, role: 'reference' });
+      setComposerMode('image');
+    } else if (intent === 'edit') {
+      setComposerPrimaryInput({ assetId: item.id, role: 'source' });
+      setComposerMode('image');
+    } else {
+      setComposerPrimaryInput({ assetId: item.id, role: 'first_frame' });
+      setComposerMode('video');
+    }
     setComposerExpanded(true);
     closeViewer();
     void navigate('/imagine');
   };
 
   if (!item) return null;
+  const canContinue = canContinueWithImageInput(item);
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && closeViewer()}>
@@ -242,9 +253,9 @@ export function MediaViewer({ items }: MediaViewerProps) {
               <div><dt>Created</dt><dd>{item.createdAt.slice(0, 10)}</dd></div>
             </dl>
             <div className="viewer-create-actions">
-              <button onClick={() => continueWith('image')} type="button"><ImagePlus size={17} />Use as reference</button>
-              {item.kind === 'image' && <button onClick={() => continueWith('image')} type="button"><Pencil size={17} />Edit image</button>}
-              {item.kind === 'image' && <button onClick={() => continueWith('video')} type="button"><Clapperboard size={17} />Make video</button>}
+              {canContinue && <button onClick={() => continueWith('reference')} type="button"><ImagePlus size={17} />Use as reference</button>}
+              {canContinue && <button onClick={() => continueWith('edit')} type="button"><Pencil size={17} />Edit image</button>}
+              {canContinue && <button onClick={() => continueWith('video')} type="button"><Clapperboard size={17} />Make video</button>}
               <button
                 className="danger-command"
                 onClick={() => { actions.remove(item.id); closeViewer(); }}

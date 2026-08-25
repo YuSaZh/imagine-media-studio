@@ -68,6 +68,15 @@ function mapAsset(asset: AssetDto, job: JobDto | undefined): FixtureGalleryItem 
     referenceCount: job?.request.inputs.length ?? 0,
     batchCount: Math.max(1, job?.outputCount ?? 1),
     previewPath: asset.thumbnailUrl ?? asset.posterUrl ?? asset.contentUrl,
+    inputDescriptor: asset.type === 'image' && asset.width !== null && asset.height !== null
+      ? {
+          fileSize: asset.fileSize,
+          height: asset.height,
+          mimeType: asset.mimeType,
+          width: asset.width,
+        }
+      : null,
+    persistedAsset: true,
   };
   return asset.type === 'image'
     ? {
@@ -109,6 +118,8 @@ function mapJobSlot(job: JobDto, outputIndex: number): FixtureGalleryItem {
     referenceCount: job.request.inputs.length,
     batchCount: Math.max(1, job.outputCount),
     previewPath: PLACEHOLDER_PATH,
+    inputDescriptor: null,
+    persistedAsset: false,
   };
   return kind === 'image'
     ? {

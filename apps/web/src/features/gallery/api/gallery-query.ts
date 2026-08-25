@@ -2,15 +2,19 @@ import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import type {
+  AssetInput,
   GenerationRequest,
+  ImageInputPolicy,
   JsonObject,
   JsonValue,
   ModelDto,
   ProviderDto,
 } from '@imagine/shared';
+import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
 
 import { internalClient } from '../../../api/internal-client.js';
 import { internalQueryKeys } from '../../../api/query-keys.js';
+import { isVisualFixtureMode } from '../../../visual-fixture.js';
 import {
   PR1_MOCK_FOLDERS,
   PR1_MOCK_GALLERY_ITEMS,
@@ -28,8 +32,7 @@ import type {
 } from '../model/types.js';
 import { mapInternalGallery } from '../model/api-mapper.js';
 
-export const VISUAL_FIXTURE_STORAGE_KEY = 'imagine.visual-fixtures';
-export const VISUAL_FIXTURE_VERSION = 'pr1-v1';
+export { isVisualFixtureMode } from '../../../visual-fixture.js';
 
 export const galleryQueryKey = internalQueryKeys.gallery;
 export const optimisticSequenceQueryKey = ['pr1-gallery-optimistic-sequence'] as const;
@@ -58,18 +61,6 @@ interface CursorPage<T> {
 
 export interface GalleryModel extends FixtureModel {
   readonly providerId: string;
-}
-
-function sessionStorageValue(): string | null {
-  try {
-    return globalThis.sessionStorage?.getItem(VISUAL_FIXTURE_STORAGE_KEY) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export function isVisualFixtureMode(): boolean {
-  return sessionStorageValue() === VISUAL_FIXTURE_VERSION;
 }
 
 async function collectPages<T>(
@@ -101,6 +92,7 @@ const knownOperations = new Set<FixtureMediaOperation>([
   'image.edit',
   'video.generate',
   'video.image_to_video',
+  'video.reference_to_video',
 ]);
 
 function isObject(value: JsonValue | undefined): value is JsonObject {
@@ -127,6 +119,29 @@ function positiveInteger(value: JsonValue | undefined, fallback: number): number
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function boundedImageLimit(value: JsonValue | undefined, fallback: number): number {
+  return Math.min(positiveInteger(value, fallback), fallback);
+}
+
+function mapImageInputPolicy(capabilities: JsonObject, maxReferenceImages: number): ImageInputPolicy {
+  const constraints = isObject(capabilities.inputImageConstraints)
+    ? capabilities.inputImageConstraints
+    : {};
+  const declaredMimeTypes = stringArray(constraints.mimeTypes).map((mime) => mime.trim().toLowerCase());
+  const allowedMimeTypes = declaredMimeTypes.length === 0
+    ? DEFAULT_IMAGE_INPUT_POLICY.allowedMimeTypes
+    : DEFAULT_IMAGE_INPUT_POLICY.allowedMimeTypes.filter((mime) => declaredMimeTypes.includes(mime));
+  return {
+    allowedMimeTypes,
+    maxCount: Math.max(1, Math.min(DEFAULT_IMAGE_INPUT_POLICY.maxCount, maxReferenceImages)),
+    maxFileBytes: boundedImageLimit(constraints.maxBytes, DEFAULT_IMAGE_INPUT_POLICY.maxFileBytes),
+    maxTotalBytes: DEFAULT_IMAGE_INPUT_POLICY.maxTotalBytes,
+    maxPixels: boundedImageLimit(constraints.maxPixels, DEFAULT_IMAGE_INPUT_POLICY.maxPixels),
+    maxWidth: boundedImageLimit(constraints.maxWidth, DEFAULT_IMAGE_INPUT_POLICY.maxWidth),
+    maxHeight: boundedImageLimit(constraints.maxHeight, DEFAULT_IMAGE_INPUT_POLICY.maxHeight),
+  };
+}
+
 function mapInternalModel(model: ModelDto): GalleryModel {
   const capabilities = model.capabilities;
   const operations = stringArray(capabilities.operations).filter(
@@ -139,6 +154,7 @@ function mapInternalModel(model: ModelDto): GalleryModel {
     (ratio): ratio is FixtureAspectRatio => knownAspectRatios.has(ratio as FixtureAspectRatio),
   );
   const supportsBatchCount = capabilities.supportsBatchCount === true;
+  const maxReferenceImages = positiveInteger(capabilities.maxReferenceImages, 0);
   return {
     id: model.modelId,
     providerId: model.providerId,
@@ -149,12 +165,13 @@ function mapInternalModel(model: ModelDto): GalleryModel {
       aspectRatios: aspectRatios.length > 0 ? aspectRatios : ['1:1'],
       resolutions: stringArray(capabilities.resolutions),
       durations: numberArray(capabilities.durations),
-      maxReferenceImages: positiveInteger(capabilities.maxReferenceImages, 0),
+      maxReferenceImages,
       supportsMask: capabilities.supportsMask === true,
       supportsProgress: capabilities.supportsProgress === true,
       supportsCancel: capabilities.supportsCancel === true,
       supportsBatchCount,
       maxBatchCount: supportsBatchCount ? positiveInteger(capabilities.maxBatchCount, 1) : 1,
+      inputImagePolicy: mapImageInputPolicy(capabilities, maxReferenceImages),
     },
   };
 }
@@ -491,7 +508,7 @@ export interface MockSubmission {
   readonly aspectRatio: FixtureAspectRatio;
   readonly durationSeconds: number | null;
   readonly referenceCount: number;
-  readonly referenceAssetIds?: readonly string[];
+  readonly inputAssets?: readonly AssetInput[];
 }
 
 function normalizedInteger(value: number, minimum: number, maximum: number): number {
@@ -566,6 +583,8 @@ export function createMockSubmissionItems(
       referenceCount,
       batchCount: outputCount,
       previewPath: source.previewPath,
+      inputDescriptor: input.mode === 'image' ? source.inputDescriptor : null,
+      persistedAsset: true,
     };
 
     return input.mode === 'image'
@@ -627,18 +646,44 @@ function operationForSubmission(
   input: MockSubmission,
   model: GalleryModel,
 ): FixtureMediaOperation {
-  const hasReferences = (input.referenceAssetIds?.length ?? 0) > 0;
-  const preferred: FixtureMediaOperation = input.mode === 'image'
-    ? (hasReferences ? 'image.edit' : 'image.generate')
-    : (hasReferences ? 'video.image_to_video' : 'video.generate');
-  if (model.capabilities.operations.includes(preferred)) return preferred;
-  const fallback = model.capabilities.operations.find((operation) =>
-    operation.startsWith(`${input.mode}.`),
-  );
-  if (!fallback) {
-    throw new Error(`Model ${model.id} does not support ${input.mode} generation.`);
+  const inputs = input.inputAssets ?? [];
+  const count = (role: AssetInput['role']) => inputs.filter((item) => item.role === role).length;
+  const references = count('reference');
+  if (references > model.capabilities.maxReferenceImages) {
+    throw new Error(`Model ${model.id} accepts at most ${model.capabilities.maxReferenceImages} references.`);
   }
-  return fallback;
+  if (count('source') > 1 || count('mask') > 1 || count('first_frame') > 1) {
+    throw new Error('Composer inputs contain duplicate singleton roles.');
+  }
+  if (count('mask') > 0 && (!model.capabilities.supportsMask || count('source') !== 1)) {
+    throw new Error(`Model ${model.id} cannot use the selected Mask input.`);
+  }
+
+  let operation: FixtureMediaOperation;
+  if (input.mode === 'image') {
+    if (count('first_frame') > 0 || count('last_frame') > 0) {
+      throw new Error('Frame inputs cannot be used for image generation.');
+    }
+    operation = count('source') > 0 || count('mask') > 0
+      ? 'image.edit'
+      : 'image.generate';
+  } else {
+    if (count('source') > 0 || count('mask') > 0 || count('last_frame') > 0) {
+      throw new Error('Image edit inputs cannot be used for video generation.');
+    }
+    if (count('first_frame') > 0 && references > 0) {
+      throw new Error('Choose either a first frame or reference images for video generation.');
+    }
+    operation = count('first_frame') > 0
+      ? 'video.image_to_video'
+      : references > 0
+        ? 'video.reference_to_video'
+        : 'video.generate';
+  }
+  if (!model.capabilities.operations.includes(operation)) {
+    throw new Error(`Model ${model.id} does not support ${operation}.`);
+  }
+  return operation;
 }
 
 export function createGenerationRequest(
@@ -649,13 +694,17 @@ export function createGenerationRequest(
   if (!model || model.mediaKind !== input.mode) {
     throw new Error(`Model ${input.modelId} is not available for ${input.mode} generation.`);
   }
-  const referenceAssetIds = input.referenceAssetIds ?? [];
+  const inputAssets = input.inputAssets ?? [];
+  const uniqueInputs = new Set(inputAssets.map((item) => `${item.role}\0${item.assetId}`));
+  if (uniqueInputs.size !== inputAssets.length) {
+    throw new Error('Composer inputs contain duplicate Asset roles.');
+  }
   return {
     operation: operationForSubmission(input, model),
     providerId: input.providerId ?? model.providerId,
     modelId: model.id,
     prompt: input.prompt,
-    inputs: referenceAssetIds.map((assetId) => ({ assetId, role: 'reference' as const })),
+    inputs: [...inputAssets],
     aspectRatio: input.aspectRatio,
     count: input.mode === 'video' ? 1 : normalizedInteger(input.count, 1, 4),
     ...(input.mode === 'video'

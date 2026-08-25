@@ -30,19 +30,44 @@ describe('useUiStore', () => {
       viewerAssetId: 'asset-1',
     });
 
-    useUiStore.getState().addComposerReference('asset-1');
-    useUiStore.getState().addComposerReference('asset-1');
-    expect(useUiStore.getState().composerReferenceAssetIds).toEqual(['asset-1']);
-    useUiStore.getState().addComposerReference('asset-2');
-    useUiStore.getState().limitComposerReferences(1);
-    expect(useUiStore.getState().composerReferenceAssetIds).toEqual(['asset-1']);
-    useUiStore.getState().removeComposerReference('asset-1');
-    expect(useUiStore.getState().composerReferenceAssetIds).toEqual([]);
+    useUiStore.getState().addComposerInput({ assetId: 'asset-1', role: 'reference' });
+    useUiStore.getState().addComposerInput({ assetId: 'asset-1', role: 'reference' });
+    useUiStore.getState().addComposerInput({ assetId: 'asset-2', role: 'reference' });
+    expect(useUiStore.getState().composerInputs).toEqual([
+      { assetId: 'asset-1', role: 'reference' },
+      { assetId: 'asset-2', role: 'reference' },
+    ]);
+    useUiStore.getState().removeComposerInput({ assetId: 'asset-1', role: 'reference' });
+    expect(useUiStore.getState().composerInputs).toEqual([
+      { assetId: 'asset-2', role: 'reference' },
+    ]);
 
     useUiStore.getState().closeViewer();
     expect(useUiStore.getState()).toMatchObject({
       viewerAssetId: null,
     });
+  });
+
+  it('replaces primary inputs without dropping references', () => {
+    useUiStore.getState().addComposerInput({ assetId: 'reference-1', role: 'reference' });
+    useUiStore.getState().setComposerPrimaryInput({ assetId: 'source-1', role: 'source' });
+    useUiStore.getState().addComposerInput({ assetId: 'mask-1', role: 'mask' });
+    useUiStore.getState().setComposerPrimaryInput({ assetId: 'frame-1', role: 'first_frame' });
+    expect(useUiStore.getState().composerInputs).toEqual([
+      { assetId: 'reference-1', role: 'reference' },
+      { assetId: 'frame-1', role: 'first_frame' },
+    ]);
+  });
+
+  it('keeps each Asset unique and lets primary roles outrank references', () => {
+    useUiStore.getState().addComposerInput({ assetId: 'asset-1', role: 'reference' });
+    useUiStore.getState().setComposerPrimaryInput({ assetId: 'asset-1', role: 'source' });
+    useUiStore.getState().addComposerInput({ assetId: 'asset-1', role: 'reference' });
+    useUiStore.getState().addComposerInput({ assetId: 'mask-1', role: 'mask' });
+    expect(useUiStore.getState().composerInputs).toEqual([
+      { assetId: 'asset-1', role: 'source' },
+      { assetId: 'mask-1', role: 'mask' },
+    ]);
   });
 
   it('updates multi-selection with immutable Set instances', () => {
@@ -68,7 +93,7 @@ describe('useUiStore', () => {
     useUiStore.getState().setComposerExpanded(true);
     useUiStore.getState().setComposerParamsOpen(true);
     useUiStore.getState().openViewer('asset-9');
-    useUiStore.getState().addComposerReference('asset-9');
+    useUiStore.getState().addComposerInput({ assetId: 'asset-9', role: 'reference' });
     useUiStore.getState().toggleAssetSelection('asset-9');
     useUiStore.getState().setActiveFolder('folder-2');
     useUiStore.getState().setActiveFilter('favorites');
@@ -79,7 +104,7 @@ describe('useUiStore', () => {
       composerMode: 'image',
       composerExpanded: false,
       composerParamsOpen: false,
-      composerReferenceAssetIds: [],
+      composerInputs: [],
       viewerAssetId: null,
       activeFolderId: null,
       activeFilter: 'all',
