@@ -1,6 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { stat, unlink } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import { z } from 'zod';
 
 import {
   commitStagedFile,
@@ -13,7 +16,13 @@ import { assertNoSymlinkTraversal, resolveStoredPath, toStoredPath } from '../st
 import type { StoragePaths } from '../storage/paths.js';
 import type { RemoteMediaDownloader } from '../security/remote-download.js';
 import type { SharpImageProcessor } from './image-processor.js';
-import { detectAllowedMedia, mimeTypeForDerivedVariant, type AllowedMediaType } from './mime.js';
+import {
+  allowedMediaType,
+  detectAllowedMedia,
+  mimeTypeForDerivedVariant,
+  normalizeMimeType,
+  type AllowedMediaType,
+} from './mime.js';
 import type {
   AssetDelivery,
   AssetMediaRecord,
@@ -22,6 +31,10 @@ import type {
   Base64MediaInput,
   MediaSourceInput,
   NewAssetMediaRecord,
+  ProviderOutputBase64Input,
+  ProviderOutputMediaInput,
+  ProviderOutputMediaRecord,
+  ProviderOutputUrlInput,
   UploadMediaInput,
   UrlMediaInput,
 } from './types.js';
@@ -45,6 +58,46 @@ export interface AssetMediaServiceOptions {
 interface PreparedMedia {
   mediaType: AllowedMediaType;
   staged: StagedFile;
+}
+
+const PROVIDER_OUTPUT_EXTENSIONS = ['avif', 'gif', 'jpg', 'mov', 'mp4', 'png', 'webm', 'webp'] as const;
+
+const ProviderOutputManifestSchema = z.object({
+  version: z.literal(1),
+  durationMs: z.number().int().nonnegative().nullable(),
+  filePath: z.string().min(1),
+  fileSize: z.number().int().nonnegative(),
+  height: z.number().int().positive().nullable(),
+  materializationKey: z.string().min(1),
+  metadata: z.record(z.string(), z.unknown()),
+  mimeType: z.string().min(1),
+  originalFilename: z.string().nullable(),
+  posterPath: z.string().nullable(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  thumbnailPath: z.string().nullable(),
+  type: z.enum(['image', 'video']),
+  width: z.number().int().positive().nullable(),
+}).strict();
+
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}
+
+function providerJobKey(jobId: string): string {
+  return sha256Text(`imagine-provider-output-v1\0${jobId}`);
+}
+
+function assertOutputSlot(slot: number): void {
+  if (!Number.isSafeInteger(slot) || slot < 0) {
+    throw new RangeError('Provider output slot must be a non-negative safe integer.');
+  }
 }
 
 function parseBase64(input: string, maxBytes: number): { bytes: Buffer; claimedMimeType?: string } {
@@ -151,6 +204,98 @@ export class AssetMediaService {
     return this.finalize(input, { mediaType: downloaded.mediaType, staged: downloaded.staged });
   }
 
+  public async materializeProviderBase64(
+    input: ProviderOutputBase64Input,
+  ): Promise<ProviderOutputMediaRecord> {
+    assertOutputSlot(input.outputSlot);
+    const parsed = parseBase64(input.base64, this.maxBytesFor(input.expectedKind));
+    const claimedMimeType = input.claimedMimeType ?? parsed.claimedMimeType;
+    const sourceFingerprint = this.providerSourceFingerprint(input, sha256Text(input.base64));
+    const reusable = await this.readReusableProviderOutput(
+      input,
+      sourceFingerprint,
+      claimedMimeType,
+    );
+    if (reusable !== null) return reusable;
+    const staged = await stageBuffer({
+      bytes: parsed.bytes,
+      dataRoot: this.paths.root,
+      maxBytes: this.maxBytesFor(input.expectedKind),
+      temporaryDirectory: this.paths.temporary,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+    const prepared = {
+      mediaType: await this.detectOrDiscard(staged, {
+        role: 'output',
+        expectedKind: input.expectedKind,
+        ...(claimedMimeType === undefined ? {} : { claimedMimeType }),
+      }),
+      staged,
+    };
+    return this.finalizeProviderOutput(input, prepared, sourceFingerprint);
+  }
+
+  public async materializeProviderUrl(
+    input: ProviderOutputUrlInput,
+  ): Promise<ProviderOutputMediaRecord> {
+    assertOutputSlot(input.outputSlot);
+    const sourceFingerprint = this.providerSourceFingerprint(input, sha256Text(input.url));
+    const reusable = await this.readReusableProviderOutput(
+      input,
+      sourceFingerprint,
+      input.claimedMimeType,
+    );
+    if (reusable !== null) return reusable;
+    if (this.remoteDownloader === undefined) {
+      throw new Error('Remote media download is not configured.');
+    }
+    const downloaded = await this.remoteDownloader.download({
+      dataRoot: this.paths.root,
+      maxBytes: this.maxBytesFor(input.expectedKind),
+      temporaryDirectory: this.paths.temporary,
+      url: input.url,
+      ...(input.claimedMimeType === undefined ? {} : { claimedMimeType: input.claimedMimeType }),
+      expectedKind: input.expectedKind,
+      ...(input.headers === undefined ? {} : { headers: input.headers }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+    return this.finalizeProviderOutput(
+      input,
+      { mediaType: downloaded.mediaType, staged: downloaded.staged },
+      sourceFingerprint,
+    );
+  }
+
+  public async validateProviderOutputs(
+    jobId: string,
+    records: readonly ProviderOutputMediaRecord[],
+  ): Promise<boolean> {
+    for (const [slot, record] of records.entries()) {
+      if (!await this.isReusableProviderOutput(jobId, slot, record)) return false;
+    }
+    return records.length > 0;
+  }
+
+  public async cleanupProviderOutputs(jobId: string, outputCount: number): Promise<void> {
+    if (!Number.isSafeInteger(outputCount) || outputCount < 0) {
+      throw new RangeError('Provider output count must be a non-negative safe integer.');
+    }
+    await Promise.all(
+      Array.from({ length: outputCount }, (_, slot) => this.cleanupProviderOutputSlot(jobId, slot)),
+    );
+  }
+
+  public async releaseProviderOutputs(jobId: string, outputCount: number): Promise<void> {
+    if (!Number.isSafeInteger(outputCount) || outputCount < 0) {
+      throw new RangeError('Provider output count must be a non-negative safe integer.');
+    }
+    await Promise.all(
+      Array.from({ length: outputCount }, (_, slot) =>
+        unlink(this.providerManifestPath(jobId, slot)).catch(() => undefined),
+      ),
+    );
+  }
+
   public async getDelivery(id: string, variant: AssetVariant): Promise<AssetDelivery | null> {
     const asset = await this.repository.get(id);
     if (asset === null || asset.deletedAt !== null) return null;
@@ -186,6 +331,108 @@ export class AssetMediaService {
     return this.repository.softDelete(id);
   }
 
+  private providerSourceFingerprint(input: ProviderOutputMediaInput, sourceHash: string): string {
+    return sha256Text(JSON.stringify({
+      version: 1,
+      expectedKind: input.expectedKind,
+      claimedMimeType: input.claimedMimeType ?? null,
+      resultId: input.resultId ?? null,
+      sourceHash,
+    }));
+  }
+
+  private providerBasename(jobId: string, slot: number): string {
+    assertOutputSlot(slot);
+    return `job-${providerJobKey(jobId)}-slot-${String(slot).padStart(4, '0')}`;
+  }
+
+  private providerManifestPath(jobId: string, slot: number): string {
+    return join(
+      this.paths.temporary,
+      'provider-results',
+      providerJobKey(jobId),
+      `slot-${String(slot).padStart(4, '0')}.json`,
+    );
+  }
+
+  private providerOutputPaths(jobId: string, slot: number, extension: string) {
+    const basename = this.providerBasename(jobId, slot);
+    return {
+      contentPath: join(this.paths.originals, `${basename}.${extension}`),
+      posterPath: join(this.paths.posters, `${basename}.jpg`),
+      thumbnailPath: join(this.paths.thumbnails, `${basename}.webp`),
+    };
+  }
+
+  private async readReusableProviderOutput(
+    input: ProviderOutputMediaInput,
+    sourceFingerprint: string,
+    claimedMimeType: string | undefined,
+  ): Promise<ProviderOutputMediaRecord | null> {
+    const manifestPath = this.providerManifestPath(input.jobId, input.outputSlot);
+    try {
+      await assertNoSymlinkTraversal(this.paths.root, manifestPath, false);
+      const parsed = ProviderOutputManifestSchema.parse(
+        JSON.parse(await readFile(manifestPath, 'utf8')),
+      );
+      if (
+        parsed.sourceFingerprint !== sourceFingerprint ||
+        parsed.type !== input.expectedKind ||
+        !this.claimedTypeMatches(claimedMimeType, parsed.mimeType) ||
+        !await this.isReusableProviderOutput(input.jobId, input.outputSlot, parsed)
+      ) {
+        await this.cleanupProviderOutputSlot(input.jobId, input.outputSlot);
+        return null;
+      }
+      const { version: _version, ...record } = parsed;
+      return record;
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      await this.cleanupProviderOutputSlot(input.jobId, input.outputSlot);
+      return null;
+    }
+  }
+
+  private claimedTypeMatches(claimedMimeType: string | undefined, actualMimeType: string): boolean {
+    if (claimedMimeType === undefined) return true;
+    const claimed = normalizeMimeType(claimedMimeType);
+    return claimed === 'application/octet-stream' || claimed === actualMimeType;
+  }
+
+  private async isReusableProviderOutput(
+    jobId: string,
+    slot: number,
+    record: ProviderOutputMediaRecord,
+  ): Promise<boolean> {
+    const allowed = allowedMediaType(record.mimeType);
+    if (!allowed || allowed.kind !== record.type) return false;
+    const paths = this.providerOutputPaths(jobId, slot, allowed.extension);
+    if (
+      record.materializationKey !== `${providerJobKey(jobId)}:${slot}` ||
+      record.filePath !== toStoredPath(this.paths.root, paths.contentPath) ||
+      record.thumbnailPath !== (record.type === 'image'
+        ? toStoredPath(this.paths.root, paths.thumbnailPath)
+        : null) ||
+      record.posterPath !== (record.type === 'video'
+        ? toStoredPath(this.paths.root, paths.posterPath)
+        : null)
+    ) {
+      return false;
+    }
+    try {
+      await assertNoSymlinkTraversal(this.paths.root, paths.contentPath, false);
+      const content = await stat(paths.contentPath);
+      if (!content.isFile() || content.size !== record.fileSize) return false;
+      if (await sha256File(paths.contentPath) !== record.sha256) return false;
+      const derivedPath = record.type === 'image' ? paths.thumbnailPath : paths.posterPath;
+      await assertNoSymlinkTraversal(this.paths.root, derivedPath, false);
+      const derived = await stat(derivedPath);
+      return derived.isFile();
+    } catch {
+      return false;
+    }
+  }
+
   private async detectOrDiscard(staged: StagedFile, input: MediaSourceInput) {
     try {
       return await detectAllowedMedia(staged.prefix, {
@@ -196,6 +443,124 @@ export class AssetMediaService {
       await discardStagedFile(staged);
       throw error;
     }
+  }
+
+  private async finalizeProviderOutput(
+    input: ProviderOutputMediaInput,
+    prepared: PreparedMedia,
+    sourceFingerprint: string,
+  ): Promise<ProviderOutputMediaRecord> {
+    const paths = this.providerOutputPaths(
+      input.jobId,
+      input.outputSlot,
+      prepared.mediaType.extension,
+    );
+    await this.cleanupProviderOutputSlot(input.jobId, input.outputSlot);
+    let committedContent = false;
+    try {
+      input.signal?.throwIfAborted();
+      await commitStagedFile(this.paths.root, prepared.staged, paths.contentPath);
+      committedContent = true;
+      let record: ProviderOutputMediaRecord;
+      if (prepared.mediaType.kind === 'image') {
+        const metadata = await this.imageProcessor.inspect(paths.contentPath);
+        if (metadata.mimeType !== prepared.mediaType.mimeType) {
+          throw new Error('Image decoder format does not match the detected media signature.');
+        }
+        await this.imageProcessor.createThumbnail({
+          dataRoot: this.paths.root,
+          destinationPath: paths.thumbnailPath,
+          inputPath: paths.contentPath,
+          temporaryDirectory: this.paths.temporary,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        });
+        record = {
+          durationMs: null,
+          filePath: toStoredPath(this.paths.root, paths.contentPath),
+          fileSize: prepared.staged.bytes,
+          height: metadata.height,
+          materializationKey: `${providerJobKey(input.jobId)}:${input.outputSlot}`,
+          metadata: { format: metadata.format, pages: metadata.pages },
+          mimeType: prepared.mediaType.mimeType,
+          originalFilename: input.originalFilename ?? null,
+          posterPath: null,
+          sha256: prepared.staged.sha256,
+          sourceFingerprint,
+          thumbnailPath: toStoredPath(this.paths.root, paths.thumbnailPath),
+          type: 'image',
+          width: metadata.width,
+        };
+      } else {
+        const metadata = await this.videoProcessor.probe(paths.contentPath, input.signal);
+        await this.videoProcessor.createPoster({
+          dataRoot: this.paths.root,
+          destinationPath: paths.posterPath,
+          inputPath: paths.contentPath,
+          metadata,
+          temporaryDirectory: this.paths.temporary,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        });
+        record = {
+          durationMs: metadata.durationMs,
+          filePath: toStoredPath(this.paths.root, paths.contentPath),
+          fileSize: prepared.staged.bytes,
+          height: metadata.height,
+          materializationKey: `${providerJobKey(input.jobId)}:${input.outputSlot}`,
+          metadata: { codec: metadata.codec, format: metadata.format },
+          mimeType: prepared.mediaType.mimeType,
+          originalFilename: input.originalFilename ?? null,
+          posterPath: toStoredPath(this.paths.root, paths.posterPath),
+          sha256: prepared.staged.sha256,
+          sourceFingerprint,
+          thumbnailPath: null,
+          type: 'video',
+          width: metadata.width,
+        };
+      }
+      await this.writeProviderManifest(input.jobId, input.outputSlot, record);
+      return record;
+    } catch (error) {
+      if (!committedContent) await discardStagedFile(prepared.staged).catch(() => undefined);
+      await this.cleanupProviderOutputSlot(input.jobId, input.outputSlot);
+      throw error;
+    }
+  }
+
+  private async writeProviderManifest(
+    jobId: string,
+    slot: number,
+    record: ProviderOutputMediaRecord,
+  ): Promise<void> {
+    const manifestPath = this.providerManifestPath(jobId, slot);
+    const manifestDirectory = join(
+      this.paths.temporary,
+      'provider-results',
+      providerJobKey(jobId),
+    );
+    await assertNoSymlinkTraversal(this.paths.root, manifestDirectory, true);
+    await mkdir(manifestDirectory, {
+      recursive: true,
+      mode: 0o700,
+    });
+    await assertNoSymlinkTraversal(this.paths.root, manifestDirectory, false);
+    await assertNoSymlinkTraversal(this.paths.root, manifestPath, true);
+    await writeFile(
+      manifestPath,
+      JSON.stringify({ version: 1, ...record }),
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+  }
+
+  private async cleanupProviderOutputSlot(jobId: string, slot: number): Promise<void> {
+    const basename = this.providerBasename(jobId, slot);
+    await Promise.all([
+      ...PROVIDER_OUTPUT_EXTENSIONS.map((extension) =>
+        unlink(join(this.paths.originals, `${basename}.${extension}`)).catch(() => undefined),
+      ),
+      unlink(join(this.paths.thumbnails, `${basename}.webp`)).catch(() => undefined),
+      unlink(join(this.paths.posters, `${basename}.jpg`)).catch(() => undefined),
+      unlink(this.providerManifestPath(jobId, slot)).catch(() => undefined),
+    ]);
   }
 
   private async finalize(

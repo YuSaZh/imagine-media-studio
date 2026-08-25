@@ -9,6 +9,7 @@ describe('server configuration', () => {
     expect(config).toMatchObject({
       allowHttpMediaDownloads: false,
       allowPrivateNetworkAccess: false,
+      appPassword: null,
       maxImageUploadBytes: 32 * 1024 * 1024,
       maxVideoUploadBytes: 512 * 1024 * 1024,
       maxRemoteImageBytes: 64 * 1024 * 1024,
@@ -33,6 +34,7 @@ describe('server configuration', () => {
       ALLOW_HTTP_MEDIA_DOWNLOADS: 'true',
       ALLOW_PRIVATE_NETWORK_ACCESS: 'true',
       APP_SECRET: 'a-production-secret-that-is-longer-than-32-characters',
+      APP_PASSWORD: 'deployment-password',
       MAX_IMAGE_UPLOAD_BYTES: '1024',
       NODE_ENV: 'production',
     });
@@ -40,5 +42,6 @@ describe('server configuration', () => {
     expect(config.allowHttpMediaDownloads).toBe(true);
     expect(config.allowPrivateNetworkAccess).toBe(true);
     expect(config.maxImageUploadBytes).toBe(1024);
+    expect(config.appPassword).toBe('deployment-password');
   });
 });

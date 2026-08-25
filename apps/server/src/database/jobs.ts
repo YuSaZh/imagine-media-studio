@@ -130,6 +130,11 @@ export interface FinalizeOutputInput {
   readonly type: 'image' | 'video';
   readonly mimeType: string;
   readonly filePath: string;
+  readonly thumbnailPath?: string | null;
+  readonly posterPath?: string | null;
+  readonly width?: number | null;
+  readonly height?: number | null;
+  readonly durationMs?: number | null;
   readonly fileSize: number;
   readonly sha256: string;
   readonly resultId?: string;
@@ -842,13 +847,13 @@ export class JobRepository {
               type: input.type,
               role: 'output',
               filePath: input.filePath,
-              thumbnailPath: null,
-              posterPath: null,
+              thumbnailPath: input.thumbnailPath ?? null,
+              posterPath: input.posterPath ?? null,
               originalFilename: input.filename ?? null,
               mimeType: input.mimeType,
-              width: null,
-              height: null,
-              durationMs: null,
+              width: input.width ?? null,
+              height: input.height ?? null,
+              durationMs: input.durationMs ?? null,
               fileSize: input.fileSize,
               sha256: input.sha256,
               metadataJson: JSON.stringify(metadata),

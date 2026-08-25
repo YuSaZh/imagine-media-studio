@@ -71,6 +71,42 @@ export interface UrlMediaInput extends MediaSourceInput {
   url: string;
 }
 
+export interface ProviderOutputMediaInput {
+  claimedMimeType?: string;
+  expectedKind: MediaKind;
+  jobId: string;
+  originalFilename?: string | null;
+  outputSlot: number;
+  resultId?: string;
+  signal?: AbortSignal;
+}
+
+export interface ProviderOutputBase64Input extends ProviderOutputMediaInput {
+  base64: string;
+}
+
+export interface ProviderOutputUrlInput extends ProviderOutputMediaInput {
+  headers?: Readonly<Record<string, string>>;
+  url: string;
+}
+
+export interface ProviderOutputMediaRecord {
+  durationMs: number | null;
+  filePath: string;
+  fileSize: number;
+  height: number | null;
+  materializationKey: string;
+  metadata: Readonly<Record<string, unknown>>;
+  mimeType: string;
+  originalFilename: string | null;
+  posterPath: string | null;
+  sha256: string;
+  sourceFingerprint: string;
+  thumbnailPath: string | null;
+  type: MediaKind;
+  width: number | null;
+}
+
 export type AssetVariant = 'content' | 'poster' | 'thumbnail';
 
 export interface AssetDelivery {

@@ -311,6 +311,11 @@ describe('PR 2 database repositories', () => {
         type: 'image',
         mimeType: 'image/png',
         filePath: 'media/originals/final-0.png',
+        thumbnailPath: 'media/thumbnails/final-0.webp',
+        posterPath: null,
+        width: 512,
+        height: 768,
+        durationMs: null,
         fileSize: 100,
         sha256: 'final-sha-0',
         resultId: 'result-0',
@@ -332,6 +337,13 @@ describe('PR 2 database repositories', () => {
       revision: processing.revision + 1,
     });
     expect(finalized?.assets).toHaveLength(2);
+    expect(finalized?.assets[0]).toMatchObject({
+      thumbnailPath: 'media/thumbnails/final-0.webp',
+      posterPath: null,
+      width: 512,
+      height: 768,
+      durationMs: null,
+    });
     expect(finalized?.job.resultManifest).toEqual([
       { slot: 0, assetId: finalized?.assets[0]?.id },
       { slot: 1, assetId: finalized?.assets[1]?.id },

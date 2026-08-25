@@ -16,6 +16,7 @@ import {
 import type {
   JobRunnerOptions,
   JobTransitionCommit,
+  MaterializedAsset,
   ProviderRegistration,
   RunnerClock,
   RunnerJob,
@@ -181,6 +182,9 @@ export class JobRunner {
 
       if (job.remoteJobId) {
         await this.cancelRemote(job).catch(() => undefined);
+      }
+      if (job.status === 'downloading' || job.status === 'processing') {
+        await this.discardProvisional(job, job.materializedAssets);
       }
       return;
     }
@@ -516,8 +520,9 @@ export class JobRunner {
     }
     const registration = await this.options.providers.resolve(job.request.providerId);
     const controller = this.beginOperation(jobId);
+    let materialized: readonly MaterializedAsset[] | undefined;
     try {
-      const materialized = await this.options.media.materialize(
+      materialized = await this.options.media.materialize(
         job,
         job.resultAssets,
         controller.signal,
@@ -530,15 +535,21 @@ export class JobRunner {
         expectedRevision: job.revision,
         status: 'processing',
         stage: 'processing',
+        resultAssets: job.resultAssets,
         materializedAssets: materialized,
         pollAfterAt: null,
         error: null,
       });
       if (committed) {
         this.schedule('process', jobId, this.clock.now());
+      } else {
+        await this.settleProvisionalAfterCasLoss(job, materialized);
       }
     } catch (error) {
       if (this.running) {
+        if (materialized !== undefined) {
+          await this.settleProvisionalAfterCasLoss(job, materialized);
+        }
         await this.retryStage(job, 'download', registration.adapter.normalizeError(error));
       }
     } finally {
@@ -553,8 +564,9 @@ export class JobRunner {
     }
     const registration = await this.options.providers.resolve(job.request.providerId);
     const controller = this.beginOperation(jobId);
+    let processed: readonly MaterializedAsset[] | undefined;
     try {
-      const processed = await this.options.media.process(
+      processed = await this.options.media.process(
         job,
         job.materializedAssets,
         controller.signal,
@@ -564,10 +576,16 @@ export class JobRunner {
       }
       const committed = await this.options.assets.finalize(jobId, job.revision, processed);
       if (committed) {
+        await this.releaseProvisional(job, processed);
         await this.publish(committed);
+      } else {
+        await this.settleProvisionalAfterCasLoss(job, processed);
       }
     } catch (error) {
       if (this.running) {
+        if (processed !== undefined) {
+          await this.settleProvisionalAfterCasLoss(job, processed);
+        }
         await this.retryStage(job, 'process', registration.adapter.normalizeError(error));
       }
     } finally {
@@ -643,7 +661,7 @@ export class JobRunner {
 
   private async fail(job: RunnerJob, error: ProviderError): Promise<void> {
     const status = this.failureStatus(error.kind);
-    await this.commitTransition(job, {
+    const committed = await this.commitTransition(job, {
       expectedStatuses: [job.status],
       expectedRevision: job.revision,
       status,
@@ -651,6 +669,39 @@ export class JobRunner {
       pollAfterAt: null,
       error,
     });
+    if (committed && (job.status === 'downloading' || job.status === 'processing')) {
+      await this.discardProvisional(job, job.materializedAssets);
+    }
+  }
+
+  private async settleProvisionalAfterCasLoss(
+    job: RunnerJob,
+    assets: readonly MaterializedAsset[],
+  ): Promise<void> {
+    const current = await this.options.jobs.get(job.id).catch(() => null);
+    if (current?.status === 'processing') return;
+    if (current?.status === 'completed') {
+      const consistent = await this.options.assets.outputsConsistent(job.id).catch(() => false);
+      if (consistent) {
+        await this.releaseProvisional(job, assets);
+        return;
+      }
+    }
+    await this.discardProvisional(job, assets);
+  }
+
+  private async discardProvisional(
+    job: RunnerJob,
+    assets: readonly MaterializedAsset[],
+  ): Promise<void> {
+    await this.options.media.discard?.(job, assets).catch(() => undefined);
+  }
+
+  private async releaseProvisional(
+    job: RunnerJob,
+    assets: readonly MaterializedAsset[],
+  ): Promise<void> {
+    await this.options.media.finalized?.(job, assets).catch(() => undefined);
   }
 
   private failureStatus(kind: ProviderErrorKind): 'failed' | 'rejected' | 'expired' {

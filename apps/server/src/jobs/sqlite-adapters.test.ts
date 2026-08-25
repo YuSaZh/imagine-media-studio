@@ -11,7 +11,7 @@ import type {
   JobRepository,
   UpdateJobStatusFields,
 } from '../database/jobs.js';
-import type { AssetMediaRecord } from '../media/types.js';
+import type { AssetMediaRecord, ProviderOutputMediaRecord } from '../media/types.js';
 import type { JobTransitionInput, MaterializedAsset, RunnerEvent } from './ports.js';
 import {
   AssetMediaMaterializer,
@@ -337,19 +337,43 @@ function assetRecord(overrides: Partial<AssetMediaRecord> = {}): AssetMediaRecor
   };
 }
 
+function providerOutputRecord(
+  overrides: Partial<ProviderOutputMediaRecord> = {},
+): ProviderOutputMediaRecord {
+  return {
+    durationMs: overrides.durationMs ?? null,
+    filePath: overrides.filePath ?? 'media/originals/provider-output.png',
+    fileSize: overrides.fileSize ?? 8,
+    height: overrides.height ?? 1024,
+    materializationKey: overrides.materializationKey ?? 'job-key:0',
+    metadata: overrides.metadata ?? { format: 'png' },
+    mimeType: overrides.mimeType ?? 'image/png',
+    originalFilename: overrides.originalFilename ?? 'result.png',
+    posterPath: overrides.posterPath ?? null,
+    sha256: overrides.sha256 ?? 'a'.repeat(64),
+    sourceFingerprint: overrides.sourceFingerprint ?? 'b'.repeat(64),
+    thumbnailPath: overrides.thumbnailPath ?? 'media/thumbnails/provider-output.webp',
+    type: overrides.type ?? 'image',
+    width: overrides.width ?? 1024,
+  };
+}
+
 describe('AssetMediaMaterializer', () => {
   it('routes base64 and URL assets through AssetMediaService and maps their records', async () => {
     const base64Inputs: unknown[] = [];
     const urlInputs: unknown[] = [];
     const media: AssetMediaServicePort = {
-      materializeBase64: vi.fn(async (input) => {
+      cleanupProviderOutputs: vi.fn(),
+      materializeProviderBase64: vi.fn(async (input) => {
         base64Inputs.push(input);
-        return assetRecord({ id: 'asset-base64', filePath: 'base64.png' });
+        return providerOutputRecord({ filePath: 'base64.png', materializationKey: 'job-key:0' });
       }),
-      materializeUrl: vi.fn(async (input) => {
+      materializeProviderUrl: vi.fn(async (input) => {
         urlInputs.push(input);
-        return assetRecord({ id: 'asset-url', filePath: 'url.png' });
+        return providerOutputRecord({ filePath: 'url.png', materializationKey: 'job-key:1' });
       }),
+      releaseProviderOutputs: vi.fn(),
+      validateProviderOutputs: vi.fn(async () => true),
     };
     const materializer = new AssetMediaMaterializer(media);
     const controller = new AbortController();
@@ -373,7 +397,7 @@ describe('AssetMediaMaterializer', () => {
       jobId: 'job-1',
       claimedMimeType: 'image/png',
       expectedKind: 'image',
-      role: 'output',
+      outputSlot: 0,
       signal: controller.signal,
     });
     expect(urlInputs[0]).toMatchObject({ url: 'https://provider.invalid/result.png' });
@@ -381,16 +405,40 @@ describe('AssetMediaMaterializer', () => {
       expect.objectContaining({
         filePath: 'base64.png',
         resultId: 'provider-result-1',
-        metadata: expect.objectContaining({ assetId: 'asset-base64' }),
+        materializationKey: 'job-key:0',
       }),
       expect.objectContaining({
         filePath: 'url.png',
-        metadata: expect.objectContaining({ assetId: 'asset-url' }),
+        materializationKey: 'job-key:1',
       }),
     ]);
     await expect(
       materializer.process(toRunnerJob(jobRecord()), result, controller.signal),
     ).resolves.toBe(result);
+  });
+
+  it('cleans every provisional slot when a multi-output materialization partially fails', async () => {
+    const cleanupProviderOutputs = vi.fn(async () => undefined);
+    const media: AssetMediaServicePort = {
+      cleanupProviderOutputs,
+      materializeProviderBase64: vi
+        .fn()
+        .mockResolvedValueOnce(providerOutputRecord())
+        .mockRejectedValueOnce(new Error('second output failed')),
+      materializeProviderUrl: vi.fn(),
+      releaseProviderOutputs: vi.fn(),
+      validateProviderOutputs: vi.fn(),
+    };
+    const materializer = new AssetMediaMaterializer(media);
+
+    await expect(
+      materializer.materialize(
+        toRunnerJob(jobRecord()),
+        [submittedAssets()[0]!, submittedAssets()[0]!],
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('second output failed');
+    expect(cleanupProviderOutputs).toHaveBeenCalledWith('job-1', 2);
   });
 });
 
@@ -438,8 +486,11 @@ describe('SqliteRunnerEventPort', () => {
       }),
     };
     const media: AssetMediaServicePort = {
-      materializeBase64: vi.fn(),
-      materializeUrl: vi.fn(),
+      cleanupProviderOutputs: vi.fn(),
+      materializeProviderBase64: vi.fn(),
+      materializeProviderUrl: vi.fn(),
+      releaseProviderOutputs: vi.fn(),
+      validateProviderOutputs: vi.fn(),
     };
 
     const options = createSqliteRunnerOptions({

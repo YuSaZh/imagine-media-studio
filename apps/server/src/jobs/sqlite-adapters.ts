@@ -10,7 +10,7 @@ import type {
   UpdateJobStatusFields,
 } from '../database/jobs.js';
 import type { AssetMediaService } from '../media/asset-media-service.js';
-import type { AssetMediaRecord } from '../media/types.js';
+import type { ProviderOutputMediaRecord } from '../media/types.js';
 import type {
   JobRunnerOptions,
   JobTransitionCommit,
@@ -71,7 +71,11 @@ export interface LiveEventBrokerPort {
 
 export type AssetMediaServicePort = Pick<
   AssetMediaService,
-  'materializeBase64' | 'materializeUrl'
+  | 'cleanupProviderOutputs'
+  | 'materializeProviderBase64'
+  | 'materializeProviderUrl'
+  | 'releaseProviderOutputs'
+  | 'validateProviderOutputs'
 >;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -104,7 +108,17 @@ function isMaterializedAsset(value: unknown): value is MaterializedAsset {
     typeof value.filePath === 'string' &&
     typeof value.fileSize === 'number' &&
     Number.isFinite(value.fileSize) &&
-    typeof value.sha256 === 'string'
+    typeof value.sha256 === 'string' &&
+    (value.thumbnailPath === undefined || value.thumbnailPath === null || typeof value.thumbnailPath === 'string') &&
+    (value.posterPath === undefined || value.posterPath === null || typeof value.posterPath === 'string') &&
+    (value.width === undefined || value.width === null || typeof value.width === 'number') &&
+    (value.height === undefined || value.height === null || typeof value.height === 'number') &&
+    (value.durationMs === undefined || value.durationMs === null || typeof value.durationMs === 'number') &&
+    (value.materializationKey === undefined || typeof value.materializationKey === 'string') &&
+    (value.sourceFingerprint === undefined || typeof value.sourceFingerprint === 'string') &&
+    (value.resultId === undefined || typeof value.resultId === 'string') &&
+    (value.filename === undefined || typeof value.filename === 'string') &&
+    (value.metadata === undefined || isRecord(value.metadata))
   );
 }
 
@@ -339,20 +353,26 @@ export class SqliteRunnerEventPort implements RunnerEventPort {
 }
 
 function toMaterializedAsset(
-  record: AssetMediaRecord,
+  record: ProviderOutputMediaRecord,
   submitted: SubmittedAsset,
 ): MaterializedAsset {
   return {
     type: record.type,
     mimeType: record.mimeType,
     filePath: record.filePath,
+    thumbnailPath: record.thumbnailPath,
+    posterPath: record.posterPath,
+    width: record.width,
+    height: record.height,
+    durationMs: record.durationMs,
+    materializationKey: record.materializationKey,
+    sourceFingerprint: record.sourceFingerprint,
     fileSize: record.fileSize,
     sha256: record.sha256,
     ...(submitted.resultId === undefined ? {} : { resultId: submitted.resultId }),
     ...(record.originalFilename === null ? {} : { filename: record.originalFilename }),
     metadata: {
       ...record.metadata,
-      assetId: record.id,
       ...(submitted.metadata === undefined ? {} : { provider: submitted.metadata }),
     },
   };
@@ -366,33 +386,83 @@ export class AssetMediaMaterializer implements MediaMaterializerPort {
     assets: readonly SubmittedAsset[],
     signal: AbortSignal,
   ): Promise<readonly MaterializedAsset[]> {
-    return Promise.all(
-      assets.map(async (asset) => {
+    const materialized: MaterializedAsset[] = [];
+    try {
+      for (const [outputSlot, asset] of assets.entries()) {
         const common = {
           claimedMimeType: asset.mimeType,
           expectedKind: asset.type,
           jobId: job.id,
           originalFilename: asset.filename ?? null,
-          role: 'output' as const,
+          outputSlot,
+          ...(asset.resultId === undefined ? {} : { resultId: asset.resultId }),
           signal,
         };
         const record =
           asset.source === 'base64'
-            ? await this.media.materializeBase64({ ...common, base64: asset.base64 })
-            : await this.media.materializeUrl({ ...common, url: asset.url });
-        return toMaterializedAsset(record, asset);
-      }),
-    );
+            ? await this.media.materializeProviderBase64({ ...common, base64: asset.base64 })
+            : await this.media.materializeProviderUrl({ ...common, url: asset.url });
+        materialized.push(toMaterializedAsset(record, asset));
+      }
+      return materialized;
+    } catch (error) {
+      await this.media.cleanupProviderOutputs(job.id, assets.length).catch(() => undefined);
+      throw error;
+    }
   }
 
   public async process(
-    _job: RunnerJob,
+    job: RunnerJob,
     assets: readonly MaterializedAsset[],
-    _signal: AbortSignal,
+    signal: AbortSignal,
   ): Promise<readonly MaterializedAsset[]> {
-    // AssetMediaService probes media and creates derivatives during materialization.
-    return assets;
+    try {
+      if (await this.media.validateProviderOutputs(job.id, assets.map(toProviderOutputRecord))) {
+        return assets;
+      }
+      await this.media.cleanupProviderOutputs(job.id, this.outputCount(job, assets));
+      if (job.resultAssets.length === 0) {
+        throw new Error(`Job ${job.id} has no durable Provider results to rematerialize.`);
+      }
+      return await this.materialize(job, job.resultAssets, signal);
+    } catch (error) {
+      await this.media.cleanupProviderOutputs(job.id, this.outputCount(job, assets)).catch(
+        () => undefined,
+      );
+      throw error;
+    }
   }
+
+  public async discard(job: RunnerJob, assets: readonly MaterializedAsset[]): Promise<void> {
+    await this.media.cleanupProviderOutputs(job.id, this.outputCount(job, assets));
+  }
+
+  public async finalized(job: RunnerJob, assets: readonly MaterializedAsset[]): Promise<void> {
+    await this.media.releaseProviderOutputs(job.id, this.outputCount(job, assets));
+  }
+
+  private outputCount(job: RunnerJob, assets: readonly MaterializedAsset[]): number {
+    return Math.max(job.resultAssets.length, assets.length, job.request.count ?? 1);
+  }
+}
+
+function toProviderOutputRecord(asset: MaterializedAsset): ProviderOutputMediaRecord {
+  return {
+    durationMs: asset.durationMs ?? null,
+    filePath: asset.filePath,
+    fileSize: asset.fileSize,
+    height: asset.height ?? null,
+    materializationKey: asset.materializationKey ?? '',
+    metadata: asset.metadata ?? {},
+    mimeType: asset.mimeType,
+    originalFilename: asset.filename ?? null,
+    posterPath: asset.posterPath ?? null,
+    sha256: asset.sha256,
+    sourceFingerprint: asset.sourceFingerprint ?? '',
+    thumbnailPath: asset.thumbnailPath ?? null,
+    type: asset.type,
+    width: asset.width ?? null,
+  };
 }
 
 export interface CreateSqliteRunnerOptions {

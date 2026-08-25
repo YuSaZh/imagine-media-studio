@@ -6,6 +6,7 @@ const EnvironmentSchema = z.object({
   ALLOW_HTTP_MEDIA_DOWNLOADS: z.enum(['true', 'false']).default('false'),
   ALLOW_PRIVATE_NETWORK_ACCESS: z.enum(['true', 'false']).default('false'),
   APP_PORT: z.coerce.number().int().min(1).max(65_535).default(3030),
+  APP_PASSWORD: z.string().max(1024).default(''),
   APP_SECRET: z.string().min(16).default('development-only-app-secret'),
   DATA_DIR: z.string().min(1).default('/data'),
   LOG_LEVEL: z
@@ -28,6 +29,7 @@ export interface AppConfig {
   allowHttpMediaDownloads: boolean;
   allowPrivateNetworkAccess: boolean;
   appPort: number;
+  appPassword: string | null;
   appSecret: string;
   dataDir: string;
   logLevel: string;
@@ -56,6 +58,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     allowHttpMediaDownloads: parsed.ALLOW_HTTP_MEDIA_DOWNLOADS === 'true',
     allowPrivateNetworkAccess: parsed.ALLOW_PRIVATE_NETWORK_ACCESS === 'true',
     appPort: parsed.APP_PORT,
+    appPassword: parsed.APP_PASSWORD.length === 0 ? null : parsed.APP_PASSWORD,
     appSecret: parsed.APP_SECRET,
     dataDir: resolve(parsed.DATA_DIR),
     logLevel: parsed.LOG_LEVEL,

@@ -22,21 +22,27 @@ function multipartUpload(
   filename: string,
   mimeType: string,
   content: Buffer,
+  fieldsAfterFile = false,
 ) {
   const boundary = '----imagine-media-studio-test-boundary';
   const chunks: Buffer[] = [];
-  for (const [name, value] of Object.entries(fields)) {
-    chunks.push(Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
-    ));
-  }
+  const appendFields = () => {
+    for (const [name, value] of Object.entries(fields)) {
+      chunks.push(Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+      ));
+    }
+  };
+  if (!fieldsAfterFile) appendFields();
   chunks.push(
     Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
     ),
     content,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
+    Buffer.from('\r\n'),
   );
+  if (fieldsAfterFile) appendFields();
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
   return {
     body: Buffer.concat(chunks),
     contentType: `multipart/form-data; boundary=${boundary}`,
@@ -54,6 +60,7 @@ async function createTestServer(
   startRunner = true,
   mockProviderEnabled = true,
   withWebDist = false,
+  appPassword: string | null = null,
 ): Promise<ImagineServer> {
   const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-server-test-'));
   temporaryDirectories.push(dataDir);
@@ -66,6 +73,7 @@ async function createTestServer(
     allowHttpMediaDownloads: false,
     allowPrivateNetworkAccess: false,
     appPort: 3030,
+    appPassword,
     appSecret: 'test-app-secret-with-at-least-32-characters',
     dataDir,
     logLevel: 'silent',
@@ -94,6 +102,7 @@ async function reopenTestServer(dataDir: string): Promise<ImagineServer> {
       allowHttpMediaDownloads: false,
       allowPrivateNetworkAccess: false,
       appPort: 3030,
+      appPassword: null,
       appSecret: 'test-app-secret-with-at-least-32-characters',
       dataDir,
       logLevel: 'silent',
@@ -227,7 +236,7 @@ describe('Imagine server PR 0 skeleton', () => {
       headers: { 'content-type': upload.contentType },
       payload: upload.body,
     });
-    expect(uploaded.statusCode).toBe(201);
+    expect(uploaded.statusCode, uploaded.body).toBe(201);
     const asset = uploaded.json<{ asset: { id: string; contentUrl: string; thumbnailUrl: string } }>().asset;
     expect(asset.thumbnailUrl).toContain(`/internal/assets/${asset.id}/thumbnail`);
 
@@ -271,6 +280,22 @@ describe('Imagine server PR 0 skeleton', () => {
     });
     expect(filtered.json<{ items: Array<{ id: string; collectionIds: string[] }> }>().items)
       .toEqual([expect.objectContaining({ id: asset.id, collectionIds: [collectionId] })]);
+
+    const lateFields = multipartUpload(
+      { role: 'reference' },
+      'late-fields.png',
+      'image/png',
+      VALID_PNG,
+      true,
+    );
+    const lateUpload = await server.app.inject({
+      method: 'POST',
+      url: '/internal/assets/upload',
+      headers: { 'content-type': lateFields.contentType },
+      payload: lateFields.body,
+    });
+    expect(lateUpload.statusCode).toBe(201);
+    expect(lateUpload.json<{ asset: { role: string } }>().asset.role).toBe('reference');
   });
 
   it('persists safe settings and exposes Provider configuration without secrets', async () => {
@@ -323,5 +348,79 @@ describe('Imagine server PR 0 skeleton', () => {
     });
     expect(denied.statusCode).toBe(403);
     expect(allowed.statusCode).toBe(200);
+  });
+
+  it('maps unique-name conflicts and missing Job mutations to stable responses', async () => {
+    const server = await createTestServer();
+    const first = await server.app.inject({
+      method: 'POST',
+      url: '/internal/collections',
+      payload: { name: 'Duplicate' },
+    });
+    const duplicate = await server.app.inject({
+      method: 'POST',
+      url: '/internal/collections',
+      payload: { name: 'duplicate' },
+    });
+    const providerConflict = await server.app.inject({
+      method: 'POST',
+      url: '/internal/providers',
+      payload: { name: 'Mock Provider', type: 'mock', config: {} },
+    });
+    const missingRetry = await server.app.inject({
+      method: 'POST',
+      url: '/internal/jobs/missing/retry',
+      payload: {},
+    });
+    const missingDelete = await server.app.inject({
+      method: 'DELETE',
+      url: '/internal/jobs/missing',
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json()).toEqual({ error: 'collection_name_conflict' });
+    expect(providerConflict.statusCode).toBe(409);
+    expect(missingRetry.statusCode).toBe(404);
+    expect(missingDelete.statusCode).toBe(404);
+  });
+
+  it('enforces an optional application password with a signed session cookie', async () => {
+    const server = await createTestServer(true, true, false, 'test-password');
+    const health = await server.app.inject({ method: 'GET', url: '/internal/health' });
+    const denied = await server.app.inject({ method: 'GET', url: '/internal/settings' });
+    const status = await server.app.inject({ method: 'GET', url: '/internal/auth/status' });
+    const wrong = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/login',
+      payload: { password: 'wrong' },
+    });
+    const login = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/login',
+      payload: { password: 'test-password' },
+    });
+    const cookie = login.headers['set-cookie'];
+    const authenticated = await server.app.inject({
+      method: 'GET',
+      url: '/internal/settings',
+      headers: { cookie: Array.isArray(cookie) ? cookie[0]! : cookie! },
+    });
+    const basic = await server.app.inject({
+      method: 'GET',
+      url: '/internal/settings',
+      headers: { authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}` },
+    });
+
+    expect(health.statusCode).toBe(200);
+    expect(denied.statusCode).toBe(401);
+    expect(denied.headers['www-authenticate']).toContain('Basic');
+    expect(status.json()).toEqual({ required: true, authenticated: false });
+    expect(wrong.statusCode).toBe(401);
+    expect(login.statusCode).toBe(200);
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Strict');
+    expect(authenticated.statusCode).toBe(200);
+    expect(basic.statusCode).toBe(200);
   });
 });

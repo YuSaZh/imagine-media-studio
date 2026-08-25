@@ -14,6 +14,7 @@ import { ModelRepository } from './database/models.js';
 import { ProviderRepository } from './database/providers.js';
 import { SettingsRepository } from './database/settings.js';
 import { EventBroker } from './events/event-broker.js';
+import { OutboxPublisher } from './events/outbox-publisher.js';
 import { JobRunner } from './jobs/job-runner.js';
 import { createSqliteRunnerOptions } from './jobs/sqlite-adapters.js';
 import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adapter.js';
@@ -23,6 +24,7 @@ import { VideoProcessor } from './media/video-processor.js';
 import { ProviderRegistry } from './providers/provider-registry.js';
 import { ProviderService } from './providers/provider-service.js';
 import { registerInternalRoutes } from './routes/internal.js';
+import { registerAuthRoutes } from './routes/auth.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerResourceRoutes } from './routes/resources.js';
@@ -30,6 +32,7 @@ import { NetworkPolicy } from './security/network-policy.js';
 import { RemoteMediaDownloader } from './security/remote-download.js';
 import { SafeHttpTransport } from './security/safe-http-transport.js';
 import { SecretVault } from './security/secret-vault.js';
+import { PasswordAuth } from './security/password-auth.js';
 import { ensureStorage, getStoragePaths } from './storage/paths.js';
 
 export interface CreateServerOptions {
@@ -61,7 +64,12 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const collections = new CollectionRepository(database.orm);
   const changeEvents = new ChangeEventRepository(database.orm);
   const broker = new EventBroker();
+  const outbox = new OutboxPublisher(changeEvents, broker);
   const vault = new SecretVault(options.config.appSecret);
+  const passwordAuth = new PasswordAuth({
+    appSecret: options.config.appSecret,
+    password: options.config.appPassword,
+  });
   const providerRegistry = new ProviderRegistry(providerRepository, vault);
   const providerService = new ProviderService(
     providerRepository,
@@ -103,7 +111,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     createSqliteRunnerOptions({
       jobs,
       changeEvents,
-      broker,
+      broker: outbox,
       providers: providerRegistry,
       media: providerResultMedia,
     }),
@@ -134,6 +142,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       },
     });
     app.addHook('onRequest', async (request, reply) => {
+      const pathname = new URL(request.url, 'http://localhost').pathname;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         const origin = request.headers.origin;
         const host = request.headers.host;
@@ -146,6 +155,20 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
           }
           if (originHost !== host) return reply.code(403).send({ error: 'cross_origin_write_denied' });
         }
+      }
+      const publicInternalPath =
+        pathname === '/internal/health' || pathname.startsWith('/internal/auth/');
+      if (
+        passwordAuth.required &&
+        /^\/internal(?:\/|$)/.test(pathname) &&
+        !publicInternalPath &&
+        !passwordAuth.authenticated(request)
+      ) {
+        reply.header('www-authenticate', 'Basic realm="Imagine Media Studio", charset="UTF-8"');
+        return reply.code(401).send({
+          error: 'authentication_required',
+          message: 'Enter the application password to continue.',
+        });
       }
     });
     app.addHook('onSend', async (request, reply, payload) => {
@@ -163,25 +186,26 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       providerService.ensureMockProvider();
       await providerService.refreshModels('mock');
     }
+    outbox.flush();
+    await registerAuthRoutes(app, passwordAuth);
     await registerInternalRoutes(app, {
       mockProviderEnabled: options.config.mockProviderEnabled,
     });
     await registerProviderRoutes(app, {
-      broker,
-      changeEvents,
+      outbox,
       providers: providerService,
     });
     await registerResourceRoutes(app, {
       assets,
-      broker,
-      changeEvents,
       collections,
       jobs,
       media: uploadMedia,
       models,
+      outbox,
       providers: providerRegistry,
       runner,
       settings,
+      storage,
       maxUploadBytes: Math.max(
         options.config.maxImageUploadBytes,
         options.config.maxVideoUploadBytes,

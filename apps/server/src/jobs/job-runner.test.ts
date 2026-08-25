@@ -433,10 +433,14 @@ function createMemoryRunner(
   jobs: MemoryJobPort;
   assets: MemoryAssetPort;
   materializedSources: Array<SubmittedAsset['source']>;
+  discardedJobIds: string[];
+  finalizedJobIds: string[];
 } {
   const jobs = new MemoryJobPort(initialJobs);
   const assets = new MemoryAssetPort(jobs);
   const materializedSources: Array<SubmittedAsset['source']> = [];
+  const discardedJobIds: string[] = [];
+  const finalizedJobIds: string[] = [];
   const options: JobRunnerOptions = {
     jobs,
     assets,
@@ -461,12 +465,25 @@ function createMemoryRunner(
           };
         }),
       process: async (_job, materialized) => materialized,
+      discard: async (job) => {
+        discardedJobIds.push(job.id);
+      },
+      finalized: async (job) => {
+        finalizedJobIds.push(job.id);
+      },
     },
     concurrency: { imageSubmit: 1, videoSubmit: 1, poll: 4, download: 3, process: 2 },
     defaultPollAfterMs: 0,
     defaultRetryAfterMs: 0,
   };
-  return { runner: new JobRunner(options), jobs, assets, materializedSources };
+  return {
+    runner: new JobRunner(options),
+    jobs,
+    assets,
+    materializedSources,
+    discardedJobIds,
+    finalizedJobIds,
+  };
 }
 
 describe('JobRunner asynchronous state machine', () => {
@@ -623,6 +640,105 @@ describe('JobRunner asynchronous state machine', () => {
 
     expect(materializedSources).toEqual(['base64', 'url']);
     expect(jobs.records.get('sources')?.status).toBe('completed');
+    await runner.stop();
+  });
+
+  it('discards provisional outputs when a processing Job is cancelled', async () => {
+    const materialized: MaterializedAsset = {
+      type: 'image',
+      mimeType: 'image/png',
+      filePath: 'provisional/cancel.png',
+      fileSize: 1,
+      sha256: 'cancel-sha',
+    };
+    const { runner, jobs, discardedJobIds } = createMemoryRunner(
+      [createRunnerJob('cancel-provisional', {
+        status: 'processing',
+        materializedAssets: [materialized],
+      })],
+      () => ({ adapter: new CompletedTestProvider([]), submitReplaySafe: true }),
+    );
+
+    await runner.cancel('cancel-provisional');
+
+    expect(jobs.records.get('cancel-provisional')?.status).toBe('cancelled');
+    expect(discardedJobIds).toEqual(['cancel-provisional']);
+  });
+
+  it('releases provisional markers only after atomic output finalization', async () => {
+    const materialized: MaterializedAsset = {
+      type: 'image',
+      mimeType: 'image/png',
+      filePath: 'provisional/finalize.png',
+      fileSize: 1,
+      sha256: 'finalize-sha',
+    };
+    const { runner, finalizedJobIds } = createMemoryRunner(
+      [createRunnerJob('finalize-provisional', {
+        status: 'processing',
+        materializedAssets: [materialized],
+      })],
+      () => ({ adapter: new CompletedTestProvider([]), submitReplaySafe: true }),
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'provisional finalization');
+
+    expect(finalizedJobIds).toEqual(['finalize-provisional']);
+    await runner.stop();
+  });
+
+  it('discards provisional outputs when cancellation wins the finalize CAS', async () => {
+    const materialized: MaterializedAsset = {
+      type: 'image',
+      mimeType: 'image/png',
+      filePath: 'provisional/cas-cancel.png',
+      fileSize: 1,
+      sha256: 'cas-cancel-sha',
+    };
+    const job = createRunnerJob('cas-cancel', {
+      status: 'processing',
+      materializedAssets: [materialized],
+    });
+    const jobs = new MemoryJobPort([job]);
+    const discarded: string[] = [];
+    const assets: RunnerAssetPort = {
+      outputsConsistent: async () => false,
+      finalize: async (_jobId, expectedRevision) => {
+        await jobs.transition(job.id, {
+          expectedStatuses: ['processing'],
+          expectedRevision,
+          status: 'cancelled',
+          stage: 'cancelled',
+        });
+        return null;
+      },
+    };
+    const runner = new JobRunner({
+      jobs,
+      assets,
+      events: { publish: () => undefined },
+      providers: {
+        resolve: () => ({
+          adapter: new CompletedTestProvider([]),
+          secrets: {},
+          submitReplaySafe: true,
+        }),
+      },
+      media: {
+        materialize: async (_job, outputs) => outputs.map(() => materialized),
+        process: async (_job, outputs) => outputs,
+        discard: async (discardedJob) => {
+          discarded.push(discardedJob.id);
+        },
+      },
+    });
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'finalize cancellation race');
+
+    expect(jobs.records.get(job.id)?.status).toBe('cancelled');
+    expect(discarded).toEqual([job.id]);
     await runner.stop();
   });
 });

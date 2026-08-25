@@ -25,6 +25,13 @@ export interface MaterializedAsset {
   type: 'image' | 'video';
   mimeType: string;
   filePath: string;
+  thumbnailPath?: string | null;
+  posterPath?: string | null;
+  width?: number | null;
+  height?: number | null;
+  durationMs?: number | null;
+  materializationKey?: string;
+  sourceFingerprint?: string;
   fileSize: number;
   sha256: string;
   resultId?: string;
@@ -110,6 +117,10 @@ export interface MediaMaterializerPort {
     assets: readonly MaterializedAsset[],
     signal: AbortSignal,
   ): Promise<readonly MaterializedAsset[]>;
+  /** Delete provisional files after cancellation, failed CAS, or partial materialization. */
+  discard?(job: RunnerJob, assets: readonly MaterializedAsset[]): Promise<void>;
+  /** Release provisional markers after the Asset transaction commits. */
+  finalized?(job: RunnerJob, assets: readonly MaterializedAsset[]): Promise<void>;
 }
 
 export interface RunnerClock {

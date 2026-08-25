@@ -6,8 +6,7 @@ import {
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 
-import type { ChangeEventRepository } from '../database/events.js';
-import type { EventBroker } from '../events/event-broker.js';
+import type { OutboxPublisher } from '../events/outbox-publisher.js';
 import {
   ProviderRegistryError,
 } from '../providers/provider-registry.js';
@@ -20,8 +19,7 @@ const ProviderPageQuerySchema = CursorPageQuerySchema.extend({
 }).strict();
 
 export interface ProviderRoutesOptions {
-  broker: EventBroker;
-  changeEvents: ChangeEventRepository;
+  outbox: OutboxPublisher;
   providers: ProviderService;
 }
 
@@ -41,10 +39,16 @@ function providerError(reply: FastifyReply, error: unknown) {
   throw error;
 }
 
+function isSqliteConstraint(error: unknown): boolean {
+  return error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    error.code.startsWith('SQLITE_CONSTRAINT');
+}
+
 async function publishCommitted<T>(options: ProviderRoutesOptions, operation: () => T | Promise<T>) {
-  const previousId = options.changeEvents.latestId();
   const result = await operation();
-  for (const event of options.changeEvents.listAfter(previousId, 1000)) options.broker.publish(event);
+  options.outbox.flush();
   return result;
 }
 
@@ -73,24 +77,32 @@ export async function registerProviderRoutes(
   app.post('/internal/providers', async (request, reply) => {
     const input = ProviderCreateSchema.safeParse(request.body);
     if (!input.success) return invalidRequest(reply, input.error.issues);
-    const provider = await publishCommitted(options, () => options.providers.create({
-      name: input.data.name,
-      type: input.data.type,
-      config: input.data.config,
-      enabled: input.data.enabled,
-      isDefault: input.data.isDefault,
-      ...(input.data.baseUrl === undefined ? {} : { baseUrl: input.data.baseUrl }),
-      ...(input.data.apiKey === undefined ? {} : { apiKey: input.data.apiKey }),
-      ...(input.data.headers === undefined ? {} : { headers: input.data.headers }),
-    }));
-    return reply.code(201).send({ provider });
+    try {
+      const provider = await publishCommitted(options, () => options.providers.create({
+        name: input.data.name,
+        type: input.data.type,
+        config: input.data.config,
+        enabled: input.data.enabled,
+        isDefault: input.data.isDefault,
+        ...(input.data.baseUrl === undefined ? {} : { baseUrl: input.data.baseUrl }),
+        ...(input.data.apiKey === undefined ? {} : { apiKey: input.data.apiKey }),
+        ...(input.data.headers === undefined ? {} : { headers: input.data.headers }),
+      }));
+      return reply.code(201).send({ provider });
+    } catch (error) {
+      if (isSqliteConstraint(error)) {
+        return reply.code(409).send({ error: 'provider_name_conflict' });
+      }
+      throw error;
+    }
   });
 
   app.patch<{ Params: { id: string } }>('/internal/providers/:id', async (request, reply) => {
     const input = ProviderPatchSchema.safeParse(request.body);
     if (!input.success) return invalidRequest(reply, input.error.issues);
-    const provider = await publishCommitted(options, () =>
-      options.providers.update(request.params.id, {
+    try {
+      const provider = await publishCommitted(options, () =>
+        options.providers.update(request.params.id, {
         ...(input.data.name === undefined ? {} : { name: input.data.name }),
         ...(input.data.type === undefined ? {} : { type: input.data.type }),
         ...(!('baseUrl' in input.data) ? {} : { baseUrl: input.data.baseUrl ?? null }),
@@ -99,11 +111,17 @@ export async function registerProviderRoutes(
         ...(input.data.config === undefined ? {} : { config: input.data.config }),
         ...(input.data.enabled === undefined ? {} : { enabled: input.data.enabled }),
         ...(input.data.isDefault === undefined ? {} : { isDefault: input.data.isDefault }),
-      }),
-    );
-    return provider
-      ? { provider }
-      : reply.code(404).send({ error: 'provider_not_found' });
+        }),
+      );
+      return provider
+        ? { provider }
+        : reply.code(404).send({ error: 'provider_not_found' });
+    } catch (error) {
+      if (isSqliteConstraint(error)) {
+        return reply.code(409).send({ error: 'provider_name_conflict' });
+      }
+      throw error;
+    }
   });
 
   app.delete<{ Params: { id: string } }>('/internal/providers/:id', async (request, reply) => {

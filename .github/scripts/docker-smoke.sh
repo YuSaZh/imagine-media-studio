@@ -7,11 +7,15 @@ set -euo pipefail
 
 base_url="http://127.0.0.1:${IMAGINE_MEDIA_HOST_PORT}"
 
-service_count=$(docker compose config --services | wc -l | tr -d ' ')
-test "$service_count" = "1"
-test "$(docker compose config --services)" = "imagine-media"
+compose() {
+  timeout --foreground "${COMPOSE_TIMEOUT_SECONDS:-180}" docker compose "$@"
+}
 
-docker compose up --detach --wait --wait-timeout 120
+service_count=$(compose config --services | wc -l | tr -d ' ')
+test "$service_count" = "1"
+test "$(compose config --services)" = "imagine-media"
+
+compose up --detach --wait --wait-timeout 120
 
 IFS=$'\t' read -r job_id asset_id collection_id < <(
   BASE_URL="$base_url" node --input-type=module <<'NODE'
@@ -20,7 +24,10 @@ import assert from 'node:assert/strict';
 const baseUrl = process.env.BASE_URL;
 
 async function request(path, options = {}, expectedStatus = 200) {
-  const response = await fetch(baseUrl + path, options);
+  const response = await fetch(baseUrl + path, {
+    ...options,
+    signal: options.signal ?? AbortSignal.timeout(10_000),
+  });
   if (response.status !== expectedStatus) {
     const text = await response.text();
     throw new Error(`${options.method ?? 'GET'} ${path}: expected ${expectedStatus}, received ${response.status}: ${text}`);
@@ -152,7 +159,7 @@ test -s "$DATA_HOST_DIR/app.db"
 test -n "$(find "$DATA_HOST_DIR/media/originals" -maxdepth 1 -type f -print -quit)"
 
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
-  docker compose exec --no-TTY \
+  compose exec --no-TTY \
   -e JOB_ID -e ASSET_ID -e COLLECTION_ID imagine-media node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -214,7 +221,81 @@ if (asset.sha256 !== createHash('sha256').update(bytes).digest('hex')) {
 }
 NODE
 
-queued_job_id=$(docker compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+latest_event_id=$(compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+import Database from 'better-sqlite3';
+
+const database = new Database('/data/app.db', { readonly: true });
+const latest = database.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM change_events').get().id;
+database.close();
+process.stdout.write(String(latest));
+NODE
+)
+
+ASSET_ID="$asset_id" LAST_EVENT_ID="$latest_event_id" BASE_URL="$base_url" \
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+
+const baseUrl = process.env.BASE_URL;
+const assetPath = `/internal/assets/${encodeURIComponent(process.env.ASSET_ID)}`;
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), 10_000);
+try {
+  const response = await fetch(baseUrl + '/internal/events', {
+    headers: {
+      accept: 'text/event-stream',
+      'last-event-id': process.env.LAST_EVENT_ID,
+    },
+    signal: controller.signal,
+  });
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  const liveEvent = (async () => {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error('Live SSE stream ended before the Asset mutation event.');
+      buffer += decoder.decode(value, { stream: true });
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = block
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (!data) continue;
+        const event = JSON.parse(data);
+        if (event.entityId === process.env.ASSET_ID && event.type === 'asset.updated') return event;
+      }
+    }
+  })();
+
+  const mutation = await fetch(baseUrl + assetPath, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ favorite: false }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(mutation.status, 200);
+  const event = await liveEvent;
+  assert.ok(event.id > Number(process.env.LAST_EVENT_ID));
+  await reader.cancel();
+
+  const restore = await fetch(baseUrl + assetPath, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ favorite: true }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(restore.status, 200);
+} finally {
+  clearTimeout(timeout);
+}
+NODE
+
+queued_job_id=$(compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 
@@ -257,8 +338,8 @@ process.stdout.write(id);
 NODE
 )
 
-docker compose restart imagine-media
-docker compose up --detach --wait --wait-timeout 120
+compose restart imagine-media
+compose up --detach --wait --wait-timeout 120
 
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
 QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" node --input-type=module <<'NODE'
@@ -267,7 +348,7 @@ import assert from 'node:assert/strict';
 const baseUrl = process.env.BASE_URL;
 
 async function json(path) {
-  const response = await fetch(baseUrl + path);
+  const response = await fetch(baseUrl + path, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`GET ${path} failed with ${response.status}`);
   return response.json();
 }
@@ -297,7 +378,10 @@ assert.ok(
   ),
 );
 
-const ranged = await fetch(baseUrl + asset.contentUrl, { headers: { range: 'bytes=0-7' } });
+const ranged = await fetch(baseUrl + asset.contentUrl, {
+  headers: { range: 'bytes=0-7' },
+  signal: AbortSignal.timeout(10_000),
+});
 assert.equal(ranged.status, 206);
 assert.equal((await ranged.arrayBuffer()).byteLength, 8);
 

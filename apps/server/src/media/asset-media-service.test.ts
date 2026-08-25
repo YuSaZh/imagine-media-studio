@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
 import sharp from 'sharp';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureStorage, getStoragePaths } from '../storage/paths.js';
 import { AssetMediaService, InvalidBase64MediaError } from './asset-media-service.js';
@@ -21,6 +21,7 @@ import { VideoProcessor } from './video-processor.js';
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })));
 });
 
@@ -123,6 +124,76 @@ describe('AssetMediaService', () => {
       service.materializeBase64({ base64: 'not base64!', role: 'reference' }),
     ).rejects.toThrow(InvalidBase64MediaError);
     expect(repository.records).toHaveLength(1);
+  });
+
+  it('reuses complete stable Provider outputs after a crash without creating visible assets', async () => {
+    const { paths, png, repository, service } = await fixture();
+    const input = {
+      base64: `data:image/png;base64,${png.toString('base64')}`,
+      claimedMimeType: 'image/png',
+      expectedKind: 'image' as const,
+      jobId: 'recoverable-job',
+      outputSlot: 0,
+      resultId: 'provider-result-1',
+    };
+    const first = await service.materializeProviderBase64(input);
+    const inspect = vi.spyOn(SharpImageProcessor.prototype, 'inspect');
+    const resumed = new AssetMediaService({
+      imageProcessor: new SharpImageProcessor({ thumbnailSize: 32 }),
+      maxBytes: 1024 * 1024,
+      paths,
+      repository,
+      videoProcessor: new VideoProcessor(),
+    });
+
+    const second = await resumed.materializeProviderBase64(input);
+
+    expect(second).toEqual(first);
+    expect(inspect).not.toHaveBeenCalled();
+    expect(first.filePath).toMatch(/^media\/originals\/job-[a-f0-9]{64}-slot-0000\.png$/);
+    expect(repository.records).toEqual([]);
+    expect(await resumed.validateProviderOutputs('recoverable-job', [first])).toBe(true);
+  });
+
+  it('repairs a hash-mismatched Provider output and removes provisional files on discard', async () => {
+    const { paths, png, repository, service } = await fixture();
+    const input = {
+      base64: `data:image/png;base64,${png.toString('base64')}`,
+      expectedKind: 'image' as const,
+      jobId: 'repair-job',
+      outputSlot: 0,
+    };
+    const first = await service.materializeProviderBase64(input);
+    await writeFile(join(paths.root, first.filePath), 'corrupt');
+
+    const repaired = await service.materializeProviderBase64(input);
+
+    expect(repaired.sha256).toBe(createHash('sha256').update(png).digest('hex'));
+    expect(await readFile(join(paths.root, repaired.filePath))).toEqual(png);
+    expect(repository.records).toEqual([]);
+    await service.cleanupProviderOutputs(input.jobId, 1);
+    await expect(stat(join(paths.root, repaired.filePath))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await service.validateProviderOutputs(input.jobId, [repaired])).toBe(false);
+  });
+
+  it('enforces the detected media kind limit before committing files', async () => {
+    const { paths, png, repository } = await fixture();
+    const service = new AssetMediaService({
+      imageProcessor: new SharpImageProcessor(),
+      maxImageBytes: png.byteLength - 1,
+      maxVideoBytes: png.byteLength * 10,
+      paths,
+      repository,
+      videoProcessor: new VideoProcessor(),
+    });
+
+    await expect(
+      service.materializeUpload({ role: 'upload', source: Readable.from([png]) }),
+    ).rejects.toThrow(`image media exceeds the ${png.byteLength - 1} byte limit`);
+    expect(repository.records).toEqual([]);
+    const { readdir } = await import('node:fs/promises');
+    expect(await readdir(paths.uploads)).toEqual([]);
+    expect(await readdir(paths.temporary)).toEqual([]);
   });
 
   it('removes committed files when repository persistence fails', async () => {

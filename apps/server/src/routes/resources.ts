@@ -20,17 +20,18 @@ import {
   CollectionRepositoryError,
   type CollectionRepository,
 } from '../database/collections.js';
-import type { ChangeEventRepository } from '../database/events.js';
 import { JobRepositoryError, type JobRepository } from '../database/jobs.js';
 import type { ModelRepository } from '../database/models.js';
 import type { SettingsRepository } from '../database/settings.js';
-import type { EventBroker } from '../events/event-broker.js';
+import type { OutboxPublisher } from '../events/outbox-publisher.js';
 import type { ProviderRegistryPort } from '../jobs/ports.js';
 import type { JobRunner } from '../jobs/job-runner.js';
 import type { AssetMediaService } from '../media/asset-media-service.js';
 import { planMediaResponse } from '../media/range.js';
 import type { AssetVariant } from '../media/types.js';
 import { ProviderRegistryError } from '../providers/provider-registry.js';
+import { discardStagedFile, stageReadable, type StagedFile } from '../storage/atomic-file.js';
+import type { StoragePaths } from '../storage/paths.js';
 import { toAssetDto, toCollectionDto, toJobDto, toModelDto } from './dto.js';
 
 const JobPageQuerySchema = CursorPageQuerySchema.extend({
@@ -56,15 +57,15 @@ type Parsed<T extends z.ZodType> = z.infer<T>;
 
 export interface ResourceRoutesOptions {
   assets: AssetRepository;
-  broker: EventBroker;
-  changeEvents: ChangeEventRepository;
   collections: CollectionRepository;
   jobs: JobRepository;
   media: AssetMediaService;
   models: ModelRepository;
+  outbox: OutboxPublisher;
   providers: ProviderRegistryPort;
   runner: JobRunner;
   settings: SettingsRepository;
+  storage: StoragePaths;
   maxUploadBytes: number;
 }
 
@@ -87,6 +88,19 @@ function errorResponse(reply: FastifyReply, status: number, error: string, messa
   return reply.code(status).send({ error, ...(message ? { message } : {}) });
 }
 
+function isSqliteConstraint(error: unknown): boolean {
+  return error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    error.code.startsWith('SQLITE_CONSTRAINT');
+}
+
+function isUploadTooLarge(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name.includes('TooLarge')) return true;
+  return 'code' in error && error.code === 'FST_REQ_FILE_TOO_LARGE';
+}
+
 function assetDto(options: ResourceRoutesOptions, assetId: string) {
   const asset = options.assets.get(assetId);
   return asset
@@ -100,25 +114,12 @@ function jobDto(options: ResourceRoutesOptions, jobId: string) {
 }
 
 async function publishCommitted<T>(
-  options: Pick<ResourceRoutesOptions, 'broker' | 'changeEvents'>,
+  options: Pick<ResourceRoutesOptions, 'outbox'>,
   operation: () => T | Promise<T>,
 ): Promise<T> {
-  const previousId = options.changeEvents.latestId();
   const result = await operation();
-  for (const event of options.changeEvents.listAfter(previousId, 1000)) {
-    options.broker.publish(event);
-  }
+  options.outbox.flush();
   return result;
-}
-
-function fieldValue(
-  fields: Record<string, unknown>,
-  name: string,
-): string | undefined {
-  const field = fields[name];
-  if (field === undefined || field === null || typeof field !== 'object') return undefined;
-  if (!('type' in field) || field.type !== 'field' || !('value' in field)) return undefined;
-  return typeof field.value === 'string' ? field.value : undefined;
 }
 
 async function sendAsset(
@@ -244,6 +245,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
   });
 
   app.post<{ Params: { id: string } }>('/internal/jobs/:id/retry', async (request, reply) => {
+    if (!options.jobs.get(request.params.id)) return errorResponse(reply, 404, 'job_not_found');
     try {
       const job = await publishCommitted(options, () => options.jobs.retry(request.params.id));
       if (!job) return errorResponse(reply, 409, 'job_not_retryable');
@@ -267,6 +269,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
   });
 
   app.delete<{ Params: { id: string } }>('/internal/jobs/:id', async (request, reply) => {
+    if (!options.jobs.get(request.params.id)) return errorResponse(reply, 404, 'job_not_found');
     const deleted = await publishCommitted(options, () => options.jobs.softDelete(request.params.id));
     if (!deleted) return errorResponse(reply, 409, 'job_not_deletable');
     return reply.code(204).send();
@@ -275,37 +278,80 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
 
 function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOptions) {
   app.post('/internal/assets/upload', async (request, reply) => {
-    let upload;
+    let staged: StagedFile | null = null;
+    let filename: string | null = null;
+    let mimetype: string | null = null;
+    const fields = new Map<string, string>();
     try {
-      upload = await request.file({ limits: { files: 1, fileSize: options.maxUploadBytes } });
+      const parts = request.parts({ limits: { files: 1, fileSize: options.maxUploadBytes, fields: 2, parts: 3 } });
+      for await (const part of parts) {
+        if (part.type === 'file') {
+          if (staged !== null) {
+            part.file.resume();
+            await discardStagedFile(staged);
+            staged = null;
+            return errorResponse(reply, 400, 'multiple_files_not_allowed');
+          }
+          staged = await stageReadable({
+            dataRoot: options.storage.root,
+            maxBytes: options.maxUploadBytes,
+            source: part.file,
+            temporaryDirectory: options.storage.temporary,
+          });
+          if (part.file.truncated) {
+            await discardStagedFile(staged);
+            staged = null;
+            return errorResponse(reply, 413, 'upload_too_large');
+          }
+          filename = part.filename;
+          mimetype = part.mimetype;
+          continue;
+        }
+        if (!['parentAssetId', 'role'].includes(part.fieldname) || fields.has(part.fieldname)) {
+          if (staged) await discardStagedFile(staged);
+          staged = null;
+          return errorResponse(reply, 400, 'invalid_upload_field');
+        }
+        if (typeof part.value !== 'string') {
+          if (staged) await discardStagedFile(staged);
+          staged = null;
+          return errorResponse(reply, 400, 'invalid_upload_field');
+        }
+        fields.set(part.fieldname, part.value);
+      }
     } catch (error) {
-      return errorResponse(reply, 413, 'upload_too_large', error instanceof Error ? error.message : undefined);
+      if (staged) await discardStagedFile(staged);
+      return errorResponse(
+        reply,
+        isUploadTooLarge(error) ? 413 : 400,
+        isUploadTooLarge(error) ? 'upload_too_large' : 'invalid_multipart_upload',
+        error instanceof Error ? error.message : undefined,
+      );
     }
-    if (!upload) return errorResponse(reply, 400, 'file_required');
-    const fields = upload.fields as unknown as Record<string, unknown>;
-    const parsedRole = AssetRoleSchema.safeParse(fieldValue(fields, 'role') ?? 'upload');
+    if (!staged || filename === null || mimetype === null) return errorResponse(reply, 400, 'file_required');
+    const parsedRole = AssetRoleSchema.safeParse(fields.get('role') ?? 'upload');
     if (!parsedRole.success || parsedRole.data === 'output') {
-      upload.file.resume();
+      await discardStagedFile(staged);
       return errorResponse(reply, 400, 'invalid_upload_role');
     }
-    const parentAssetId = fieldValue(fields, 'parentAssetId');
+    const parentAssetId = fields.get('parentAssetId');
     try {
-      const before = options.changeEvents.latestId();
       const asset = await options.media.materializeUpload({
-        source: upload.file,
+        source: createReadStream(staged.temporaryPath),
         role: parsedRole.data,
-        originalFilename: upload.filename,
-        claimedMimeType: upload.mimetype,
+        originalFilename: filename,
+        claimedMimeType: mimetype,
         ...(parentAssetId ? { parentAssetId } : {}),
       });
-      for (const event of options.changeEvents.listAfter(before, 1000)) options.broker.publish(event);
+      options.outbox.flush();
       const dto = assetDto(options, asset.id);
       if (!dto) throw new Error(`Uploaded asset ${asset.id} was not persisted.`);
       return reply.code(201).send({ asset: dto });
     } catch (error) {
-      const name = error instanceof Error ? error.name : '';
-      const status = name.includes('TooLarge') ? 413 : 400;
+      const status = isUploadTooLarge(error) ? 413 : 400;
       return errorResponse(reply, status, 'invalid_media_upload', error instanceof Error ? error.message : undefined);
+    } finally {
+      await discardStagedFile(staged);
     }
   });
 
@@ -369,17 +415,27 @@ function registerCollectionRoutes(app: FastifyInstance, options: ResourceRoutesO
   app.post('/internal/collections', async (request, reply) => {
     const input = parseOrReply(CollectionCreateSchema, request.body, reply);
     if (!input) return;
-    const collection = await publishCommitted(options, () => options.collections.create(input.name));
-    return reply.code(201).send({ collection: toCollectionDto(collection) });
+    try {
+      const collection = await publishCommitted(options, () => options.collections.create(input.name));
+      return reply.code(201).send({ collection: toCollectionDto(collection) });
+    } catch (error) {
+      if (isSqliteConstraint(error)) return errorResponse(reply, 409, 'collection_name_conflict');
+      throw error;
+    }
   });
 
   app.patch<{ Params: { id: string } }>('/internal/collections/:id', async (request, reply) => {
     const input = parseOrReply(CollectionPatchSchema, request.body, reply);
     if (!input) return;
-    const collection = await publishCommitted(options, () => options.collections.rename(request.params.id, input.name));
-    return collection
-      ? { collection: toCollectionDto(collection) }
-      : errorResponse(reply, 404, 'collection_not_found');
+    try {
+      const collection = await publishCommitted(options, () => options.collections.rename(request.params.id, input.name));
+      return collection
+        ? { collection: toCollectionDto(collection) }
+        : errorResponse(reply, 404, 'collection_not_found');
+    } catch (error) {
+      if (isSqliteConstraint(error)) return errorResponse(reply, 409, 'collection_name_conflict');
+      throw error;
+    }
   });
 
   app.delete<{ Params: { id: string } }>('/internal/collections/:id', async (request, reply) => {
