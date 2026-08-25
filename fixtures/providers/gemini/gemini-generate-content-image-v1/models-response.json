@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-3.1-flash-image",
+      "displayName": "Gemini 3.1 Flash Image",
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    {
+      "name": "models/gemini-custom-image-preview",
+      "displayName": "Gemini Custom Image Preview",
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    {
+      "name": "models/gemini-3.1-flash-text",
+      "displayName": "Gemini 3.1 Flash Text",
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    {
+      "name": "models/gemini-3.1-flash-image-embedding",
+      "displayName": "Gemini Image Embedding",
+      "supportedGenerationMethods": ["embedContent"]
+    }
+  ]
+}

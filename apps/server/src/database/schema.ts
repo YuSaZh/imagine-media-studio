@@ -81,6 +81,7 @@ export const jobs = sqliteTable(
     errorMessage: text('error_message'),
     retryCount: integer('retry_count').notNull().default(0),
     submitAttempt: integer('submit_attempt').notNull().default(0),
+    stageRetryCountsJson: text('stage_retry_counts_json').notNull().default('{}'),
     pollAfterAt: integer('poll_after_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),

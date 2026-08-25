@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 400,
+    "status": "INVALID_ARGUMENT",
+    "message": "The requested image aspect ratio is not supported."
+  }
+}

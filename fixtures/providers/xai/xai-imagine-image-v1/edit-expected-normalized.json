@@ -1,0 +1,12 @@
+{
+  "state": "completed",
+  "assets": [
+    {
+      "type": "image",
+      "mimeType": "image/png",
+      "source": "url",
+      "url": "https://cdn.example.invalid/xai-edit.png",
+      "resultId": "image-0"
+    }
+  ]
+}

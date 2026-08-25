@@ -1,0 +1,9 @@
+{
+  "model": "grok-imagine-image-2.0",
+  "prompt": "A red kite above a quiet lake",
+  "aspect_ratio": "16:9",
+  "resolution": "2k",
+  "quality": "low",
+  "response_format": "b64_json",
+  "n": 2
+}

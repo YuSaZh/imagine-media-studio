@@ -1,0 +1,19 @@
+{
+  "state": "completed",
+  "assets": [
+    {
+      "type": "image",
+      "mimeType": "image/png",
+      "source": "base64",
+      "base64": "iVBORw0KGgo=",
+      "resultId": "image-0"
+    },
+    {
+      "type": "image",
+      "mimeType": "image/webp",
+      "source": "url",
+      "url": "https://cdn.example.invalid/xai-result.webp",
+      "resultId": "image-1"
+    }
+  ]
+}

@@ -24,7 +24,7 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 export const JsonObjectSchema = z.record(z.string(), JsonValueSchema);
 export type JsonObject = z.infer<typeof JsonObjectSchema>;
 
-const secretLikeKey = /(?:^|[-_.])(api[-_.]?key|authorization|cookie|password|secret|token)(?:$|[-_.])/i;
+const secretLikeKey = /(?:^|[-_.])(api[-_.]?key|authorization|cookie|password|secret|token|headers?|custom[-_.]?headers?)(?:$|[-_.])/i;
 
 function findSecretLikePath(value: JsonValue, path: readonly string[] = []): readonly string[] | null {
   if (value === null || typeof value !== 'object') return null;
@@ -42,6 +42,23 @@ function findSecretLikePath(value: JsonValue, path: readonly string[] = []): rea
     if (found) return found;
   }
   return null;
+}
+
+function stripSecretLikeKeys(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map((item) => stripSecretLikeKeys(item));
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (secretLikeKey.test(key)) continue;
+      result[key] = stripSecretLikeKeys(item);
+    }
+    return result;
+  }
+  return value;
+}
+
+function sanitizeConfig(value: JsonObject): JsonObject {
+  return stripSecretLikeKeys(value) as JsonObject;
 }
 
 export const SafeConfigSchema = JsonObjectSchema.superRefine((value, context) => {
@@ -80,12 +97,13 @@ export const SettingsPatchSchema = z.object({
     JsonValueSchema,
   ),
 }).strict().superRefine((value, context) => {
-  for (const key of Object.keys(value.values)) {
-    if (secretLikeKey.test(key)) {
+  for (const [key, item] of Object.entries(value.values)) {
+    const path = secretLikeKey.test(key) ? [key] : findSecretLikePath(item, [key]);
+    if (path) {
       context.addIssue({
         code: 'custom',
-        message: `Secret-like settings key is not allowed: ${key}`,
-        path: ['values', key],
+        message: `Secret-like settings key is not allowed: ${path.join('.')}`,
+        path: ['values', ...path],
       });
     }
   }
@@ -95,30 +113,79 @@ export const SettingsResponseSchema = z.object({
   settings: JsonObjectSchema,
 }).strict();
 
-const HeadersSchema = z.record(z.string().min(1).max(256), z.string().max(8192));
+function hasHeaderLineBreak(value: string): boolean {
+  return value.includes('\r') || value.includes('\n');
+}
+
+export const ProviderHeadersSchema = z.record(
+  z.string().trim().min(1).max(256).refine((value) => !hasHeaderLineBreak(value), {
+    message: 'Header names cannot contain line breaks.',
+  }),
+  z.string().max(8192).refine((value) => !hasHeaderLineBreak(value), {
+    message: 'Header values cannot contain line breaks.',
+  }),
+);
+
+function isSafeProviderBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === 'https:' || url.protocol === 'http:') &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.hash === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+export const ProviderBaseUrlSchema = z.string().url().max(2048).refine(isSafeProviderBaseUrl, {
+  message: 'Provider Base URL must use HTTP or HTTPS without credentials, query, or fragment.',
+});
+
+export const ProviderTypeSchema = z.enum([
+  'mock',
+  'openai-images-v1',
+  'openai-responses-image-v1',
+  'gemini-interactions-image-v1',
+  'gemini-generate-content-image-v1',
+  'xai-imagine-image-v1',
+]);
+
+const ProviderDtoBaseUrlSchema = z.string().transform((value) =>
+  value.length <= 2048 && isSafeProviderBaseUrl(value) ? value : null,
+).nullable();
 
 export const ProviderCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  type: z.string().trim().min(1).max(80),
-  baseUrl: z.string().url().max(2048).nullable().optional(),
+  type: ProviderTypeSchema,
+  baseUrl: ProviderBaseUrlSchema.nullable().optional(),
   apiKey: z.string().min(1).max(16_384).optional(),
-  headers: HeadersSchema.optional(),
+  headers: ProviderHeadersSchema.optional(),
   config: SafeConfigSchema.default({}),
   enabled: z.boolean().default(true),
   isDefault: z.boolean().default(false),
 }).strict();
 
-export const ProviderPatchSchema = ProviderCreateSchema.partial().extend({
+export const ProviderPatchSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  type: ProviderTypeSchema.optional(),
+  baseUrl: ProviderBaseUrlSchema.nullable().optional(),
   apiKey: z.string().min(1).max(16_384).nullable().optional(),
-  headers: HeadersSchema.nullable().optional(),
+  headers: ProviderHeadersSchema.nullable().optional(),
+  config: SafeConfigSchema.optional(),
+  enabled: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
 }).strict();
 
 export const ProviderDtoSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   type: z.string(),
-  baseUrl: z.string().nullable(),
-  config: JsonObjectSchema,
+  baseUrl: ProviderDtoBaseUrlSchema,
+  config: JsonObjectSchema.transform(sanitizeConfig),
   enabled: z.boolean(),
   isDefault: z.boolean(),
   hasApiKey: z.boolean(),
@@ -142,19 +209,95 @@ export const ProviderTestResponseSchema = z.object({
   message: z.string(),
 }).strict();
 
+export const ModelCapabilitySourceSchema = z.enum(['provider', 'profile', 'manual', 'mock']);
+
+export type ModelCapabilitySource = z.infer<typeof ModelCapabilitySourceSchema>;
+
 export const ModelDtoSchema = z.object({
   id: z.string().min(1),
   providerId: z.string().min(1),
   modelId: z.string().min(1),
   displayName: z.string().min(1),
   capabilities: JsonObjectSchema,
-  capabilitySource: z.enum(['provider', 'profile', 'manual', 'mock']),
+  capabilitySource: ModelCapabilitySourceSchema,
   enabled: z.boolean(),
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,
 }).strict();
 
 export type ModelDto = z.infer<typeof ModelDtoSchema>;
+
+const ImageInputConstraintsSchema = z.object({
+  mimeTypes: z.array(z.string().trim().min(1).max(255)).min(1).optional(),
+  maxBytes: z.number().int().positive().optional(),
+  maxPixels: z.number().int().positive().optional(),
+  maxWidth: z.number().int().positive().optional(),
+  maxHeight: z.number().int().positive().optional(),
+}).strict();
+
+const DurationSchema = z.union([
+  z.array(z.number().finite().positive()),
+  z.object({ min: z.number().finite().positive(), max: z.number().finite().positive() })
+    .strict()
+    .refine((value) => value.max >= value.min, 'Duration maximum must not be below minimum.'),
+]);
+
+export const ModelCapabilitiesSchema = z.object({
+  operations: z.array(MediaOperationSchema).min(1),
+  aspectRatios: z.array(z.string().trim().min(1).max(32)).optional(),
+  resolutions: z.array(z.string().trim().min(1).max(64)).optional(),
+  durations: DurationSchema.optional(),
+  maxReferenceImages: z.number().int().nonnegative().optional(),
+  inputImageConstraints: ImageInputConstraintsSchema.optional(),
+  supportsMask: z.boolean().optional(),
+  supportsNegativePrompt: z.boolean().optional(),
+  supportsSeed: z.boolean().optional(),
+  supportsAudio: z.boolean().optional(),
+  supportsProgress: z.boolean().optional(),
+  supportsCancel: z.boolean().optional(),
+  supportsBatchCount: z.boolean().optional(),
+  maxBatchCount: z.number().int().positive().optional(),
+  customFields: JsonObjectSchema.optional(),
+}).strict().superRefine((value, context) => {
+  const seen = new Set<string>();
+  for (const [index, operation] of value.operations.entries()) {
+    if (seen.has(operation)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Capability operations must not contain duplicates.',
+        path: ['operations', index],
+      });
+    }
+    seen.add(operation);
+  }
+});
+
+export type ModelCapabilities = z.infer<typeof ModelCapabilitiesSchema>;
+
+// Keep the older name as an explicit alias for callers that only validate
+// request bodies. Both manual writes and stored model inputs use this schema.
+export const ModelCapabilitiesInputSchema = ModelCapabilitiesSchema;
+
+export const ManualModelCreateSchema = z.object({
+  providerId: z.string().trim().min(1).max(255),
+  modelId: z.string().trim().min(1).max(255),
+  displayName: z.string().trim().min(1).max(255),
+  capabilities: ModelCapabilitiesSchema,
+  enabled: z.boolean().default(true),
+}).strict();
+
+export type ManualModelCreate = z.infer<typeof ManualModelCreateSchema>;
+
+export const ManualModelPatchSchema = z.object({
+  modelId: z.string().trim().min(1).max(255).optional(),
+  displayName: z.string().trim().min(1).max(255).optional(),
+  capabilities: ModelCapabilitiesSchema.optional(),
+  enabled: z.boolean().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, 'At least one model field is required.');
+
+export type ManualModelPatch = z.infer<typeof ManualModelPatchSchema>;
+
+export const ModelResponseSchema = z.object({ model: ModelDtoSchema }).strict();
 
 export const ModelPageSchema = z.object({
   items: z.array(ModelDtoSchema),

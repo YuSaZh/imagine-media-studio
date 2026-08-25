@@ -10,7 +10,10 @@ import {
   JobPageSchema,
   JobResponseSchema,
   JobRetryResponseSchema,
+  ManualModelCreateSchema,
+  ManualModelPatchSchema,
   ModelPageSchema,
+  ModelResponseSchema,
   ModelsResponseSchema,
   ProviderPageSchema,
   ProviderResponseSchema,
@@ -20,6 +23,8 @@ import {
   type CollectionDto,
   type GenerationRequest,
   type JsonValue,
+  type ManualModelCreate,
+  type ManualModelPatch,
   type ProviderDto,
 } from '@imagine/shared';
 
@@ -171,6 +176,22 @@ export const internalClient = {
     }),
   listModels: async (options: { cursor?: string; enabled?: boolean; limit?: number; operation?: string; providerId?: string } = {}) =>
     requestJson(`/internal/models${queryString(options)}`, ModelPageSchema),
+  createModel: async (input: Omit<ManualModelCreate, 'enabled'> & { enabled?: boolean }) => {
+    const parsed = ManualModelCreateSchema.parse(input);
+    return requestJson('/internal/models', ModelResponseSchema, {
+      method: 'POST',
+      body: jsonBody(parsed),
+    });
+  },
+  patchModel: async (modelId: string, input: ManualModelPatch) => {
+    const parsed = ManualModelPatchSchema.parse(input);
+    return requestJson(`/internal/models/${encodeURIComponent(modelId)}`, ModelResponseSchema, {
+      method: 'PATCH',
+      body: jsonBody(parsed),
+    });
+  },
+  deleteModel: async (modelId: string) =>
+    requestEmpty(`/internal/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' }),
   createJob: async (input: GenerationRequest, idempotencyKey?: string) =>
     requestJson('/internal/jobs', JobResponseSchema, {
       method: 'POST',

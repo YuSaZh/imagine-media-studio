@@ -1,0 +1,13 @@
+{
+  "created": 1780000000,
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgo=",
+      "mime_type": "image/png"
+    },
+    {
+      "url": "https://cdn.example.invalid/xai-result.webp",
+      "mime_type": "image/webp"
+    }
+  ]
+}

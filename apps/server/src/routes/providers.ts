@@ -1,5 +1,7 @@
 import {
   CursorPageQuerySchema,
+  ManualModelCreateSchema,
+  ManualModelPatchSchema,
   ProviderCreateSchema,
   ProviderPatchSchema,
 } from '@imagine/shared';
@@ -7,6 +9,10 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 
 import type { OutboxPublisher } from '../events/outbox-publisher.js';
+import {
+  ManualModelServiceError,
+  ModelCatalogServiceError,
+} from '../providers/provider-service.js';
 import {
   ProviderRegistryError,
 } from '../providers/provider-registry.js';
@@ -36,7 +42,24 @@ function providerError(reply: FastifyReply, error: unknown) {
     const status = error.code === 'provider_not_found' ? 404 : 409;
     return reply.code(status).send({ error: error.code, message: error.message });
   }
-  throw error;
+  if (error instanceof ManualModelServiceError) {
+    const status = error.code === 'model_not_manual'
+      ? 409
+      : error.code === 'invalid_model'
+        ? 400
+        : 404;
+    return reply.code(status).send({
+      error: error.code,
+      message: error.message,
+    });
+  }
+  if (error instanceof ModelCatalogServiceError) {
+    return reply.code(502).send({ error: error.code, message: error.message });
+  }
+  return reply.code(502).send({
+    error: 'provider_unavailable',
+    message: 'Provider request could not be completed.',
+  });
 }
 
 function isSqliteConstraint(error: unknown): boolean {
@@ -152,4 +175,55 @@ export async function registerProviderRoutes(
       }
     },
   );
+
+  app.post('/internal/models', async (request, reply) => {
+    const input = ManualModelCreateSchema.safeParse(request.body);
+    if (!input.success) return invalidRequest(reply, input.error.issues);
+    try {
+      const model = await publishCommitted(options, () => options.providers.saveManualModel({
+        providerId: input.data.providerId,
+        modelId: input.data.modelId,
+        displayName: input.data.displayName,
+        capabilities: input.data.capabilities,
+        enabled: input.data.enabled,
+      }));
+      return reply.code(201).send({ model: toModelDto(model) });
+    } catch (error) {
+      if (isSqliteConstraint(error)) {
+        return reply.code(409).send({ error: 'model_id_conflict' });
+      }
+      return providerError(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>('/internal/models/:id', async (request, reply) => {
+    const input = ManualModelPatchSchema.safeParse(request.body);
+    if (!input.success) return invalidRequest(reply, input.error.issues);
+    try {
+      const model = await publishCommitted(options, () => options.providers.updateManualModel(
+        request.params.id,
+        {
+          ...(input.data.modelId === undefined ? {} : { modelId: input.data.modelId }),
+          ...(input.data.displayName === undefined ? {} : { displayName: input.data.displayName }),
+          ...(input.data.capabilities === undefined ? {} : { capabilities: input.data.capabilities }),
+          ...(input.data.enabled === undefined ? {} : { enabled: input.data.enabled }),
+        },
+      ));
+      return { model: toModelDto(model) };
+    } catch (error) {
+      if (isSqliteConstraint(error)) {
+        return reply.code(409).send({ error: 'model_id_conflict' });
+      }
+      return providerError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/internal/models/:id', async (request, reply) => {
+    try {
+      await publishCommitted(options, () => options.providers.deleteManualModel(request.params.id));
+      return reply.code(204).send();
+    } catch (error) {
+      return providerError(reply, error);
+    }
+  });
 }

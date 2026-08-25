@@ -1,0 +1,4 @@
+{
+  "state": "not_applicable",
+  "reason": "OpenAI Images reports synchronous request errors instead of poll failures."
+}

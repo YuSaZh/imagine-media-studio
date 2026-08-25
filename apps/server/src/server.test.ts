@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -7,6 +8,8 @@ import { createMockGenerationRequest } from '@imagine/testkit';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AppConfig } from './config.js';
+import { MOCK_PROVIDER_ID } from './providers/provider-registry.js';
+import type { ProviderHttpExecutor } from './providers/provider-http-client.js';
 import { createServer, type ImagineServer } from './server.js';
 
 const temporaryDirectories: string[] = [];
@@ -16,6 +19,7 @@ const VALID_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
 );
+const VALID_PNG_SHA256 = createHash('sha256').update(VALID_PNG).digest('hex');
 
 function multipartUpload(
   fields: Readonly<Record<string, string>>,
@@ -61,6 +65,7 @@ async function createTestServer(
   mockProviderEnabled = true,
   withWebDist = false,
   appPassword: string | null = null,
+  providerHttpExecutor?: ProviderHttpExecutor,
 ): Promise<ImagineServer> {
   const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-server-test-'));
   temporaryDirectories.push(dataDir);
@@ -71,6 +76,7 @@ async function createTestServer(
   }
   const config: AppConfig = {
     allowHttpMediaDownloads: false,
+    allowInsecureProviderHttp: false,
     allowPrivateNetworkAccess: false,
     appPort: 3030,
     appPassword,
@@ -81,6 +87,8 @@ async function createTestServer(
     maxRemoteImageBytes: 64 * 1024 * 1024,
     maxRemoteVideoBytes: 1024 * 1024 * 1024,
     maxVideoUploadBytes: 512 * 1024 * 1024,
+    providerInputMaxBytesPerFile: 64 * 1024 * 1024,
+    providerInputMaxTotalBytes: 256 * 1024 * 1024,
     mediaProcessTimeoutMs: 30_000,
     mockProviderEnabled,
     nodeEnvironment: 'test',
@@ -91,6 +99,7 @@ async function createTestServer(
     logger: false,
     migrationsDirectory,
     startRunner,
+    ...(providerHttpExecutor === undefined ? {} : { providerHttpExecutor }),
   });
   servers.push(server);
   return server;
@@ -100,6 +109,7 @@ async function reopenTestServer(dataDir: string): Promise<ImagineServer> {
   const server = await createServer({
     config: {
       allowHttpMediaDownloads: false,
+      allowInsecureProviderHttp: false,
       allowPrivateNetworkAccess: false,
       appPort: 3030,
       appPassword: null,
@@ -110,6 +120,8 @@ async function reopenTestServer(dataDir: string): Promise<ImagineServer> {
       maxRemoteImageBytes: 64 * 1024 * 1024,
       maxRemoteVideoBytes: 1024 * 1024 * 1024,
       maxVideoUploadBytes: 512 * 1024 * 1024,
+      providerInputMaxBytesPerFile: 64 * 1024 * 1024,
+      providerInputMaxTotalBytes: 256 * 1024 * 1024,
       mediaProcessTimeoutMs: 30_000,
       mockProviderEnabled: true,
       nodeEnvironment: 'test',
@@ -162,7 +174,7 @@ describe('Imagine server PR 0 skeleton', () => {
       width: 1,
       height: 1,
       fileSize: VALID_PNG.byteLength,
-      sha256: '2'.repeat(64),
+      sha256: VALID_PNG_SHA256,
     });
     const mask = server.assets.create({
       type: 'image',
@@ -174,8 +186,13 @@ describe('Imagine server PR 0 skeleton', () => {
       width: 1,
       height: 1,
       fileSize: VALID_PNG.byteLength,
-      sha256: '3'.repeat(64),
+      sha256: VALID_PNG_SHA256,
     });
+    const dataDir = temporaryDirectories.at(-1)!;
+    await mkdir(resolve(dataDir, 'media/uploads'), { recursive: true });
+    await mkdir(resolve(dataDir, 'media/masks'), { recursive: true });
+    await writeFile(resolve(dataDir, source.filePath), VALID_PNG);
+    await writeFile(resolve(dataDir, mask.filePath), VALID_PNG);
     const rejected = await server.app.inject({
       method: 'POST',
       url: '/internal/jobs',
@@ -240,6 +257,21 @@ describe('Imagine server PR 0 skeleton', () => {
     await second.runner.waitForIdle();
     expect(second.jobs.get(queued.id)?.status).toBe('completed');
     expect(second.assets.countForJob(queued.id)).toBe(1);
+  });
+
+  it('reopens cleanly when the existing Mock Provider was intentionally disabled', async () => {
+    const first = await createTestServer(false);
+    const dataDir = temporaryDirectories.at(-1)!;
+    expect(first.providers.update(MOCK_PROVIDER_ID, { enabled: false })).toMatchObject({ enabled: false });
+    await first.app.close();
+    servers.splice(servers.indexOf(first), 1);
+
+    const second = await reopenTestServer(dataDir);
+
+    expect(second.providers.get(MOCK_PROVIDER_ID)).toMatchObject({
+      id: MOCK_PROVIDER_ID,
+      enabled: false,
+    });
   });
 
   it('rejects unsupported Mock options before creating a job', async () => {
@@ -369,12 +401,46 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(settings.json()).toEqual({
       settings: { 'composer.clear_prompt': true, 'gallery.initial_filter': 'image' },
     });
+    server.settings.upsertMany({
+      'legacy.preferences': {
+        keep: true,
+        nested: { token: 'legacy-secret', value: 'safe' },
+      },
+      'legacy.api_key': 'legacy-top-level-api-key',
+      'legacy.authorization': 'Bearer legacy-top-level-token',
+    });
+    const settingsRead = await server.app.inject({ method: 'GET', url: '/internal/settings' });
+    expect(settingsRead.statusCode).toBe(200);
+    expect(settingsRead.headers['cache-control']).toBe('no-store');
+    expect(settingsRead.headers['content-security-policy']).toContain("default-src 'self'");
+    expect(settingsRead.json()).toMatchObject({
+      settings: {
+        'legacy.preferences': { keep: true, nested: { value: 'safe' } },
+      },
+    });
+    expect(JSON.stringify(settingsRead.json())).not.toContain('legacy-top-level');
+    const settingsPatchAfterLegacy = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      payload: { values: { 'ui.preferences.safe': true } },
+    });
+    expect(JSON.stringify(settingsPatchAfterLegacy.json())).not.toContain('legacy-top-level');
     const rejectedSecret = await server.app.inject({
       method: 'PATCH',
       url: '/internal/settings',
       payload: { values: { 'provider.api-key': 'must-not-be-stored-here' } },
     });
     expect(rejectedSecret.statusCode).toBe(400);
+    const rejectedNestedSecret = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      payload: {
+        values: {
+          'ui.preferences': { profiles: [{ headers: { Authorization: 'must-not-be-stored' } }] },
+        },
+      },
+    });
+    expect(rejectedNestedSecret.statusCode).toBe(400);
 
     const providers = await server.app.inject({ method: 'GET', url: '/internal/providers' });
     const mock = providers.json<{ items: Array<Record<string, unknown>> }>().items[0];
@@ -390,6 +456,130 @@ describe('Imagine server PR 0 skeleton', () => {
       payload: {},
     });
     expect(connection.json()).toMatchObject({ ok: true });
+
+    const configured = await server.app.inject({
+      method: 'POST',
+      url: '/internal/providers',
+      payload: {
+        name: 'Header Provider',
+        type: 'mock',
+        apiKey: 'route-secret-key',
+        headers: { 'X-Trace': 'route-secret-header' },
+        config: { region: 'fixture' },
+      },
+    });
+    expect(configured.statusCode).toBe(201);
+    expect(configured.json()).toMatchObject({
+      provider: { hasApiKey: true, hasCustomHeaders: true },
+    });
+    expect(configured.body).not.toContain('route-secret');
+    const configuredId = configured.json<{ provider: { id: string } }>().provider.id;
+    const clearedHeaders = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/providers/${configuredId}`,
+      payload: { headers: {} },
+    });
+    expect(clearedHeaders.statusCode).toBe(200);
+    expect(clearedHeaders.json()).toMatchObject({
+      provider: { hasCustomHeaders: false, config: { region: 'fixture' } },
+    });
+    const disabled = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/providers/${configuredId}`,
+      payload: { enabled: false },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json()).toMatchObject({
+      provider: { name: 'Header Provider', config: { region: 'fixture' }, enabled: false },
+    });
+    const unsupportedCreate = await server.app.inject({
+      method: 'POST',
+      url: '/internal/providers',
+      payload: { name: 'Custom HTTP', type: 'custom-http', config: {} },
+    });
+    expect(unsupportedCreate.statusCode).toBe(400);
+    const unsupportedPatch = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/providers/${configuredId}`,
+      payload: { type: 'custom-http' },
+    });
+    expect(unsupportedPatch.statusCode).toBe(400);
+    const unsafeBaseUrl = await server.app.inject({
+      method: 'POST',
+      url: '/internal/providers',
+      payload: {
+        name: 'Unsafe Base URL',
+        type: 'mock',
+        baseUrl: 'https://user:pass@example.test/v1?token=secret',
+        config: {},
+      },
+    });
+    expect(unsafeBaseUrl.statusCode).toBe(400);
+  });
+
+  it('supports strict manual model CRUD while preserving overrides on refresh', async () => {
+    const server = await createTestServer();
+    const capabilities = {
+      operations: ['image.generate'],
+      aspectRatios: ['1:1'],
+      inputImageConstraints: { mimeTypes: ['image/png'] },
+    };
+    const created = await server.app.inject({
+      method: 'POST',
+      url: '/internal/models',
+      payload: {
+        providerId: 'mock',
+        modelId: 'manual-image-v1',
+        displayName: 'Manual image',
+        capabilities,
+        enabled: true,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const manual = created.json<{ model: { id: string; capabilitySource: string } }>().model;
+    expect(manual.capabilitySource).toBe('manual');
+
+    const invalid = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/models/${manual.id}`,
+      payload: { capabilities: { operations: ['image.generate'], unknown: true } },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json<{ error: string }>().error).toBe('invalid_request');
+
+    const updated = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/models/${manual.id}`,
+      payload: { displayName: 'Manual image updated', enabled: false },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json<{ model: { displayName: string; enabled: boolean } }>().model)
+      .toMatchObject({ displayName: 'Manual image updated', enabled: false });
+
+    const providerModels = await server.app.inject({ method: 'GET', url: '/internal/models' });
+    const providerModel = providerModels.json<{ items: Array<{ id: string; capabilitySource: string }> }>()
+      .items.find((model) => model.capabilitySource !== 'manual');
+    if (!providerModel) throw new Error('Expected a provider model.');
+    const providerEdit = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/models/${providerModel.id}`,
+      payload: { displayName: 'Cannot edit provider model' },
+    });
+    expect(providerEdit.statusCode).toBe(409);
+    expect(providerEdit.json<{ error: string }>().error).toBe('model_not_manual');
+
+    const refreshed = await server.app.inject({
+      method: 'POST',
+      url: '/internal/providers/mock/models/refresh',
+      payload: {},
+    });
+    expect(refreshed.statusCode).toBe(200);
+    const refreshedManual = refreshed.json<{ items: Array<{ id: string; enabled: boolean; capabilitySource: string }> }>()
+      .items.find((model) => model.id === manual.id);
+    expect(refreshedManual).toMatchObject({ id: manual.id, enabled: false, capabilitySource: 'manual' });
+
+    const deleted = await server.app.inject({ method: 'DELETE', url: `/internal/models/${manual.id}` });
+    expect(deleted.statusCode).toBe(204);
   });
 
   it('rejects cross-origin writes while allowing same-origin and non-browser clients', async () => {
@@ -443,6 +633,144 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(providerConflict.statusCode).toBe(409);
     expect(missingRetry.statusCode).toBe(404);
     expect(missingDelete.statusCode).toBe(404);
+  });
+
+  it('serves successful retry and cancellation mutations without losing the late-result guard', async () => {
+    const server = await createTestServer();
+    const created = await server.app.inject({
+      method: 'POST',
+      url: '/internal/jobs',
+      payload: createMockGenerationRequest({ prompt: 'Route retry fixture' }),
+    });
+    expect(created.statusCode).toBe(202);
+    const sourceJobId = created.json<{ job: { id: string } }>().job.id;
+    await server.runner.waitForIdle();
+    expect(server.jobs.get(sourceJobId)?.status).toBe('completed');
+
+    const retried = await server.app.inject({
+      method: 'POST',
+      url: `/internal/jobs/${sourceJobId}/retry`,
+      payload: {},
+    });
+    expect(retried.statusCode).toBe(202);
+    const retryJobId = retried.json<{ job: { id: string }; sourceJobId: string }>();
+    expect(retryJobId.sourceJobId).toBe(sourceJobId);
+    await server.runner.waitForIdle();
+    expect(server.jobs.get(retryJobId.job.id)?.status).toBe('completed');
+
+    const cancellable = server.jobs.create(createMockGenerationRequest({ prompt: 'Route cancel fixture' }));
+    const cancelled = await server.app.inject({
+      method: 'POST',
+      url: `/internal/jobs/${cancellable.id}/cancel`,
+      payload: {},
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json<{ job: { status: string } }>().job.status).toBe('cancelled');
+    await server.runner.waitForIdle();
+    expect(server.jobs.get(cancellable.id)?.status).toBe('cancelled');
+  });
+
+  it('runs an encrypted xAI profile through the safe executor, input loader, runner, and local media store', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>>; body?: string }> = [];
+    const providerHttpExecutor: ProviderHttpExecutor = async (_target, request) => {
+      requests.push(request);
+      return {
+        statusCode: 200,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          data: [{
+            id: 'integration-result',
+            b64_json: VALID_PNG.toString('base64'),
+            revised_prompt: 'safe fixture result',
+          }],
+        }),
+      };
+    };
+    const server = await createTestServer(true, true, false, null, providerHttpExecutor);
+    const provider = server.providers.create({
+      name: 'xAI integration fixture',
+      type: 'xai-imagine-image-v1',
+      baseUrl: 'https://8.8.8.8/v1',
+      apiKey: 'integration-secret',
+      headers: { 'X-Trace-Id': 'integration-trace' },
+      config: { region: 'fixture' },
+    });
+    await server.providers.refreshModels(provider.id);
+
+    const dataDir = temporaryDirectories.at(-1)!;
+    await mkdir(resolve(dataDir, 'media/uploads'), { recursive: true });
+    const source = server.assets.create({
+      type: 'image',
+      role: 'upload',
+      filePath: 'media/uploads/xai-source.png',
+      originalFilename: 'xai-source.png',
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      fileSize: VALID_PNG.byteLength,
+      sha256: VALID_PNG_SHA256,
+    });
+    const reference = server.assets.create({
+      type: 'image',
+      role: 'reference',
+      filePath: 'media/uploads/xai-reference.png',
+      originalFilename: 'xai-reference.png',
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      fileSize: VALID_PNG.byteLength,
+      sha256: VALID_PNG_SHA256,
+    });
+    await writeFile(resolve(dataDir, source.filePath), VALID_PNG);
+    await writeFile(resolve(dataDir, reference.filePath), VALID_PNG);
+
+    const accepted = await server.app.inject({
+      method: 'POST',
+      url: '/internal/jobs',
+      payload: {
+        operation: 'image.edit',
+        providerId: provider.id,
+        modelId: 'grok-imagine-image',
+        prompt: 'Combine the fixture subjects.',
+        inputs: [
+          { assetId: source.id, role: 'source' },
+          { assetId: reference.id, role: 'reference' },
+        ],
+      },
+    });
+    expect(accepted.statusCode).toBe(202);
+    const jobId = accepted.json<{ job: { id: string } }>().job.id;
+    await server.runner.waitForIdle();
+
+    const job = server.jobs.get(jobId);
+    const output = server.assets.page({ jobId }).items[0];
+    expect(job?.status).toBe('completed');
+    expect(job?.resultManifest).toEqual([{ slot: 0, assetId: output?.id }]);
+    expect(output?.filePath).toMatch(/^media\/originals\//);
+    expect(output ? await readFile(resolve(dataDir, output.filePath)) : null).toEqual(VALID_PNG);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://8.8.8.8/v1/models',
+      headers: {
+        Authorization: 'Bearer integration-secret',
+        'X-Trace-Id': 'integration-trace',
+      },
+    });
+    const submitRequest = requests[1];
+    expect(submitRequest).toMatchObject({
+      method: 'POST',
+      url: 'https://8.8.8.8/v1/images/edits',
+      headers: {
+        Authorization: 'Bearer integration-secret',
+        'X-Trace-Id': 'integration-trace',
+      },
+    });
+    expect(submitRequest?.body).toContain('images');
+    expect(submitRequest?.body).not.toContain(source.id);
+    expect(submitRequest?.body).not.toContain(reference.id);
+    const providerResponse = await server.app.inject({ method: 'GET', url: '/internal/providers' });
+    expect(providerResponse.body).not.toContain('integration-secret');
   });
 
   it('enforces an optional application password with a signed session cookie', async () => {

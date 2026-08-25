@@ -1,0 +1,24 @@
+{
+  "model": "gemini-3.1-flash-image",
+  "input": [
+    {
+      "type": "text",
+      "text": "Create a polished product scene combining the two reference images."
+    },
+    {
+      "type": "image",
+      "mime_type": "image/png",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    },
+    {
+      "type": "image",
+      "mime_type": "image/jpeg",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    }
+  ],
+  "response_format": {
+    "type": "image",
+    "aspect_ratio": "16:9",
+    "image_size": "2K"
+  }
+}

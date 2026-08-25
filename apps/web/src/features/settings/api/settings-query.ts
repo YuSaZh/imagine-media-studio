@@ -4,7 +4,14 @@ import {
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query';
-import type { JsonObject, JsonValue, ModelDto, ProviderDto } from '@imagine/shared';
+import type {
+  JsonObject,
+  JsonValue,
+  ManualModelCreate,
+  ManualModelPatch,
+  ModelDto,
+  ProviderDto,
+} from '@imagine/shared';
 
 import { internalClient } from '../../../api/internal-client.js';
 import { internalQueryKeys } from '../../../api/query-keys.js';
@@ -147,6 +154,15 @@ export async function testProviderConnection(fixture: boolean, providerId: strin
     : internalClient.testProvider(providerId);
 }
 
+export async function refreshProviderModels(fixture: boolean, providerId: string) {
+  if (fixture) {
+    return {
+      items: FIXTURE_MODELS.filter((model) => model.providerId === providerId),
+    };
+  }
+  return internalClient.refreshProviderModels(providerId);
+}
+
 export function useSettingsQuery(fixture: boolean) {
   return useQuery({
     queryKey: settingKey(fixture),
@@ -210,10 +226,14 @@ export interface ProviderWriteInput {
   baseUrl: string | null;
   config: JsonObject;
   enabled: boolean;
+  headers?: Readonly<Record<string, string>>;
   isDefault: boolean;
   name: string;
   type: string;
 }
+
+export type ManualModelCreateInput = Omit<ManualModelCreate, 'enabled'> & { enabled?: boolean };
+export type ManualModelPatchInput = ManualModelPatch;
 
 export function useCreateProvider(fixture: boolean) {
   const queryClient = useQueryClient();
@@ -253,5 +273,46 @@ export function useSetProviderState(fixture: boolean) {
 export function useTestProvider(fixture: boolean) {
   return useMutation({
     mutationFn: async (providerId: string) => testProviderConnection(fixture, providerId),
+  });
+}
+
+export function useRefreshProviderModels(fixture: boolean) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (providerId: string) => refreshProviderModels(fixture, providerId),
+    onSuccess: async () => refreshProviderQueries(queryClient, fixture),
+  });
+}
+
+export function useCreateManualModel(fixture: boolean) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: ManualModelCreateInput) => {
+      if (fixture) throw new Error('Visual fixtures cannot create Models.');
+      return internalClient.createModel(input);
+    },
+    onSuccess: async () => refreshProviderQueries(queryClient, fixture),
+  });
+}
+
+export function usePatchManualModel(fixture: boolean) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: ManualModelPatchInput }) => {
+      if (fixture) throw new Error('Visual fixtures cannot update Models.');
+      return internalClient.patchModel(id, input);
+    },
+    onSuccess: async () => refreshProviderQueries(queryClient, fixture),
+  });
+}
+
+export function useDeleteManualModel(fixture: boolean) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (fixture) throw new Error('Visual fixtures cannot delete Models.');
+      return internalClient.deleteModel(id);
+    },
+    onSuccess: async () => refreshProviderQueries(queryClient, fixture),
   });
 }

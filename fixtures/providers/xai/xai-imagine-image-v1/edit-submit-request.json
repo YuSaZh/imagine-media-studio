@@ -1,0 +1,19 @@
+{
+  "model": "grok-imagine-image",
+  "prompt": "Place the subjects together in a sunny park",
+  "aspect_ratio": "3:2",
+  "images": [
+    {
+      "type": "image_url",
+      "url": "data:image/png;base64,AQID"
+    },
+    {
+      "type": "image_url",
+      "url": "data:image/jpeg;base64,BAUG"
+    },
+    {
+      "type": "image_url",
+      "url": "data:image/png;base64,BwgJ"
+    }
+  ]
+}

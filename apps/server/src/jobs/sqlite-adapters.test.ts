@@ -40,6 +40,7 @@ function jobRecord(overrides: Partial<JobRecord> = {}): JobRecord {
     errorMessage: overrides.errorMessage ?? null,
     retryCount: overrides.retryCount ?? 0,
     submitAttempt: overrides.submitAttempt ?? 0,
+    stageRetryCounts: overrides.stageRetryCounts ?? { poll: 0, download: 0, process: 0 },
     pollAfterAt: overrides.pollAfterAt ?? null,
     createdAt: overrides.createdAt ?? now,
     updatedAt: overrides.updatedAt ?? now,
@@ -119,7 +120,29 @@ class FakeSqliteRepository implements SqliteJobRepositoryPort {
   public requestCancel(jobId: string, expectedRevision: number): JobRecord | null {
     this.calls.push(`requestCancel:${expectedRevision}`);
     if (jobId !== this.current.id || expectedRevision !== this.current.revision) return null;
-    return this.update(this.current.status, 'cancel_requested');
+    this.current = {
+      ...this.update(this.current.status, 'cancel_requested'),
+      cancelRequestedAt: new Date(),
+    };
+    return this.current;
+  }
+
+  public recoverCancellation(jobId: string, expectedRevision: number): JobRecord | null {
+    this.calls.push(`recoverCancellation:${expectedRevision}`);
+    if (
+      jobId !== this.current.id ||
+      expectedRevision !== this.current.revision ||
+      this.current.cancelRequestedAt === null ||
+      ['completed', 'failed', 'cancelled', 'rejected', 'expired'].includes(this.current.status)
+    ) {
+      return null;
+    }
+    return this.update('cancelled', 'cancelled', {
+      errorCode: null,
+      errorMessage: null,
+      pollAfterAt: null,
+      stageRetryCounts: { poll: 0, download: 0, process: 0 },
+    });
   }
 
   public listOutputs(_jobId: string): readonly JobOutputRecord[] {
@@ -176,6 +199,7 @@ class FakeSqliteRepository implements SqliteJobRepositoryPort {
       errorMessage:
         'errorMessage' in fields ? (fields.errorMessage ?? null) : this.current.errorMessage,
       resultManifest: fields.resultManifest ?? this.current.resultManifest,
+      stageRetryCounts: fields.stageRetryCounts ?? this.current.stageRetryCounts,
     };
     this.event = changeEvent(this.current);
     return this.current;
@@ -284,6 +308,26 @@ describe('SqliteRunnerJobPort', () => {
 
     expect(repository.calls).toEqual(['requestCancel:3', 'cas:cancelled:4']);
     expect(committed?.job).toMatchObject({ status: 'cancelled', revision: 5 });
+  });
+
+  it('atomically settles a persisted cancellation during restart recovery', async () => {
+    const repository = new FakeSqliteRepository(jobRecord({
+      status: 'remote_running',
+      revision: 3,
+      remoteJobId: 'remote-1',
+      cancelRequestedAt: new Date('2026-08-25T00:00:00.000Z'),
+    }));
+    const port = new SqliteRunnerJobPort(repository, new FakeEventRepository(repository));
+
+    const committed = await port.recoverCancellation('job-1', 3);
+
+    expect(repository.calls).toEqual(['recoverCancellation:3']);
+    expect(committed?.job).toMatchObject({
+      status: 'cancelled',
+      stage: 'cancelled',
+      remoteJobId: 'remote-1',
+      cancelRequestedAt: expect.any(Date),
+    });
   });
 });
 

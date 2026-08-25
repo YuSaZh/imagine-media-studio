@@ -22,7 +22,12 @@ import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adap
 import { AssetMediaService } from './media/asset-media-service.js';
 import { SharpImageProcessor } from './media/image-processor.js';
 import { VideoProcessor } from './media/video-processor.js';
+import {
+  createProviderHttpClient,
+  type ProviderHttpExecutor,
+} from './providers/provider-http-client.js';
 import { ProviderRegistry } from './providers/provider-registry.js';
+import { ProviderInputLoader } from './providers/provider-input-loader.js';
 import { ProviderService } from './providers/provider-service.js';
 import { registerInternalRoutes } from './routes/internal.js';
 import { registerAuthRoutes } from './routes/auth.js';
@@ -41,6 +46,7 @@ export interface CreateServerOptions {
   logger?: boolean;
   migrationsDirectory?: string;
   startRunner?: boolean;
+  providerHttpExecutor?: ProviderHttpExecutor;
 }
 
 export interface ImagineServer {
@@ -49,6 +55,7 @@ export interface ImagineServer {
   assets: AssetRepository;
   collections: CollectionRepository;
   providers: ProviderService;
+  settings: SettingsRepository;
   runner: JobRunner;
 }
 
@@ -63,6 +70,12 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const providerRepository = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
   const inputResolver = new GenerationInputResolver(assets, models);
+  const inputLoader = new ProviderInputLoader({
+    assets,
+    dataRoot: storage.root,
+    maxBytesPerFile: options.config.providerInputMaxBytesPerFile,
+    maxTotalBytes: options.config.providerInputMaxTotalBytes,
+  });
   const collections = new CollectionRepository(database.orm);
   const changeEvents = new ChangeEventRepository(database.orm);
   const broker = new EventBroker();
@@ -72,7 +85,21 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     appSecret: options.config.appSecret,
     password: options.config.appPassword,
   });
-  const providerRegistry = new ProviderRegistry(providerRepository, vault);
+  const networkPolicy = new NetworkPolicy({
+    allowInsecureHttp: options.config.allowHttpMediaDownloads,
+    allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
+  });
+  const providerHttp = createProviderHttpClient({
+    // Provider credentials must never be sent over the media-download HTTP
+    // exception. Provider HTTP is independently opt-in and still uses the
+    // private-network switch as a separate guard.
+    policy: new NetworkPolicy({
+      allowInsecureHttp: options.config.allowInsecureProviderHttp,
+      allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
+    }),
+    ...(options.providerHttpExecutor === undefined ? {} : { executor: options.providerHttpExecutor }),
+  });
+  const providerRegistry = new ProviderRegistry(providerRepository, vault, { http: providerHttp });
   const providerService = new ProviderService(
     providerRepository,
     models,
@@ -84,10 +111,6 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const videoProcessor = new VideoProcessor({
     posterTimeoutMs: options.config.mediaProcessTimeoutMs,
     probeTimeoutMs: Math.min(options.config.mediaProcessTimeoutMs, 15_000),
-  });
-  const networkPolicy = new NetworkPolicy({
-    allowInsecureHttp: options.config.allowHttpMediaDownloads,
-    allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
   });
   const remoteDownloader = new RemoteMediaDownloader(
     new SafeHttpTransport({ policy: networkPolicy }),
@@ -109,15 +132,16 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     repository: mediaRepository,
     videoProcessor,
   });
-  const runner = new JobRunner(
-    createSqliteRunnerOptions({
+  const runner = new JobRunner({
+    ...createSqliteRunnerOptions({
       jobs,
       changeEvents,
       broker: outbox,
       providers: providerRegistry,
       media: providerResultMedia,
     }),
-  );
+    inputLoader,
+  });
   const app = Fastify({
     logger: options.logger ?? { level: options.config.logLevel },
   });
@@ -177,6 +201,22 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       reply.header('x-content-type-options', 'nosniff');
       reply.header('referrer-policy', 'same-origin');
       reply.header('x-frame-options', 'DENY');
+      reply.header(
+        'content-security-policy',
+        [
+          "default-src 'self'",
+          "base-uri 'self'",
+          "object-src 'none'",
+          "frame-ancestors 'none'",
+          "form-action 'self'",
+          "script-src 'self'",
+          "style-src 'self' 'unsafe-inline'",
+          "img-src 'self' data: blob:",
+          "media-src 'self' blob:",
+          "font-src 'self' data:",
+          "connect-src 'self'",
+        ].join('; '),
+      );
       const pathname = new URL(request.url, 'http://localhost').pathname;
       if (/^\/internal(?:\/|$)/.test(pathname) && !pathname.includes('/content')) {
         reply.header('cache-control', 'no-store');
@@ -185,8 +225,8 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     });
 
     if (options.config.mockProviderEnabled) {
-      providerService.ensureMockProvider();
-      await providerService.refreshModels('mock');
+      const mockProvider = providerService.ensureMockProvider();
+      if (mockProvider.enabled) await providerService.refreshModels('mock');
     }
     outbox.flush();
     await registerAuthRoutes(app, passwordAuth);
@@ -202,6 +242,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       collections,
       jobs,
       inputResolver,
+      inputLoader,
       media: uploadMedia,
       models,
       outbox,
@@ -235,7 +276,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       });
     }
 
-    if ((options.startRunner ?? true) && options.config.mockProviderEnabled) {
+    if (options.startRunner ?? true) {
       await runner.start();
     }
   } catch (error) {
@@ -243,5 +284,5 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     throw error;
   }
 
-  return { app, jobs, assets, collections, providers: providerService, runner };
+  return { app, jobs, assets, collections, providers: providerService, settings, runner };
 }

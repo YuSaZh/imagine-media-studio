@@ -202,6 +202,22 @@ describe('PR 2 database repositories', () => {
       new Set([job.id, retry.id]),
     );
 
+    const budgetClaim = jobs.claimQueued(retry.id, retry.revision);
+    const budgeted = jobs.compareAndSetStatus(
+      retry.id,
+      budgetClaim?.revision ?? -1,
+      ['submitting'],
+      'remote_pending',
+      'remote_pending',
+      { stageRetryCounts: { poll: 1, download: 0, process: 0 } },
+    );
+    expect(budgeted?.stageRetryCounts).toEqual({ poll: 1, download: 0, process: 0 });
+    expect(new JobRepository(database.orm).get(retry.id)?.stageRetryCounts).toEqual({
+      poll: 1,
+      download: 0,
+      process: 0,
+    });
+
     const outputAsset = assets.create({
       ...assetInput('media/originals/output.png'),
       jobId: job.id,

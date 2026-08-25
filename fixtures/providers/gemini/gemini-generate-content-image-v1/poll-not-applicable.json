@@ -1,0 +1,4 @@
+{
+  "applicable": false,
+  "reason": "Gemini generateContent image generation is synchronous."
+}

@@ -24,6 +24,7 @@ import type {
   RunnerJob,
   RunnerJobPort,
 } from './ports.js';
+import type { StageRetryCounts } from './retry-budget.js';
 
 interface DurableRunnerManifest {
   version: 1;
@@ -47,6 +48,10 @@ export interface SqliteJobRepositoryPort {
     fields?: UpdateJobStatusFields,
   ): JobRecord | null | Promise<JobRecord | null>;
   requestCancel(
+    jobId: string,
+    expectedRevision: number,
+  ): JobRecord | null | Promise<JobRecord | null>;
+  recoverCancellation(
     jobId: string,
     expectedRevision: number,
   ): JobRecord | null | Promise<JobRecord | null>;
@@ -175,9 +180,11 @@ export function toRunnerJob(record: JobRecord): RunnerJob {
     attempt: record.submitAttempt,
     remoteJobId: record.remoteJobId,
     pollAfterAt: record.pollAfterAt,
+    cancelRequestedAt: record.cancelRequestedAt,
     resultAssets: manifest.resultAssets ?? [],
     materializedAssets: manifest.materializedAssets ?? [],
     error: errorFor(record),
+    stageRetryCounts: record.stageRetryCounts,
   };
 }
 
@@ -202,6 +209,7 @@ function fieldsFor(input: JobTransitionInput): UpdateJobStatusFields {
     pollAfterAt?: Date | null;
     completedAt?: Date | null;
     resultManifest?: readonly unknown[];
+    stageRetryCounts?: StageRetryCounts;
   } = {};
   if ('progress' in input) fields.progress = input.progress ?? null;
   if ('remoteJobId' in input) fields.remoteJobId = input.remoteJobId ?? null;
@@ -212,6 +220,7 @@ function fieldsFor(input: JobTransitionInput): UpdateJobStatusFields {
   }
   const manifest = manifestFor(input);
   if (manifest !== undefined) fields.resultManifest = manifest;
+  if (input.stageRetryCounts !== undefined) fields.stageRetryCounts = input.stageRetryCounts;
   return fields;
 }
 
@@ -242,6 +251,14 @@ export class SqliteRunnerJobPort implements RunnerJobPort {
 
   public async listRecoverable(): Promise<readonly RunnerJob[]> {
     return (await this.jobs.listRecoverable()).map(toRunnerJob);
+  }
+
+  public async recoverCancellation(
+    jobId: string,
+    expectedRevision: number,
+  ): Promise<JobTransitionCommit | null> {
+    const record = await this.jobs.recoverCancellation(jobId, expectedRevision);
+    return record === null ? null : this.committed(record);
   }
 
   public async claimQueued(
@@ -284,7 +301,12 @@ export class SqliteRunnerJobPort implements RunnerJobPort {
       [requested.status],
       'cancelled',
       'cancelled',
-      { pollAfterAt: null, errorCode: null, errorMessage: null },
+      {
+        pollAfterAt: null,
+        errorCode: null,
+        errorMessage: null,
+        stageRetryCounts: { poll: 0, download: 0, process: 0 },
+      },
     );
     return cancelled === null ? null : this.committed(cancelled);
   }

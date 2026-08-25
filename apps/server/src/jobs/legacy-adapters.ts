@@ -30,6 +30,7 @@ interface LegacyJobRecord {
   submitAttempt?: number;
   remoteJobId?: string | null;
   pollAfterAt?: Date | null;
+  cancelRequestedAt?: Date | null;
 }
 
 export interface LegacyJobRepository {
@@ -103,6 +104,33 @@ class LegacyJobPort implements RunnerJobPort {
   public async listRecoverable(): Promise<readonly RunnerJob[]> {
     this.repository.requeueRecoverableMockJobs();
     return this.repository.listQueued().map((record) => this.toRunnerJob(record));
+  }
+
+  public async recoverCancellation(
+    jobId: string,
+    expectedRevision: number,
+  ): Promise<JobTransitionCommit | null> {
+    const current = this.repository.get(jobId);
+    if (
+      !current ||
+      current.cancelRequestedAt === null ||
+      current.cancelRequestedAt === undefined ||
+      !['queued', 'submitting', 'remote_pending', 'remote_running', 'downloading', 'processing'].includes(current.status) ||
+      this.revisionFor(jobId, current) !== expectedRevision
+    ) {
+      return null;
+    }
+    const updated = this.repository.compareAndSetStatus?.(
+      jobId,
+      expectedRevision,
+      [current.status],
+      'cancelled',
+      'cancelled',
+      { pollAfterAt: null, errorCode: null, errorMessage: null },
+    );
+    if (!updated) return null;
+    this.revisions.set(jobId, updated.revision ?? expectedRevision + 1);
+    return this.commit(this.toRunnerJob(updated), 'job.cancelled-after-restart');
   }
 
   public async claimQueued(
@@ -231,9 +259,11 @@ class LegacyJobPort implements RunnerJobPort {
       attempt: record.submitAttempt ?? this.attempts.get(record.id) ?? 0,
       remoteJobId: record.remoteJobId ?? this.remoteJobIds.get(record.id) ?? null,
       pollAfterAt: record.pollAfterAt ?? this.pollAfterDates.get(record.id) ?? null,
+      cancelRequestedAt: record.cancelRequestedAt ?? null,
       resultAssets: this.resultAssets.get(record.id) ?? [],
       materializedAssets: this.materializedAssets.get(record.id) ?? [],
       error,
+      stageRetryCounts: { poll: 0, download: 0, process: 0 },
     };
   }
 

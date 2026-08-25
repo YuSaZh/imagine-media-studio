@@ -7,6 +7,7 @@ import {
   loadSettingsData,
   patchSettingsData,
   readGeneralSettings,
+  refreshProviderModels,
   testProviderConnection,
 } from './settings-query.js';
 import {
@@ -49,6 +50,9 @@ describe('settings query fixture mode', () => {
       latencyMs: 12,
       message: 'Connection ready.',
       ok: true,
+    });
+    await expect(refreshProviderModels(true, 'provider-studio-mock')).resolves.toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ providerId: 'provider-studio-mock' })]),
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });

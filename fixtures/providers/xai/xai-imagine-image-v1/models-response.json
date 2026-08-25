@@ -1,0 +1,40 @@
+{
+  "data": [
+    {
+      "id": "grok-imagine-image-2.0",
+      "object": "model",
+      "display_name": "Grok Imagine Image 2.0",
+      "capabilities": { "image_generation": true }
+    },
+    {
+      "id": "grok-imagine-image",
+      "object": "model",
+      "display_name": "Grok Imagine Image",
+      "capabilities": { "image_generation": true }
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "object": "model",
+      "display_name": "Grok Imagine Image Quality",
+      "capabilities": { "image_generation": true }
+    },
+    {
+      "id": "grok-imagine-image-custom-preview",
+      "object": "model",
+      "display_name": "Grok Imagine Custom Preview",
+      "capabilities": { "image_generation": true }
+    },
+    {
+      "id": "grok-text-model",
+      "object": "model",
+      "display_name": "Grok Text",
+      "capabilities": { "image_generation": false }
+    },
+    {
+      "id": "grok-imagine-image-embedding",
+      "object": "model",
+      "display_name": "Grok Image Embedding",
+      "supported_methods": ["embedding"]
+    }
+  ]
+}

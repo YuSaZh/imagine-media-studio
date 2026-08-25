@@ -24,7 +24,7 @@ import { JobRepositoryError, type JobRepository } from '../database/jobs.js';
 import type { ModelRepository } from '../database/models.js';
 import type { SettingsRepository } from '../database/settings.js';
 import type { OutboxPublisher } from '../events/outbox-publisher.js';
-import type { ProviderRegistryPort } from '../jobs/ports.js';
+import type { ProviderInputLoaderPort, ProviderRegistryPort } from '../jobs/ports.js';
 import type { JobRunner } from '../jobs/job-runner.js';
 import {
   GenerationInputError,
@@ -34,6 +34,8 @@ import type { AssetMediaService } from '../media/asset-media-service.js';
 import { planMediaResponse } from '../media/range.js';
 import type { AssetVariant } from '../media/types.js';
 import { ProviderRegistryError } from '../providers/provider-registry.js';
+import { ProviderInputLoaderError } from '../providers/provider-input-loader.js';
+import { isSecretLikeKey, sanitizeLegacyJsonValue } from '../security/config-sanitizer.js';
 import { discardStagedFile, stageReadable, type StagedFile } from '../storage/atomic-file.js';
 import type { StoragePaths } from '../storage/paths.js';
 import { toAssetDto, toCollectionDto, toJobDto, toModelDto } from './dto.js';
@@ -64,6 +66,7 @@ export interface ResourceRoutesOptions {
   collections: CollectionRepository;
   jobs: JobRepository;
   inputResolver: GenerationInputResolver;
+  inputLoader: ProviderInputLoaderPort;
   media: AssetMediaService;
   models: ModelRepository;
   outbox: OutboxPublisher;
@@ -157,15 +160,23 @@ async function sendAsset(
 }
 
 function registerSettingsRoutes(app: FastifyInstance, options: ResourceRoutesOptions) {
+  const safeSettings = (entries: readonly { key: string; value: unknown }[]) => Object.fromEntries(
+    entries
+      .filter((entry) => !isSecretLikeKey(entry.key))
+      .map((entry) => [entry.key, sanitizeLegacyJsonValue(entry.value)]),
+  );
+
   app.get('/internal/settings', async () => ({
-    settings: Object.fromEntries(options.settings.list().map((entry) => [entry.key, entry.value])),
+    settings: safeSettings(options.settings.list()),
   }));
 
   app.patch('/internal/settings', async (request, reply) => {
     const input = parseOrReply(SettingsPatchSchema, request.body, reply);
     if (!input) return;
     const records = await publishCommitted(options, () => options.settings.upsertMany(input.values));
-    return { settings: Object.fromEntries(records.map((entry) => [entry.key, entry.value])) };
+    return {
+      settings: safeSettings(records),
+    };
   });
 }
 
@@ -237,9 +248,23 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       }
       throw error;
     }
+    let loadedInputs: Awaited<ReturnType<ProviderInputLoaderPort['load']>>;
+    try {
+      loadedInputs = await options.inputLoader.load(input);
+    } catch (error) {
+      if (error instanceof ProviderInputLoaderError) {
+        const status = error.code === 'provider_input_too_large' ? 413 : 400;
+        return errorResponse(reply, status, error.code, error.message);
+      }
+      return errorResponse(reply, 400, 'provider_input_invalid');
+    }
     try {
       await registration.adapter.validate(input, {
         providerId: input.providerId,
+        ...(registration.baseUrl ? { baseUrl: registration.baseUrl } : {}),
+        config: registration.config ?? {},
+        ...(registration.http ? { http: registration.http } : {}),
+        inputs: loadedInputs,
         secrets: registration.secrets,
       });
     } catch (error) {

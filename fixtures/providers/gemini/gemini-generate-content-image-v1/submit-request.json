@@ -1,0 +1,28 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "A hand-painted red bicycle leaning against a white garden wall."
+        },
+        {
+          "inlineData": {
+            "mimeType": "image/png",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+          }
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "responseModalities": [
+      "IMAGE"
+    ],
+    "imageConfig": {
+      "aspectRatio": "16:9",
+      "imageSize": "2K"
+    },
+    "seed": 7
+  }
+}

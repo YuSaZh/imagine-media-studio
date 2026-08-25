@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -14,13 +15,27 @@ import { MockProviderAdapter } from './mock-provider.js';
 import {
   MOCK_PROVIDER_ID,
   ProviderRegistry,
+  type ProviderHttpClient,
 } from './provider-registry.js';
 import type { ProviderRegistryError } from './provider-registry.js';
 import { ProviderService } from './provider-service.js';
+import type { ModelCatalogServiceError } from './provider-service.js';
 
 const temporaryDirectories: string[] = [];
 const databases: DatabaseClient[] = [];
 const migrationsDirectory = fileURLToPath(new URL('../../migrations', import.meta.url));
+const geminiModelsFixture = new URL(
+  '../../../../fixtures/providers/gemini/gemini-generate-content-image-v1/models-response.json',
+  import.meta.url,
+);
+const openAiImagesModelsFixture = new URL(
+  '../../../../fixtures/providers/openai/openai-images-v1/models-response.json',
+  import.meta.url,
+);
+const xaiModelsFixture = new URL(
+  '../../../../fixtures/providers/xai/xai-imagine-image-v1/models-response.json',
+  import.meta.url,
+);
 
 afterEach(async () => {
   for (const database of databases.splice(0)) database.sqlite.close();
@@ -29,7 +44,10 @@ afterEach(async () => {
   );
 });
 
-async function createHarness(adapter: MockProviderAdapter = new MockProviderAdapter()) {
+async function createHarness(
+  adapter: MockProviderAdapter = new MockProviderAdapter(),
+  options: { readonly http?: ProviderHttpClient } = {},
+) {
   const directory = await mkdtemp(resolve(tmpdir(), 'imagine-provider-service-test-'));
   temporaryDirectories.push(directory);
   const database = createDatabase(resolve(directory, 'app.db'), migrationsDirectory);
@@ -37,7 +55,9 @@ async function createHarness(adapter: MockProviderAdapter = new MockProviderAdap
   const providers = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
   const vault = new SecretVault('provider-service-test-secret-with-enough-entropy');
-  const registry = new ProviderRegistry(providers, vault, adapter);
+  const registry = options.http === undefined
+    ? new ProviderRegistry(providers, vault, adapter)
+    : new ProviderRegistry(providers, vault, { http: options.http });
   const times = [1_000, 1_037];
   const service = new ProviderService(providers, models, vault, registry, {
     now: () => times.shift() ?? 1_037,
@@ -72,11 +92,44 @@ describe('ProviderService', () => {
       name: 'Renamed',
       hasApiKey: true,
       hasCustomHeaders: true,
+      config: { profile: 'fixture' },
+    });
+    expect(service.update(created.id, { enabled: false })).toMatchObject({
+      name: 'Renamed',
+      enabled: false,
+      config: { profile: 'fixture' },
     });
     expect(service.update(created.id, { apiKey: null, headers: null })).toMatchObject({
       hasApiKey: false,
       hasCustomHeaders: false,
     });
+    expect(service.update(created.id, { headers: {} })).toMatchObject({
+      hasCustomHeaders: false,
+    });
+  });
+
+  it('rejects unsafe Provider writes and does not echo unsafe legacy configuration', async () => {
+    const { providers, service } = await createHarness();
+    expect(() => service.create({
+      name: 'Unsafe config',
+      type: 'mock',
+      config: { nested: { token: 'secret' } },
+    })).toThrow();
+    expect(() => service.create({
+      name: 'Unsafe URL',
+      type: 'mock',
+      baseUrl: 'https://user:pass@example.test/v1?token=secret',
+    })).toThrow();
+
+    const legacy = providers.create({
+      name: 'Legacy config',
+      type: 'mock',
+      baseUrl: 'https://user:pass@example.test/v1?token=legacy',
+      config: { region: 'fixture', nested: { api_key: 'legacy-secret' } },
+    });
+    const dto = service.get(legacy.id);
+    expect(dto).toMatchObject({ baseUrl: null, config: { region: 'fixture', nested: {} } });
+    expect(JSON.stringify(dto)).not.toContain('legacy-secret');
   });
 
   it('creates one stable mock Provider without replacing an existing default', async () => {
@@ -114,13 +167,303 @@ describe('ProviderService', () => {
     expect(connection).toEqual({
       ok: true,
       latencyMs: 37,
-      message: 'Provider connection succeeded with 1 model(s).',
+      message: 'Provider connection succeeded.',
+    });
+  });
+
+  it('uses the injected Gemini models endpoint for live refresh and preserves manual overrides', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(geminiModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service, models } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'Live Gemini',
+      type: 'gemini-generate-content-image-v1',
+      baseUrl: 'https://proxy.example.test/gemini/v1beta',
+      apiKey: 'live-gemini-api-key',
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/gemini/v1beta/models',
+    });
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        modelId: 'gemini-3.1-flash-image',
+        capabilitySource: 'provider',
+      }),
+      expect.objectContaining({
+        modelId: 'gemini-custom-image-preview',
+        capabilitySource: 'provider',
+        capabilities: expect.objectContaining({ maxReferenceImages: 3 }),
+      }),
+    ]));
+    expect(refreshed.some((model) => model.modelId === 'gemini-3.1-flash-text')).toBe(false);
+
+    const discovered = refreshed.find((model) => model.modelId === 'gemini-custom-image-preview');
+    if (!discovered) throw new Error('Expected discovered Gemini image model.');
+    const manual = service.saveManualModel({
+      providerId: provider.id,
+      modelId: discovered.modelId,
+      displayName: 'Pinned manual name',
+      capabilities: discovered.capabilities,
+      enabled: false,
+    });
+    const refreshedAgain = await service.refreshModels(provider.id);
+    expect(models.get(manual.id)).toMatchObject({
+      id: manual.id,
+      displayName: 'Pinned manual name',
+      capabilitySource: 'manual',
+      enabled: false,
+    });
+    expect(refreshedAgain).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: manual.id, capabilitySource: 'manual', displayName: 'Pinned manual name' }),
+    ]));
+  });
+
+  it('uses the custom OpenAI-compatible Base URL for live image catalog refresh', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(openAiImagesModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'OpenAI-compatible Images',
+      type: 'openai-images-v1',
+      baseUrl: 'https://proxy.example.test/compatible/v1',
+      apiKey: 'openai-compatible-catalog-key',
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/compatible/v1/models',
+      headers: { Authorization: 'Bearer openai-compatible-catalog-key' },
+    });
+    expect(refreshed.map((model) => model.modelId)).toEqual(expect.arrayContaining([
+      'gpt-image-2',
+      'gpt-image-1.5',
+      'gpt-image-compatible-preview',
+    ]));
+    expect(refreshed).toHaveLength(3);
+    expect(refreshed.every((model) => model.capabilitySource === 'provider')).toBe(true);
+    expect(refreshed.find((model) => model.modelId === 'gpt-image-2')?.capabilities)
+      .toMatchObject({ resolutions: expect.arrayContaining(['3840x2160']), supportsMask: true });
+    expect(refreshed.find((model) => model.modelId === 'gpt-image-compatible-preview')?.capabilities)
+      .toMatchObject({ maxReferenceImages: 1, supportsMask: false, supportsBatchCount: false });
+  });
+
+  it('falls back to the built-in Gemini profile catalog without live HTTP', async () => {
+    const { service } = await createHarness();
+    const provider = service.create({
+      name: 'Profile Gemini',
+      type: 'gemini-generate-content-image-v1',
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        modelId: 'gemini-3.1-flash-lite-image',
+        capabilitySource: 'profile',
+      }),
+    ]));
+  });
+
+  it('uses the injected xAI models endpoint for live refresh and preserves manual overrides', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(xaiModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service, models } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'Live xAI',
+      type: 'xai-imagine-image-v1',
+      baseUrl: 'https://proxy.example.test/xai/v1',
+      apiKey: 'live-xai-api-key',
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/xai/v1/models',
+    });
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        modelId: 'grok-imagine-image-2.0',
+        capabilitySource: 'provider',
+      }),
+      expect.objectContaining({
+        modelId: 'grok-imagine-image-custom-preview',
+        capabilitySource: 'provider',
+        capabilities: expect.objectContaining({ maxReferenceImages: 1, maxBatchCount: 1 }),
+      }),
+    ]));
+    expect(refreshed.some((model) => model.modelId === 'grok-text-model')).toBe(false);
+
+    const discovered = refreshed.find((model) => model.modelId === 'grok-imagine-image-custom-preview');
+    if (!discovered) throw new Error('Expected discovered xAI image model.');
+    const manual = service.saveManualModel({
+      providerId: provider.id,
+      modelId: discovered.modelId,
+      displayName: 'Pinned xAI model',
+      capabilities: discovered.capabilities,
+      enabled: false,
+    });
+    await service.refreshModels(provider.id);
+    expect(models.get(manual.id)).toMatchObject({
+      displayName: 'Pinned xAI model',
+      capabilitySource: 'manual',
+      enabled: false,
+    });
+  });
+
+  it('uses the explicit connection probe instead of static capabilities', async () => {
+    let probes = 0;
+    class ProbeAdapter extends MockProviderAdapter {
+      public override async getCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
+        throw new Error('static capabilities must not be used as a connection probe');
+      }
+
+      public override async testConnection(_context: ProviderContext): Promise<void> {
+        probes += 1;
+      }
+    }
+    const { service } = await createHarness(new ProbeAdapter());
+    service.ensureMockProvider();
+
+    await expect(service.testConnection(MOCK_PROVIDER_ID)).resolves.toMatchObject({
+      ok: true,
+      message: 'Provider connection succeeded.',
+    });
+    expect(probes).toBe(1);
+  });
+
+  it('preserves manual model overrides and only mutates manual rows through manual APIs', async () => {
+    const { models, service } = await createHarness();
+    service.ensureMockProvider();
+    const initial = await service.refreshModels(MOCK_PROVIDER_ID);
+    const providerModel = initial[0];
+    if (!providerModel) throw new Error('Expected a provider model.');
+    const providerOnly = models.replaceForProvider(MOCK_PROVIDER_ID, [{
+      modelId: 'provider-only',
+      displayName: 'Provider only',
+      capabilities: providerModel.capabilities,
+      capabilitySource: 'provider',
+    }]).find((model) => model.modelId === 'provider-only');
+    if (!providerOnly) throw new Error('Expected a provider-only model.');
+
+    const manual = service.saveManualModel({
+      providerId: MOCK_PROVIDER_ID,
+      modelId: providerModel.modelId,
+      displayName: 'Manual override',
+      capabilities: providerModel.capabilities,
+      enabled: false,
+    });
+    expect(manual).toMatchObject({ capabilitySource: 'manual', enabled: false });
+
+    expect(() => service.updateManualModel(providerOnly.id, { displayName: 'Nope' }))
+      .toThrowError(expect.objectContaining({ code: 'model_not_manual' }));
+    expect(() => service.deleteManualModel(providerOnly.id)).toThrowError(
+      expect.objectContaining({ code: 'model_not_manual' }),
+    );
+
+    const refreshed = await service.refreshModels(MOCK_PROVIDER_ID);
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: manual.id,
+        modelId: providerModel.modelId,
+        displayName: 'Manual override',
+        capabilitySource: 'manual',
+        enabled: false,
+      }),
+      expect.objectContaining({ id: providerOnly.id, enabled: false }),
+    ]));
+  });
+
+  it('maps refresh adapter failures to a safe catalog error', async () => {
+    class FailingMockAdapter extends MockProviderAdapter {
+      public override async getCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
+        throw new Error('upstream secret material');
+      }
+    }
+    const { service } = await createHarness(new FailingMockAdapter());
+    service.ensureMockProvider();
+
+    const result = service.refreshModels(MOCK_PROVIDER_ID);
+    await expect(result).rejects.toEqual(
+      expect.objectContaining<Partial<ModelCatalogServiceError>>({
+        code: 'model_catalog_unavailable',
+        message: 'Provider model catalog could not be refreshed.',
+      }),
+    );
+    try {
+      await result;
+    } catch (error) {
+      expect(String(error)).not.toContain('upstream secret material');
+    }
+  });
+
+  it('forwards persisted endpoint, config, and decrypted header context to catalog calls', async () => {
+    let received: ProviderContext | undefined;
+    class ContextMockAdapter extends MockProviderAdapter {
+      public override async getCapabilities(context: ProviderContext): Promise<ProviderCapabilities> {
+        received = context;
+        return super.getCapabilities(context);
+      }
+    }
+    const { service } = await createHarness(new ContextMockAdapter());
+    const provider = service.create({
+      name: 'Context Provider',
+      type: 'mock',
+      baseUrl: 'https://provider.example.test/v1',
+      config: { profile: 'fixture' },
+      apiKey: 'catalog-api-key',
+      headers: { 'X-Trace': 'catalog-trace' },
+    });
+
+    await service.refreshModels(provider.id);
+    expect(received).toMatchObject({
+      providerId: provider.id,
+      baseUrl: 'https://provider.example.test/v1',
+      config: { profile: 'fixture' },
+      secrets: { apiKey: 'catalog-api-key', 'header:X-Trace': 'catalog-trace' },
     });
   });
 
   it('does not leak adapter errors from a failed connection test', async () => {
     class FailingMockAdapter extends MockProviderAdapter {
-      public override async getCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
+      public override async testConnection(_context: ProviderContext): Promise<void> {
         throw new Error('secret material from upstream');
       }
     }

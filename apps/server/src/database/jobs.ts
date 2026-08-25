@@ -10,6 +10,7 @@ import {
   desc,
   eq,
   inArray,
+  isNotNull,
   isNull,
   lt,
   or,
@@ -31,6 +32,7 @@ import {
   type PageRequest,
 } from './pagination.js';
 import { assets, changeEvents, jobInputs, jobOutputs, jobs } from './schema.js';
+import { parseStageRetryCounts, type StageRetryCounts } from '../jobs/retry-budget.js';
 
 export { AssetRepository } from './assets.js';
 
@@ -78,6 +80,7 @@ export interface JobRecord {
   readonly errorMessage: string | null;
   readonly retryCount: number;
   readonly submitAttempt: number;
+  readonly stageRetryCounts: StageRetryCounts;
   readonly pollAfterAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -124,6 +127,7 @@ export interface UpdateJobStatusFields {
   readonly pollAfterAt?: Date | null;
   readonly completedAt?: Date | null;
   readonly resultManifest?: readonly unknown[];
+  readonly stageRetryCounts?: StageRetryCounts;
 }
 
 export interface FinalizeOutputInput {
@@ -194,6 +198,7 @@ function mapJob(row: typeof jobs.$inferSelect): JobRecord {
     errorMessage: row.errorMessage,
     retryCount: row.retryCount,
     submitAttempt: row.submitAttempt,
+    stageRetryCounts: parseStageRetryCounts(JSON.parse(row.stageRetryCountsJson)),
     pollAfterAt: row.pollAfterAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -244,6 +249,9 @@ function statusUpdateValues(
   if ('completedAt' in fields) changes.completedAt = fields.completedAt ?? null;
   if (fields.resultManifest !== undefined) {
     changes.resultManifestJson = JSON.stringify(fields.resultManifest);
+  }
+  if (fields.stageRetryCounts !== undefined) {
+    changes.stageRetryCountsJson = JSON.stringify(fields.stageRetryCounts);
   }
   return changes;
 }
@@ -300,6 +308,7 @@ export class JobRepository {
           errorMessage: null,
           retryCount: 0,
           submitAttempt: 0,
+          stageRetryCountsJson: '{}',
           pollAfterAt: null,
           createdAt: now,
           updatedAt: now,
@@ -604,6 +613,7 @@ export class JobRepository {
           cancelRequestedAt: now,
           status: nextStatus,
           stage: nextStatus === 'cancelled' ? 'cancelled' : 'cancel_requested',
+          ...(nextStatus === 'cancelled' ? { stageRetryCountsJson: '{}' } : {}),
           updatedAt: now,
           revision: expectedRevision + 1,
         })
@@ -618,6 +628,66 @@ export class JobRepository {
             aggregateId: id,
             eventType: 'job.cancel-requested',
             payload: { id, status: nextStatus, revision: expectedRevision + 1 },
+            createdAt: now,
+          }),
+        )
+        .run();
+      const row = transaction.select().from(jobs).where(eq(jobs.id, id)).get();
+      return row ? mapJob(row) : null;
+    });
+  }
+
+  /** Atomically settles a cancellation request observed during startup recovery. */
+  public recoverCancellation(id: string, expectedRevision: number): JobRecord | null {
+    return this.database.transaction((transaction) => {
+      const current = transaction
+        .select()
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.id, id),
+            eq(jobs.revision, expectedRevision),
+            inArray(jobs.status, ACTIVE_STATUSES),
+            isNotNull(jobs.cancelRequestedAt),
+            isNull(jobs.deletedAt),
+          ),
+        )
+        .get();
+      if (!current) return null;
+
+      const now = new Date();
+      const changed = transaction
+        .update(jobs)
+        .set({
+          status: 'cancelled',
+          stage: 'cancelled',
+          errorCode: null,
+          errorMessage: null,
+          pollAfterAt: null,
+          stageRetryCountsJson: '{}',
+          updatedAt: now,
+          revision: expectedRevision + 1,
+        })
+        .where(
+          and(
+            eq(jobs.id, id),
+            eq(jobs.revision, expectedRevision),
+            inArray(jobs.status, ACTIVE_STATUSES),
+            isNotNull(jobs.cancelRequestedAt),
+            isNull(jobs.deletedAt),
+          ),
+        )
+        .run();
+      if (changed.changes !== 1) return null;
+
+      transaction
+        .insert(changeEvents)
+        .values(
+          toChangeEventValues({
+            aggregateType: 'job',
+            aggregateId: id,
+            eventType: 'job.cancelled-after-restart',
+            payload: { id, status: 'cancelled', revision: expectedRevision + 1 },
             createdAt: now,
           }),
         )
@@ -672,6 +742,7 @@ export class JobRepository {
           errorMessage: null,
           retryCount: source.retryCount + 1,
           submitAttempt: 0,
+          stageRetryCountsJson: '{}',
           pollAfterAt: null,
           createdAt: now,
           updatedAt: now,
@@ -922,6 +993,7 @@ export class JobRepository {
           pollAfterAt: null,
           completedAt: now,
           resultManifestJson: JSON.stringify(manifest),
+          stageRetryCountsJson: '{}',
           updatedAt: now,
           revision: expectedRevision + 1,
         })

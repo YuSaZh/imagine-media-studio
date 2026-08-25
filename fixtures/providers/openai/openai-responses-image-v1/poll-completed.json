@@ -1,0 +1,4 @@
+{
+  "state": "not_applicable",
+  "reason": "Responses image_generation has no provider-side polling operation in this profile."
+}

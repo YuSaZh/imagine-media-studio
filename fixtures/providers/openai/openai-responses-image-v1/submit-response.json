@@ -1,0 +1,11 @@
+{
+  "id": "resp_fixture_1",
+  "output": [
+    {
+      "type": "image_generation_call",
+      "id": "ig_fixture_1",
+      "status": "completed",
+      "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    }
+  ]
+}

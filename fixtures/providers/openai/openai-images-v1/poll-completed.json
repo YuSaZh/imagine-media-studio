@@ -1,0 +1,4 @@
+{
+  "state": "not_applicable",
+  "reason": "OpenAI Images has no provider-side polling operation in this profile."
+}

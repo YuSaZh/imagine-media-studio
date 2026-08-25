@@ -1,4 +1,4 @@
-import type { GenerationRequest, MediaOperation } from '@imagine/shared';
+import type { AssetInput, GenerationRequest, MediaOperation } from '@imagine/shared';
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
@@ -40,12 +40,29 @@ export interface ProviderCapabilities {
   models: readonly ProviderModel[];
 }
 
+export interface ProviderInput {
+  assetId: string;
+  role: AssetInput['role'];
+  filename?: string;
+  mimeType: string;
+  bytes: Uint8Array;
+  /** Persisted relationship metadata verified by the input loader. */
+  parentAssetId?: string | null;
+  width?: number;
+  height?: number;
+  fileSize?: number;
+  sha256?: string;
+}
+
 export interface ProviderContext {
   providerId: string;
   jobId?: string;
   idempotencyKey?: string;
   attempt?: number;
   signal?: AbortSignal;
+  baseUrl?: string;
+  config?: Readonly<Record<string, unknown>>;
+  inputs?: readonly ProviderInput[];
   secrets: Readonly<Record<string, string>>;
 }
 
@@ -98,6 +115,8 @@ export interface ProviderAdapter {
   readonly type: string;
 
   getCapabilities(context: ProviderContext): Promise<ProviderCapabilities>;
+  /** Verify endpoint and authentication without starting a media operation. */
+  testConnection?(context: ProviderContext): Promise<void>;
   validate(request: GenerationRequest, context: ProviderContext): Promise<void>;
   submit(request: GenerationRequest, context: ProviderContext): Promise<SubmitResult>;
   poll?(remoteJobId: string, context: ProviderContext): Promise<PollResult>;

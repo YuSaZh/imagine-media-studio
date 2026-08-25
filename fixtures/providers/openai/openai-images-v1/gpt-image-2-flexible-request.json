@@ -1,0 +1,6 @@
+{
+  "model": "gpt-image-2",
+  "prompt": "A small red kite over a quiet lake",
+  "size": "2048x1152",
+  "output_format": "webp"
+}

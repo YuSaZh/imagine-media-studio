@@ -1,0 +1,4 @@
+{
+  "state": "not_applicable",
+  "reason": "OpenAI Images returns image results synchronously in this profile."
+}

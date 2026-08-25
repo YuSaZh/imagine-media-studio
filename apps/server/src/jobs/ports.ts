@@ -1,9 +1,13 @@
 import type {
   ProviderAdapter,
+  ProviderInput,
   ProviderError,
   SubmittedAsset,
 } from '@imagine/provider-contract';
 import type { GenerationRequest, JobStatus } from '@imagine/shared';
+
+import type { StageRetryCounts } from './retry-budget.js';
+export type { RetriableWorkKind, StageRetryCounts } from './retry-budget.js';
 
 export interface RunnerJob {
   id: string;
@@ -16,9 +20,11 @@ export interface RunnerJob {
   attempt: number;
   remoteJobId: string | null;
   pollAfterAt: Date | null;
+  cancelRequestedAt: Date | null;
   resultAssets: readonly SubmittedAsset[];
   materializedAssets: readonly MaterializedAsset[];
   error: ProviderError | null;
+  stageRetryCounts: StageRetryCounts;
 }
 
 export interface MaterializedAsset {
@@ -65,12 +71,17 @@ export interface JobTransitionInput {
   resultAssets?: readonly SubmittedAsset[];
   materializedAssets?: readonly MaterializedAsset[];
   error?: ProviderError | null;
+  stageRetryCounts?: StageRetryCounts;
   incrementAttempt?: boolean;
 }
 
 export interface RunnerJobPort {
   get(jobId: string): Promise<RunnerJob | null>;
   listRecoverable(): Promise<readonly RunnerJob[]>;
+  recoverCancellation(
+    jobId: string,
+    expectedRevision: number,
+  ): Promise<JobTransitionCommit | null>;
   claimQueued(jobId: string, expectedRevision: number): Promise<JobTransitionCommit | null>;
   transition(jobId: string, input: JobTransitionInput): Promise<JobTransitionCommit | null>;
 }
@@ -96,12 +107,25 @@ export interface RunnerEventPort {
 export interface ProviderRegistration {
   adapter: ProviderAdapter;
   secrets: Readonly<Record<string, string>>;
+  /** Persisted provider endpoint, forwarded to every adapter operation. */
+  baseUrl?: string;
+  /** Persisted non-secret provider settings. Never contains decrypted credentials. */
+  config?: Readonly<Record<string, unknown>>;
+  /** Application-owned safe HTTP client. Concrete providers narrow this at runtime. */
+  http?: object;
   /** True only when repeating submit with the same idempotency key is supported. */
   submitReplaySafe: boolean;
 }
 
 export interface ProviderRegistryPort {
   resolve(providerId: string): Promise<ProviderRegistration> | ProviderRegistration;
+}
+
+export interface ProviderInputLoaderPort {
+  load(
+    request: RunnerJob['request'],
+    signal?: AbortSignal,
+  ): Promise<readonly ProviderInput[]>;
 }
 
 export interface MediaMaterializerPort {
@@ -134,6 +158,8 @@ export interface JobRunnerOptions {
   assets: RunnerAssetPort;
   events: RunnerEventPort;
   providers: ProviderRegistryPort;
+  /** Loads and verifies persisted input bytes immediately before submit. */
+  inputLoader?: ProviderInputLoaderPort;
   media: MediaMaterializerPort;
   clock?: RunnerClock;
   concurrency?: {

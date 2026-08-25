@@ -3,6 +3,7 @@ import type {
   ProviderContext,
   ProviderError,
   ProviderErrorKind,
+  ProviderInput,
 } from '@imagine/provider-contract';
 import type { JobStatus } from '@imagine/shared';
 import PQueue from 'p-queue';
@@ -13,6 +14,12 @@ import {
   type LegacyJobRepository,
   type LegacyStoragePaths,
 } from './legacy-adapters.js';
+import { InvalidBase64MediaError, InvalidMaskMediaError } from '../media/asset-media-service.js';
+import { InvalidImageError } from '../media/image-processor.js';
+import { UnsupportedMediaTypeError } from '../media/mime.js';
+import { UnsafeRemoteUrlError } from '../security/network-policy.js';
+import { AtomicFileTooLargeError } from '../storage/atomic-file.js';
+import { UnsafeStoragePathError } from '../storage/path-safety.js';
 import type {
   JobRunnerOptions,
   JobTransitionCommit,
@@ -21,8 +28,16 @@ import type {
   RunnerClock,
   RunnerJob,
 } from './ports.js';
+import { ProviderInputLoaderError } from '../providers/provider-input-loader.js';
+import {
+  clearStageRetryCount,
+  EMPTY_STAGE_RETRY_COUNTS,
+  nextStageRetryCounts,
+  type StageRetryCounts,
+} from './retry-budget.js';
 
 type WorkKind = 'submit' | 'poll' | 'download' | 'process';
+type RetriableWorkKind = Exclude<WorkKind, 'submit'>;
 
 const TERMINAL_STATUSES = new Set<JobStatus>([
   'completed',
@@ -45,6 +60,40 @@ function runnerError(
   kind: ProviderErrorKind = 'unknown',
 ): ProviderError {
   return { code, kind, message, retryable: false };
+}
+
+function deterministicOutputError(error: unknown): ProviderError | null {
+  if (
+    error instanceof UnsafeRemoteUrlError ||
+    error instanceof UnsafeStoragePathError ||
+    error instanceof UnsupportedMediaTypeError ||
+    error instanceof AtomicFileTooLargeError ||
+    error instanceof InvalidBase64MediaError ||
+    error instanceof InvalidImageError ||
+    error instanceof InvalidMaskMediaError
+  ) {
+    return runnerError(
+      'provider_output_rejected',
+      error.message.slice(0, 500),
+      'rejected',
+    );
+  }
+  return null;
+}
+
+function inputLoaderError(error: ProviderInputLoaderError): ProviderError {
+  const kind: ProviderErrorKind = error.code === 'provider_input_too_large' ||
+    error.code === 'provider_input_invalid' ||
+    error.code === 'provider_input_missing' ||
+    error.code === 'provider_input_changed'
+    ? 'rejected'
+    : 'unknown';
+  return {
+    code: error.code,
+    kind,
+    message: error.message,
+    retryable: false,
+  };
 }
 
 function isOptions(value: JobRunnerOptions | LegacyJobRepository): value is JobRunnerOptions {
@@ -101,7 +150,11 @@ export class JobRunner {
     }
 
     this.clock = this.options.clock ?? systemClock;
-    this.maxAttempts = this.options.maxAttempts ?? 3;
+    const maxAttempts = this.options.maxAttempts ?? 3;
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+      throw new RangeError('maxAttempts must be a positive safe integer.');
+    }
+    this.maxAttempts = maxAttempts;
     this.defaultPollAfterMs = this.options.defaultPollAfterMs ?? 1_000;
     this.defaultRetryAfterMs = this.options.defaultRetryAfterMs ?? 1_000;
     const concurrency = this.options.concurrency ?? {};
@@ -154,8 +207,24 @@ export class JobRunner {
   public async resumePendingJobs(): Promise<void> {
     const jobs = await this.options.jobs.listRecoverable();
     for (const job of jobs) {
+      if (job.cancelRequestedAt !== null && !TERMINAL_STATUSES.has(job.status)) {
+        await this.recoverCancellation(job);
+        continue;
+      }
       this.rememberOperation(job);
       await this.recover(job);
+    }
+  }
+
+  private async recoverCancellation(job: RunnerJob): Promise<void> {
+    const committed = await this.options.jobs.recoverCancellation(job.id, job.revision);
+    if (!committed) return;
+
+    if (committed.job.remoteJobId) {
+      await this.cancelRemote(committed.job).catch(() => undefined);
+    }
+    if (committed.job.status === 'downloading' || committed.job.status === 'processing') {
+      await this.discardProvisional(committed.job, committed.job.materializedAssets);
     }
   }
 
@@ -175,6 +244,7 @@ export class JobRunner {
         stage: 'cancelled',
         pollAfterAt: null,
         error: null,
+        stageRetryCounts: EMPTY_STAGE_RETRY_COUNTS,
       });
       if (!committed) {
         continue;
@@ -377,28 +447,46 @@ export class JobRunner {
     if (!claimed) {
       return;
     }
-    await this.publish(claimed);
-
-    let registration: ProviderRegistration;
-    try {
-      registration = await this.options.providers.resolve(claimed.job.request.providerId);
-    } catch (error) {
-      await this.fail(
-        claimed.job,
-        runnerError(
-          'provider_unavailable',
-          error instanceof Error ? error.message : 'Provider unavailable',
-        ),
-      );
-      return;
-    }
-
     const controller = this.beginOperation(jobId);
-    const context = this.contextFor(claimed.job, registration, controller.signal);
+    let registration: ProviderRegistration | undefined;
     try {
+      await this.publish(claimed);
+      if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
+        return;
+      }
+
+      try {
+        registration = await this.options.providers.resolve(claimed.job.request.providerId);
+      } catch (error) {
+        if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
+          return;
+        }
+        await this.fail(
+          claimed.job,
+          runnerError(
+            'provider_unavailable',
+            error instanceof Error ? error.message : 'Provider unavailable',
+          ),
+        );
+        return;
+      }
+      if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
+        return;
+      }
+
+      const inputs = this.options.inputLoader
+        ? await this.options.inputLoader.load(claimed.job.request, controller.signal)
+        : undefined;
+      if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
+        return;
+      }
+      const context = this.contextFor(claimed.job, registration, controller.signal, inputs);
       await registration.adapter.validate(claimed.job.request, context);
+      if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
+        return;
+      }
       const result = await registration.adapter.submit(claimed.job.request, context);
-      if (!this.running) {
+      if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
         return;
       }
       if (result.state === 'pending') {
@@ -431,8 +519,11 @@ export class JobRunner {
         this.schedule('download', jobId, this.clock.now());
       }
     } catch (error) {
-      if (this.running) {
-        await this.handleSubmitError(claimed.job, registration, error);
+      if (registration && await this.isOperationActive(jobId, ['submitting'], controller)) {
+        const normalized = error instanceof ProviderInputLoaderError
+          ? inputLoaderError(error)
+          : registration.adapter.normalizeError(error);
+        await this.handleSubmitError(claimed.job, registration, normalized);
       }
     } finally {
       this.endOperation(jobId, controller);
@@ -449,26 +540,30 @@ export class JobRunner {
       return;
     }
 
-    const registration = await this.options.providers.resolve(job.request.providerId);
-    if (!registration.adapter.poll) {
-      await this.fail(
-        job,
-        runnerError(
-          'provider_poll_unsupported',
-          'The provider returned pending without poll support.',
-          'rejected',
-        ),
-      );
-      return;
-    }
-
     const controller = this.beginOperation(jobId);
+    let registration: ProviderRegistration | undefined;
     try {
+      registration = await this.options.providers.resolve(job.request.providerId);
+      if (!await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
+        return;
+      }
+      if (!registration.adapter.poll) {
+        await this.fail(
+          job,
+          runnerError(
+            'provider_poll_unsupported',
+            'The provider returned pending without poll support.',
+            'rejected',
+          ),
+        );
+        return;
+      }
+
       const result = await registration.adapter.poll(
         job.remoteJobId,
         this.contextFor(job, registration, controller.signal),
       );
-      if (!this.running) {
+      if (!await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
         return;
       }
       if (result.state === 'completed') {
@@ -480,6 +575,7 @@ export class JobRunner {
           resultAssets: result.assets,
           pollAfterAt: null,
           error: null,
+          stageRetryCounts: clearStageRetryCount(job.stageRetryCounts, 'poll'),
         });
         if (committed) {
           this.schedule('download', jobId, this.clock.now());
@@ -500,12 +596,19 @@ export class JobRunner {
         ...(result.progress === undefined ? {} : { progress: result.progress }),
         pollAfterAt: new Date(dueAt),
         error: null,
+        stageRetryCounts: clearStageRetryCount(job.stageRetryCounts, 'poll'),
       });
       if (committed) {
         this.schedule('poll', jobId, dueAt);
       }
     } catch (error) {
-      if (this.running) {
+      if (!this.running || controller.signal.aborted) {
+        return;
+      }
+      if (!registration) {
+        throw error;
+      }
+      if (await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
         await this.handlePollError(job, registration.adapter.normalizeError(error));
       }
     } finally {
@@ -518,16 +621,23 @@ export class JobRunner {
     if (!job || job.status !== 'downloading') {
       return;
     }
-    const registration = await this.options.providers.resolve(job.request.providerId);
     const controller = this.beginOperation(jobId);
+    let registration: ProviderRegistration | undefined;
     let materialized: readonly MaterializedAsset[] | undefined;
     try {
+      registration = await this.options.providers.resolve(job.request.providerId);
+      if (!await this.isOperationActive(jobId, ['downloading'], controller)) {
+        return;
+      }
       materialized = await this.options.media.materialize(
         job,
         job.resultAssets,
         controller.signal,
       );
-      if (!this.running) {
+      if (!await this.isOperationActive(jobId, ['downloading'], controller)) {
+        if (materialized !== undefined) {
+          await this.settleProvisionalAfterCasLoss(job, materialized);
+        }
         return;
       }
       const committed = await this.commitTransition(job, {
@@ -535,10 +645,11 @@ export class JobRunner {
         expectedRevision: job.revision,
         status: 'processing',
         stage: 'processing',
-        resultAssets: job.resultAssets,
+        resultAssets: [],
         materializedAssets: materialized,
         pollAfterAt: null,
         error: null,
+        stageRetryCounts: clearStageRetryCount(job.stageRetryCounts, 'download'),
       });
       if (committed) {
         this.schedule('process', jobId, this.clock.now());
@@ -546,11 +657,21 @@ export class JobRunner {
         await this.settleProvisionalAfterCasLoss(job, materialized);
       }
     } catch (error) {
-      if (this.running) {
-        if (materialized !== undefined) {
-          await this.settleProvisionalAfterCasLoss(job, materialized);
-        }
-        await this.retryStage(job, 'download', registration.adapter.normalizeError(error));
+      if (!this.running || controller.signal.aborted) {
+        return;
+      }
+      if (!registration) {
+        throw error;
+      }
+      if (materialized !== undefined) {
+        await this.settleProvisionalAfterCasLoss(job, materialized);
+      }
+      if (await this.isOperationActive(jobId, ['downloading'], controller)) {
+        await this.retryStage(
+          job,
+          'download',
+          deterministicOutputError(error) ?? registration.adapter.normalizeError(error),
+        );
       }
     } finally {
       this.endOperation(jobId, controller);
@@ -562,16 +683,23 @@ export class JobRunner {
     if (!job || job.status !== 'processing') {
       return;
     }
-    const registration = await this.options.providers.resolve(job.request.providerId);
     const controller = this.beginOperation(jobId);
+    let registration: ProviderRegistration | undefined;
     let processed: readonly MaterializedAsset[] | undefined;
     try {
+      registration = await this.options.providers.resolve(job.request.providerId);
+      if (!await this.isOperationActive(jobId, ['processing'], controller)) {
+        return;
+      }
       processed = await this.options.media.process(
         job,
         job.materializedAssets,
         controller.signal,
       );
-      if (!this.running) {
+      if (!await this.isOperationActive(jobId, ['processing'], controller)) {
+        if (processed !== undefined) {
+          await this.settleProvisionalAfterCasLoss(job, processed);
+        }
         return;
       }
       const committed = await this.options.assets.finalize(jobId, job.revision, processed);
@@ -582,11 +710,21 @@ export class JobRunner {
         await this.settleProvisionalAfterCasLoss(job, processed);
       }
     } catch (error) {
-      if (this.running) {
-        if (processed !== undefined) {
-          await this.settleProvisionalAfterCasLoss(job, processed);
-        }
-        await this.retryStage(job, 'process', registration.adapter.normalizeError(error));
+      if (!this.running || controller.signal.aborted) {
+        return;
+      }
+      if (!registration) {
+        throw error;
+      }
+      if (processed !== undefined) {
+        await this.settleProvisionalAfterCasLoss(job, processed);
+      }
+      if (await this.isOperationActive(jobId, ['processing'], controller)) {
+        await this.retryStage(
+          job,
+          'process',
+          deterministicOutputError(error) ?? registration.adapter.normalizeError(error),
+        );
       }
     } finally {
       this.endOperation(jobId, controller);
@@ -596,9 +734,8 @@ export class JobRunner {
   private async handleSubmitError(
     job: RunnerJob,
     registration: ProviderRegistration,
-    error: unknown,
+    normalized: ProviderError,
   ): Promise<void> {
-    const normalized = registration.adapter.normalizeError(error);
     if (normalized.retryable && registration.submitReplaySafe && job.attempt < this.maxAttempts) {
       const dueAt = this.clock.now() + (normalized.retryAfterMs ?? this.defaultRetryAfterMs);
       const committed = await this.commitTransition(job, {
@@ -618,7 +755,8 @@ export class JobRunner {
   }
 
   private async handlePollError(job: RunnerJob, error: ProviderError): Promise<void> {
-    if (error.retryable) {
+    const counts = this.consumeStageRetry(job, 'poll');
+    if (error.retryable && counts !== null) {
       const dueAt = this.clock.now() + (error.retryAfterMs ?? this.defaultRetryAfterMs);
       const committed = await this.commitTransition(job, {
         expectedStatuses: ['remote_pending', 'remote_running'],
@@ -627,6 +765,7 @@ export class JobRunner {
         stage: 'poll_retry_scheduled',
         pollAfterAt: new Date(dueAt),
         error,
+        stageRetryCounts: counts,
       });
       if (committed) {
         this.schedule('poll', job.id, dueAt);
@@ -638,10 +777,11 @@ export class JobRunner {
 
   private async retryStage(
     job: RunnerJob,
-    kind: 'download' | 'process',
+    kind: Exclude<RetriableWorkKind, 'poll'>,
     error: ProviderError,
   ): Promise<void> {
-    if (!error.retryable) {
+    const counts = this.consumeStageRetry(job, kind);
+    if (!error.retryable || counts === null) {
       await this.fail(job, error);
       return;
     }
@@ -653,6 +793,7 @@ export class JobRunner {
       stage: `${kind}_retry_scheduled`,
       pollAfterAt: new Date(dueAt),
       error,
+      stageRetryCounts: counts,
     });
     if (committed) {
       this.schedule(kind, job.id, dueAt);
@@ -668,6 +809,7 @@ export class JobRunner {
       stage: status,
       pollAfterAt: null,
       error,
+      stageRetryCounts: EMPTY_STAGE_RETRY_COUNTS,
     });
     if (committed && (job.status === 'downloading' || job.status === 'processing')) {
       await this.discardProvisional(job, job.materializedAssets);
@@ -740,15 +882,45 @@ export class JobRunner {
     job: RunnerJob,
     registration: ProviderRegistration,
     signal?: AbortSignal,
+    inputs?: readonly ProviderInput[],
   ): ProviderContext {
-    return {
+    const context = {
       providerId: job.request.providerId,
       jobId: job.id,
       idempotencyKey: job.idempotencyKey,
       attempt: job.attempt,
       ...(signal ? { signal } : {}),
+      ...(registration.baseUrl ? { baseUrl: registration.baseUrl } : {}),
+      config: registration.config ?? {},
+      ...(registration.http ? { http: registration.http } : {}),
+      ...(inputs === undefined ? {} : { inputs }),
       secrets: registration.secrets,
     };
+    return context as ProviderContext;
+  }
+
+  private async isOperationActive(
+    jobId: string,
+    expectedStatuses: readonly JobStatus[],
+    controller: AbortController,
+  ): Promise<boolean> {
+    if (!this.running || controller.signal.aborted) {
+      return false;
+    }
+    const current = await this.options.jobs.get(jobId);
+    return Boolean(
+      this.running &&
+      !controller.signal.aborted &&
+      current &&
+      expectedStatuses.includes(current.status),
+    );
+  }
+
+  private consumeStageRetry(job: RunnerJob, kind: RetriableWorkKind): StageRetryCounts | null {
+    const counts = job.stageRetryCounts ?? EMPTY_STAGE_RETRY_COUNTS;
+    // maxAttempts includes the initial stage attempt, matching submit retries.
+    if (counts[kind] >= this.maxAttempts - 1) return null;
+    return nextStageRetryCounts(counts, kind);
   }
 
   private beginOperation(jobId: string): AbortController {

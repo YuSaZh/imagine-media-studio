@@ -25,7 +25,11 @@ describe('SQLite initialization', () => {
     const first = createDatabase(databasePath, migrationsDirectory);
     expect(
       first.sqlite.prepare('SELECT version FROM schema_migrations').all(),
-    ).toEqual([{ version: '0000_pr0.sql' }, { version: '0001_pr2_core.sql' }]);
+    ).toEqual([
+      { version: '0000_pr0.sql' },
+      { version: '0001_pr2_core.sql' },
+      { version: '0002_pr4_runtime_safety.sql' },
+    ]);
     expect(first.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
     expect(first.sqlite.pragma('journal_mode', { simple: true })).toBe('wal');
     expect(first.sqlite.pragma('synchronous', { simple: true })).toBe(1);
@@ -35,7 +39,7 @@ describe('SQLite initialization', () => {
     const second = createDatabase(databasePath, migrationsDirectory);
     expect(
       second.sqlite.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get(),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 3 });
     second.sqlite.close();
   });
 
@@ -99,6 +103,7 @@ describe('SQLite initialization', () => {
     expect(upgraded.sqlite.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: '0000_pr0.sql' },
       { version: '0001_pr2_core.sql' },
+      { version: '0002_pr4_runtime_safety.sql' },
     ]);
     expect(
       upgraded.sqlite

@@ -17,6 +17,11 @@ export class MockProviderValidationError extends Error {
 export class MockProviderAdapter implements ProviderAdapter {
   public readonly type = 'mock';
 
+  public async testConnection(_context: ProviderContext): Promise<void> {
+    // The mock has no upstream endpoint; this keeps its connection check explicit
+    // while preserving the same ProviderService contract as real adapters.
+  }
+
   public async getCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
     return {
       providerType: this.type,

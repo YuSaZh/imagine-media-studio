@@ -1,0 +1,11 @@
+{
+  "model": "gpt-5.6",
+  "input": "A small red kite over a quiet lake",
+  "tools": [
+    {
+      "type": "image_generation",
+      "quality": "medium",
+      "size": "1024x1024"
+    }
+  ]
+}

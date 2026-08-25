@@ -1,0 +1,4 @@
+{
+  "applicable": false,
+  "reason": "Gemini Interactions image generation is synchronous."
+}

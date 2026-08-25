@@ -1,0 +1,4 @@
+{
+  "state": "not_applicable",
+  "reason": "Responses image_generation returns image results synchronously in this profile."
+}

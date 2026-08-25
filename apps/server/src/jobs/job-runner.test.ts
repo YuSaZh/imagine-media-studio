@@ -19,13 +19,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../database/client.js';
 import { AssetRepository, JobRepository } from '../database/jobs.js';
 import { MockProviderAdapter } from '../providers/mock-provider.js';
+import { UnsafeRemoteUrlError } from '../security/network-policy.js';
 import { ensureStorage, getStoragePaths } from '../storage/paths.js';
 import { JobRunner } from './job-runner.js';
 import type {
   JobRunnerOptions,
   JobTransitionCommit,
   JobTransitionInput,
+  MediaMaterializerPort,
   MaterializedAsset,
+  ProviderRegistration,
   RunnerAssetPort,
   RunnerEvent,
   RunnerJob,
@@ -155,9 +158,11 @@ function createRunnerJob(
     attempt: overrides.attempt ?? 0,
     remoteJobId: overrides.remoteJobId ?? null,
     pollAfterAt: overrides.pollAfterAt ?? null,
+    cancelRequestedAt: overrides.cancelRequestedAt ?? null,
     resultAssets: overrides.resultAssets ?? [],
     materializedAssets: overrides.materializedAssets ?? [],
     error: overrides.error ?? null,
+    stageRetryCounts: overrides.stageRetryCounts ?? { poll: 0, download: 0, process: 0 },
   };
 }
 
@@ -177,6 +182,30 @@ class MemoryJobPort implements RunnerJobPort {
 
   public async listRecoverable(): Promise<readonly RunnerJob[]> {
     return [...this.records.values()];
+  }
+
+  public async recoverCancellation(
+    jobId: string,
+    expectedRevision: number,
+  ): Promise<JobTransitionCommit | null> {
+    const current = this.records.get(jobId);
+    if (
+      !current ||
+      current.cancelRequestedAt === null ||
+      current.revision !== expectedRevision ||
+      ['completed', 'failed', 'cancelled', 'rejected', 'expired'].includes(current.status)
+    ) {
+      return null;
+    }
+    return this.transition(jobId, {
+      expectedStatuses: [current.status],
+      expectedRevision,
+      status: 'cancelled',
+      stage: 'cancelled',
+      pollAfterAt: null,
+      error: null,
+      stageRetryCounts: { poll: 0, download: 0, process: 0 },
+    });
   }
 
   public async claimQueued(
@@ -225,6 +254,9 @@ class MemoryJobPort implements RunnerJobPort {
           ? (input.materializedAssets ?? [])
           : current.materializedAssets,
       error: 'error' in input ? (input.error ?? null) : current.error,
+      stageRetryCounts: 'stageRetryCounts' in input
+        ? (input.stageRetryCounts ?? { poll: 0, download: 0, process: 0 })
+        : current.stageRetryCounts,
     };
     this.records.set(jobId, next);
     this.eventId += 1;
@@ -415,6 +447,39 @@ class RepollTestProvider extends CompletedTestProvider {
   }
 }
 
+class RetryableStageProvider extends CompletedTestProvider {
+  public pollCount = 0;
+
+  public constructor() {
+    super([submittedBase64Asset()]);
+  }
+
+  public override async submit(
+    _request: GenerationRequest,
+    _context: ProviderContext,
+  ): Promise<SubmitResult> {
+    return { state: 'pending', remoteJobId: 'retryable-stage', pollAfterMs: 0 };
+  }
+
+  public override async poll(
+    _remoteJobId: string,
+    _context: ProviderContext,
+  ): Promise<PollResult> {
+    this.pollCount += 1;
+    throw new Error('transient stage failure');
+  }
+
+  public override normalizeError(error: unknown): ProviderError {
+    return {
+      code: 'transient_stage',
+      kind: 'transient',
+      message: error instanceof Error ? error.message : 'Transient stage failure',
+      retryable: true,
+      retryAfterMs: 0,
+    };
+  }
+}
+
 function submittedBase64Asset(): SubmittedAsset {
   return {
     type: 'image',
@@ -426,8 +491,24 @@ function submittedBase64Asset(): SubmittedAsset {
 
 function createMemoryRunner(
   initialJobs: readonly RunnerJob[],
-  providerFor: (providerId: string) => { adapter: ProviderAdapter; submitReplaySafe: boolean },
+  providerFor: (providerId: string) => {
+    adapter: ProviderAdapter;
+    submitReplaySafe: boolean;
+    baseUrl?: string;
+    config?: Readonly<Record<string, unknown>>;
+    http?: object;
+  },
   events: RunnerEvent[] = [],
+  inputLoader: JobRunnerOptions['inputLoader'] = undefined,
+  providerResolver?: (
+    providerId: string,
+    registration: ProviderRegistration,
+  ) => Promise<ProviderRegistration> | ProviderRegistration,
+  mediaOverrides: {
+    maxAttempts?: number;
+    materialize?: MediaMaterializerPort['materialize'];
+    process?: MediaMaterializerPort['process'];
+  } = {},
 ): {
   runner: JobRunner;
   jobs: MemoryJobPort;
@@ -450,10 +531,17 @@ function createMemoryRunner(
       },
     },
     providers: {
-      resolve: (providerId) => ({ ...providerFor(providerId), secrets: {} }),
+      resolve: (providerId) => {
+        const registration = { ...providerFor(providerId), secrets: {} };
+        return providerResolver ? providerResolver(providerId, registration) : registration;
+      },
     },
+    ...(inputLoader === undefined ? {} : { inputLoader }),
+    ...(mediaOverrides.maxAttempts === undefined
+      ? {}
+      : { maxAttempts: mediaOverrides.maxAttempts }),
     media: {
-      materialize: async (job, submitted) =>
+      materialize: mediaOverrides.materialize ?? (async (job, submitted) =>
         submitted.map((asset, index) => {
           materializedSources.push(asset.source);
           return {
@@ -463,8 +551,8 @@ function createMemoryRunner(
             fileSize: 1,
             sha256: `${job.id}-${index}`,
           };
-        }),
-      process: async (_job, materialized) => materialized,
+        })),
+      process: mediaOverrides.process ?? (async (_job, materialized) => materialized),
       discard: async (job) => {
         discardedJobIds.push(job.id);
       },
@@ -487,6 +575,101 @@ function createMemoryRunner(
 }
 
 describe('JobRunner asynchronous state machine', () => {
+  it('loads verified input bytes exactly once and forwards the complete context to submit', async () => {
+    class ContextProvider extends CompletedTestProvider {
+      public submitContext: ProviderContext | undefined;
+
+      public override async validate(_request: GenerationRequest, context: ProviderContext): Promise<void> {
+        this.submitContext = context;
+      }
+    }
+    const provider = new ContextProvider([submittedBase64Asset()]);
+    const loadedBytes = new Uint8Array([1, 2, 3]);
+    let loadCount = 0;
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('input-context')],
+      () => ({
+        adapter: provider,
+        submitReplaySafe: true,
+        baseUrl: 'https://provider.example.test/v1',
+        config: { modelFamily: 'fixture' },
+        http: {},
+      }),
+      [],
+      {
+        load: async () => {
+          loadCount += 1;
+          return [{
+            assetId: 'asset-1',
+            role: 'source',
+            mimeType: 'image/png',
+            bytes: loadedBytes,
+          }];
+        },
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'input context submit');
+
+    expect(loadCount).toBe(1);
+    expect(provider.submitContext).toMatchObject({
+      baseUrl: 'https://provider.example.test/v1',
+      config: { modelFamily: 'fixture' },
+      inputs: [{ assetId: 'asset-1', mimeType: 'image/png', role: 'source' }],
+    });
+    expect(provider.submitContext?.secrets).toEqual({});
+    expect(jobs.records.get('input-context')?.status).toBe('completed');
+    await runner.stop();
+  });
+
+  it('cancels a submit blocked in provider resolution before validation or submit', async () => {
+    class GuardProvider extends CompletedTestProvider {
+      public validateCount = 0;
+      public submitCount = 0;
+
+      public override async validate(
+        _request: GenerationRequest,
+        _context: ProviderContext,
+      ): Promise<void> {
+        this.validateCount += 1;
+      }
+
+      public override async submit(
+        request: GenerationRequest,
+        context: ProviderContext,
+      ): Promise<SubmitResult> {
+        this.submitCount += 1;
+        return super.submit(request, context);
+      }
+    }
+    const provider = new GuardProvider([submittedBase64Asset()]);
+    const resolveEntered = createDeferred();
+    const resolveRelease = createDeferred();
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('resolve-cancel')],
+      () => ({ adapter: provider, submitReplaySafe: true }),
+      [],
+      undefined,
+      async (_providerId, registration) => {
+        resolveEntered.resolve();
+        await resolveRelease.promise;
+        return registration;
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(resolveEntered.promise, 'provider resolution');
+    await runner.cancel('resolve-cancel');
+
+    expect(jobs.records.get('resolve-cancel')?.status).toBe('cancelled');
+    resolveRelease.resolve();
+    await waitForPhase(runner.waitForIdle(), 'cancelled provider resolution');
+    expect(provider.validateCount).toBe(0);
+    expect(provider.submitCount).toBe(0);
+    await runner.stop();
+  });
+
   it('releases the submit slot while remote polls are pending', async () => {
     const provider = new AsyncTestProvider(2);
     const initial = [createRunnerJob('async-1'), createRunnerJob('async-2')];
@@ -515,9 +698,17 @@ describe('JobRunner asynchronous state machine', () => {
 
   it('aborts an active poll, calls provider cancel, and rejects its late result', async () => {
     const provider = new AsyncTestProvider();
+    let inputLoadCount = 0;
     const { runner, jobs, materializedSources } = createMemoryRunner(
       [createRunnerJob('cancel-1')],
       () => ({ adapter: provider, submitReplaySafe: true }),
+      [],
+      {
+        load: async () => {
+          inputLoadCount += 1;
+          return [];
+        },
+      },
     );
 
     await runner.start();
@@ -526,6 +717,7 @@ describe('JobRunner asynchronous state machine', () => {
 
     expect(provider.lastPollSignal?.aborted).toBe(true);
     expect(provider.cancelCount).toBe(1);
+    expect(inputLoadCount).toBe(1);
     provider.releasePolls();
     await waitForPhase(runner.waitForIdle(), 'late cancelled poll');
     expect(jobs.records.get('cancel-1')?.status).toBe('cancelled');
@@ -563,6 +755,140 @@ describe('JobRunner asynchronous state machine', () => {
       status: 'failed',
       attempt: 3,
       error: { code: 'transient_submit' },
+    });
+    await runner.stop();
+  });
+
+  it('caps transient poll failures at the stage attempt budget', async () => {
+    const provider = new RetryableStageProvider();
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('poll-retry-limit')],
+      () => ({ adapter: provider, submitReplaySafe: true }),
+      [],
+      undefined,
+      undefined,
+      { maxAttempts: 2 },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'poll retry limit');
+
+    expect(provider.pollCount).toBe(2);
+    expect(jobs.records.get('poll-retry-limit')).toMatchObject({
+      status: 'failed',
+      error: { code: 'transient_stage' },
+    });
+    await runner.stop();
+  });
+
+  it('honors a persisted stage retry budget after runner restart', async () => {
+    const provider = new RetryableStageProvider();
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('persisted-poll-budget', {
+        status: 'remote_pending',
+        remoteJobId: 'persisted-remote',
+        stageRetryCounts: { poll: 1, download: 0, process: 0 },
+      })],
+      () => ({ adapter: provider, submitReplaySafe: true }),
+      [],
+      undefined,
+      undefined,
+      { maxAttempts: 2 },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'persisted poll retry budget');
+
+    expect(provider.pollCount).toBe(1);
+    expect(jobs.records.get('persisted-poll-budget')).toMatchObject({
+      status: 'failed',
+      error: { code: 'transient_stage' },
+      stageRetryCounts: { poll: 0, download: 0, process: 0 },
+    });
+    await runner.stop();
+  });
+
+  it('caps transient download and process failures independently', async () => {
+    const provider = new RetryableStageProvider();
+    let downloadCalls = 0;
+    let processCalls = 0;
+    const { runner, jobs } = createMemoryRunner(
+      [
+        createRunnerJob('download-retry-limit', {
+          status: 'downloading',
+          resultAssets: [submittedBase64Asset()],
+        }),
+        createRunnerJob('process-retry-limit', {
+          status: 'processing',
+          materializedAssets: [{
+            type: 'image',
+            mimeType: 'image/png',
+            filePath: 'provisional/process-retry.png',
+            fileSize: 1,
+            sha256: 'process-retry',
+          }],
+        }),
+      ],
+      () => ({ adapter: provider, submitReplaySafe: true }),
+      [],
+      undefined,
+      undefined,
+      {
+        maxAttempts: 2,
+        materialize: async () => {
+          downloadCalls += 1;
+          throw new Error('transient download failure');
+        },
+        process: async () => {
+          processCalls += 1;
+          throw new Error('transient process failure');
+        },
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'download and process retry limits');
+
+    expect(downloadCalls).toBe(2);
+    expect(processCalls).toBe(2);
+    expect(jobs.records.get('download-retry-limit')).toMatchObject({
+      status: 'failed',
+      error: { code: 'transient_stage' },
+    });
+    expect(jobs.records.get('process-retry-limit')).toMatchObject({
+      status: 'failed',
+      error: { code: 'transient_stage' },
+    });
+    await runner.stop();
+  });
+
+  it('rejects deterministic output safety failures without retrying them', async () => {
+    let materializeCalls = 0;
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('unsafe-download', {
+        status: 'downloading',
+        resultAssets: [submittedBase64Asset()],
+      })],
+      () => ({ adapter: new CompletedTestProvider([]), submitReplaySafe: true }),
+      [],
+      undefined,
+      undefined,
+      {
+        maxAttempts: 3,
+        materialize: async () => {
+          materializeCalls += 1;
+          throw new UnsafeRemoteUrlError('Remote media URL is not allowed.');
+        },
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'deterministic output rejection');
+
+    expect(materializeCalls).toBe(1);
+    expect(jobs.records.get('unsafe-download')).toMatchObject({
+      status: 'rejected',
+      error: { code: 'provider_output_rejected', retryable: false },
     });
     await runner.stop();
   });
@@ -620,6 +946,28 @@ describe('JobRunner asynchronous state machine', () => {
     await runner.stop();
   });
 
+  it('settles a persisted cancellation before recovery and never schedules work', async () => {
+    const provider = new AsyncTestProvider();
+    const { runner, jobs } = createMemoryRunner([
+      createRunnerJob('cancel-after-restart', {
+        status: 'remote_pending',
+        remoteJobId: 'remote-cancel-after-restart',
+        cancelRequestedAt: new Date('2026-08-25T00:00:00.000Z'),
+      }),
+    ], () => ({ adapter: provider, submitReplaySafe: true }));
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'persisted cancellation recovery');
+
+    expect(provider.pollCount).toBe(0);
+    expect(provider.cancelCount).toBe(1);
+    expect(jobs.records.get('cancel-after-restart')).toMatchObject({
+      status: 'cancelled',
+      stage: 'cancelled',
+    });
+    await runner.stop();
+  });
+
   it('hands both base64 and URL results to the media materializer', async () => {
     const provider = new CompletedTestProvider([
       submittedBase64Asset(),
@@ -627,7 +975,7 @@ describe('JobRunner asynchronous state machine', () => {
         type: 'image',
         mimeType: 'image/png',
         source: 'url',
-        url: 'https://provider.invalid/result.png',
+        url: 'https://provider.invalid/result.png?token=temporary-secret',
       },
     ]);
     const { runner, jobs, materializedSources } = createMemoryRunner(
@@ -640,6 +988,7 @@ describe('JobRunner asynchronous state machine', () => {
 
     expect(materializedSources).toEqual(['base64', 'url']);
     expect(jobs.records.get('sources')?.status).toBe('completed');
+    expect(jobs.records.get('sources')?.resultAssets).toEqual([]);
     await runner.stop();
   });
 

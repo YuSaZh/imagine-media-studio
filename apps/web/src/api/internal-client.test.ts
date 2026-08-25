@@ -158,4 +158,48 @@ describe('internalClient', () => {
     expect(body.get('role')).toBe('reference');
     expect(body.get('file')).toBeInstanceOf(File);
   });
+
+  it('validates and sends manual model CRUD requests through the internal API', async () => {
+    const model = {
+      id: 'model-1',
+      providerId: 'provider-1',
+      modelId: 'image-v1',
+      displayName: 'Image v1',
+      capabilities: { operations: ['image.generate'] },
+      capabilitySource: 'manual',
+      enabled: true,
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-25T00:00:00.000Z',
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ model }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 201,
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ model }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(internalClient.createModel({
+      providerId: 'provider-1',
+      modelId: 'image-v1',
+      displayName: 'Image v1',
+      capabilities: { operations: ['image.generate'] },
+    })).resolves.toMatchObject({ model: { modelId: 'image-v1' } });
+    await expect(internalClient.patchModel('model-1', { enabled: false })).resolves.toMatchObject({
+      model: { id: 'model-1' },
+    });
+    await expect(internalClient.deleteModel('model-1')).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/internal/models');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      providerId: 'provider-1',
+      capabilities: { operations: ['image.generate'] },
+      enabled: true,
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/internal/models/model-1');
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/internal/models/model-1');
+  });
 });

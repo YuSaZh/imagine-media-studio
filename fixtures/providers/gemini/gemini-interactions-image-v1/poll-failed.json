@@ -1,0 +1,7 @@
+{
+  "id": "interaction-fixture-1",
+  "status": "failed",
+  "error": {
+    "message": "The image request was blocked by safety policy."
+  }
+}

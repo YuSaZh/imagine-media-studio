@@ -1,0 +1,7 @@
+event: image_generation.partial_image
+data: {"type":"image_generation.partial_image","partial_image_index":0,"b64_json":"iVBORw0KGgo="}
+
+event: image_generation.completed
+data: {"type":"image_generation.completed","data":[{"url":"https://cdn.example.invalid/image.png"}]}
+
+data: [DONE]

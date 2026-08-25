@@ -1,0 +1,31 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-image-2",
+      "object": "model",
+      "owned_by": "openai"
+    },
+    {
+      "id": "gpt-image-1.5",
+      "object": "model",
+      "owned_by": "openai"
+    },
+    {
+      "id": "gpt-image-compatible-preview",
+      "object": "model",
+      "owned_by": "compatible-provider",
+      "display_name": "Compatible Image Preview"
+    },
+    {
+      "id": "gpt-text-only",
+      "object": "model",
+      "owned_by": "compatible-provider"
+    },
+    {
+      "id": "dall-e-3",
+      "object": "model",
+      "owned_by": "openai"
+    }
+  ]
+}
