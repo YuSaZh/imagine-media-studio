@@ -159,6 +159,8 @@ describe('AssetMediaRepositoryAdapter', () => {
     expect(adapter.get('asset-1')).toMatchObject({ id: 'asset-1' });
     expect(repository.getIncludeDeleted).toBe(false);
     expect(adapter.get('deleted')).toBeNull();
+    expect(adapter.get('deleted', true)).toMatchObject({ id: 'deleted' });
+    expect(repository.getIncludeDeleted).toBe(true);
     expect(adapter.listForMaintenance().map((record) => record.id)).toEqual([
       'asset-1',
       'deleted',

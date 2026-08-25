@@ -26,6 +26,10 @@ import type { SettingsRepository } from '../database/settings.js';
 import type { OutboxPublisher } from '../events/outbox-publisher.js';
 import type { ProviderRegistryPort } from '../jobs/ports.js';
 import type { JobRunner } from '../jobs/job-runner.js';
+import {
+  GenerationInputError,
+  type GenerationInputResolver,
+} from '../jobs/generation-input-resolver.js';
 import type { AssetMediaService } from '../media/asset-media-service.js';
 import { planMediaResponse } from '../media/range.js';
 import type { AssetVariant } from '../media/types.js';
@@ -59,6 +63,7 @@ export interface ResourceRoutesOptions {
   assets: AssetRepository;
   collections: CollectionRepository;
   jobs: JobRepository;
+  inputResolver: GenerationInputResolver;
   media: AssetMediaService;
   models: ModelRepository;
   outbox: OutboxPublisher;
@@ -217,20 +222,29 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
     let registration;
     try {
       registration = await options.providers.resolve(input.providerId);
-      await registration.adapter.validate(input, {
-        providerId: input.providerId,
-        secrets: registration.secrets,
-      });
     } catch (error) {
-      if (registration) {
-        const normalized = registration.adapter.normalizeError(error);
-        return errorResponse(reply, normalized.kind === 'rejected' ? 400 : 502, normalized.code, normalized.message);
-      }
       if (error instanceof ProviderRegistryError) {
         const status = error.code === 'provider_type_unsupported' ? 400 : 503;
         return errorResponse(reply, status, error.code, error.message);
       }
       return errorResponse(reply, 503, 'provider_unavailable', error instanceof Error ? error.message : undefined);
+    }
+    try {
+      options.inputResolver.resolve(input);
+    } catch (error) {
+      if (error instanceof GenerationInputError) {
+        return errorResponse(reply, 400, error.code, error.message);
+      }
+      throw error;
+    }
+    try {
+      await registration.adapter.validate(input, {
+        providerId: input.providerId,
+        secrets: registration.secrets,
+      });
+    } catch (error) {
+      const normalized = registration.adapter.normalizeError(error);
+      return errorResponse(reply, normalized.kind === 'rejected' ? 400 : 502, normalized.code, normalized.message);
     }
     try {
       const job = await publishCommitted(options, () => options.jobs.create(input));

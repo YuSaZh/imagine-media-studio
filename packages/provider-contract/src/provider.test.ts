@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   ModelCapabilities,
+  ImageInputConstraints,
   PollResult,
   ProviderContext,
   ProviderError,
@@ -11,15 +12,24 @@ import type {
 
 describe('ModelCapabilities', () => {
   it('describes supported controls without binding them to a UI', () => {
+    const inputImageConstraints: ImageInputConstraints = {
+      mimeTypes: ['image/png', 'image/jpeg'],
+      maxBytes: 32 * 1024 * 1024,
+      maxPixels: 40_000_000,
+      maxWidth: 8_192,
+      maxHeight: 8_192,
+    };
     const capabilities: ModelCapabilities = {
       operations: ['image.generate'],
       aspectRatios: ['1:1', '16:9'],
       supportsBatchCount: true,
       maxBatchCount: 4,
+      inputImageConstraints,
     };
 
     expect(capabilities.operations).toContain('image.generate');
     expect(capabilities.maxBatchCount).toBe(4);
+    expect(capabilities.inputImageConstraints).toEqual(inputImageConstraints);
   });
 
   it('carries durable runner context and normalized asynchronous scheduling hints', () => {

@@ -8,7 +8,10 @@ import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureStorage, getStoragePaths } from '../storage/paths.js';
-import { AssetMediaService, InvalidBase64MediaError } from './asset-media-service.js';
+import {
+  AssetMediaService,
+  InvalidBase64MediaError,
+} from './asset-media-service.js';
 import { SharpImageProcessor } from './image-processor.js';
 import { auditMediaConsistency } from './maintenance.js';
 import type {
@@ -39,8 +42,10 @@ class MemoryAssetRepository implements AssetMediaRepositoryPort {
     return record;
   }
 
-  public get(id: string): AssetMediaRecord | null {
-    return this.records.find((record) => record.id === id) ?? null;
+  public get(id: string, includeDeleted = false): AssetMediaRecord | null {
+    return this.records.find(
+      (record) => record.id === id && (includeDeleted || record.deletedAt === null),
+    ) ?? null;
   }
 
   public listForMaintenance(): readonly AssetMediaRecord[] {
@@ -75,6 +80,19 @@ async function fixture() {
     .png()
     .toBuffer();
   return { paths, png, repository, service };
+}
+
+async function rgbaPng(width: number, height: number, alpha: readonly number[]): Promise<Buffer> {
+  if (alpha.length !== width * height) throw new Error('Alpha fixture size is invalid.');
+  const bytes = Buffer.alloc(width * height * 4);
+  for (const [index, value] of alpha.entries()) {
+    const offset = index * 4;
+    bytes[offset] = 32;
+    bytes[offset + 1] = 64;
+    bytes[offset + 2] = 96;
+    bytes[offset + 3] = value;
+  }
+  return sharp(bytes, { raw: { channels: 4, height, width } }).png().toBuffer();
 }
 
 describe('AssetMediaService', () => {
@@ -124,6 +142,164 @@ describe('AssetMediaService', () => {
       service.materializeBase64({ base64: 'not base64!', role: 'reference' }),
     ).rejects.toThrow(InvalidBase64MediaError);
     expect(repository.records).toHaveLength(1);
+  });
+
+  it('accepts partial and full-edit PNG masks while preserving their parent relationship', async () => {
+    const { paths, repository, service } = await fixture();
+    const parentBytes = await rgbaPng(2, 1, [255, 255]);
+    const parent = await service.materializeUpload({
+      claimedMimeType: 'image/png',
+      role: 'upload',
+      source: Readable.from([parentBytes]),
+    });
+
+    const partial = await service.materializeUpload({
+      claimedMimeType: 'image/png',
+      parentAssetId: parent.id,
+      role: 'mask',
+      source: Readable.from([await rgbaPng(2, 1, [0, 255])]),
+    });
+    const full = await service.materializeUpload({
+      claimedMimeType: 'image/png',
+      parentAssetId: parent.id,
+      role: 'mask',
+      source: Readable.from([await rgbaPng(2, 1, [0, 0])]),
+    });
+
+    expect(partial).toMatchObject({
+      height: 1,
+      mimeType: 'image/png',
+      parentAssetId: parent.id,
+      role: 'mask',
+      thumbnailPath: null,
+      width: 2,
+    });
+    expect(full).toMatchObject({ parentAssetId: parent.id, role: 'mask', thumbnailPath: null });
+    expect(repository.records).toHaveLength(3);
+    const { readdir } = await import('node:fs/promises');
+    expect(await readdir(paths.masks)).toHaveLength(2);
+    expect(await readdir(paths.thumbnails)).toHaveLength(1);
+  });
+
+  it('rejects an empty mask and removes every provisional mask file', async () => {
+    const { paths, repository, service } = await fixture();
+    const parent = await service.materializeUpload({
+      role: 'upload',
+      source: Readable.from([await rgbaPng(2, 1, [255, 255])]),
+    });
+
+    await expect(
+      service.materializeUpload({
+        parentAssetId: parent.id,
+        role: 'mask',
+        source: Readable.from([await rgbaPng(2, 1, [255, 255])]),
+      }),
+    ).rejects.toMatchObject({ code: 'mask_has_no_edit_area' });
+
+    expect(repository.records).toHaveLength(1);
+    const { readdir } = await import('node:fs/promises');
+    expect(await readdir(paths.masks)).toEqual([]);
+    expect(await readdir(paths.temporary)).toEqual([]);
+  });
+
+  it('rejects masks without an active image parent and cleans committed content', async () => {
+    const { paths, repository, service } = await fixture();
+    const maskBytes = await rgbaPng(1, 1, [0]);
+
+    await expect(
+      service.materializeUpload({ role: 'mask', source: Readable.from([maskBytes]) }),
+    ).rejects.toMatchObject({ code: 'mask_parent_required' });
+    await expect(
+      service.materializeUpload({
+        parentAssetId: 'missing-parent',
+        role: 'mask',
+        source: Readable.from([maskBytes]),
+      }),
+    ).rejects.toMatchObject({ code: 'mask_parent_missing' });
+
+    const inactiveParent = repository.create({
+      durationMs: null,
+      filePath: 'media/uploads/parent.png',
+      fileSize: 1,
+      height: 1,
+      jobId: null,
+      metadata: {},
+      mimeType: 'image/png',
+      originalFilename: null,
+      parentAssetId: null,
+      posterPath: null,
+      role: 'upload',
+      sha256: '0'.repeat(64),
+      thumbnailPath: null,
+      type: 'image',
+      width: 1,
+    });
+    expect(repository.softDelete(inactiveParent.id)).toBe(true);
+    await expect(
+      service.materializeUpload({
+        parentAssetId: inactiveParent.id,
+        role: 'mask',
+        source: Readable.from([maskBytes]),
+      }),
+    ).rejects.toMatchObject({ code: 'mask_parent_inactive' });
+
+    const videoParent = repository.create({
+      durationMs: 1000,
+      filePath: 'media/uploads/parent.mp4',
+      fileSize: 1,
+      height: 1,
+      jobId: null,
+      metadata: {},
+      mimeType: 'video/mp4',
+      originalFilename: null,
+      parentAssetId: null,
+      posterPath: null,
+      role: 'upload',
+      sha256: '1'.repeat(64),
+      thumbnailPath: null,
+      type: 'video',
+      width: 1,
+    });
+    await expect(
+      service.materializeUpload({
+        parentAssetId: videoParent.id,
+        role: 'mask',
+        source: Readable.from([maskBytes]),
+      }),
+    ).rejects.toMatchObject({ code: 'mask_parent_must_be_image' });
+
+    const { readdir } = await import('node:fs/promises');
+    expect(await readdir(paths.masks)).toEqual([]);
+  });
+
+  it('rejects non-PNG and dimension-mismatched masks without persistence', async () => {
+    const { paths, repository, service } = await fixture();
+    const parent = await service.materializeUpload({
+      role: 'upload',
+      source: Readable.from([await rgbaPng(2, 1, [255, 255])]),
+    });
+    const jpegMask = await sharp({
+      create: { background: '#000000', channels: 3, height: 1, width: 2 },
+    }).jpeg().toBuffer();
+
+    await expect(
+      service.materializeUpload({
+        parentAssetId: parent.id,
+        role: 'mask',
+        source: Readable.from([jpegMask]),
+      }),
+    ).rejects.toMatchObject({ code: 'mask_must_be_png' });
+    await expect(
+      service.materializeUpload({
+        parentAssetId: parent.id,
+        role: 'mask',
+        source: Readable.from([await rgbaPng(1, 1, [0])]),
+      }),
+    ).rejects.toMatchObject({ code: 'mask_dimension_mismatch' });
+
+    expect(repository.records).toHaveLength(1);
+    const { readdir } = await import('node:fs/promises');
+    expect(await readdir(paths.masks)).toEqual([]);
   });
 
   it('reuses complete stable Provider outputs after a crash without creating visible assets', async () => {

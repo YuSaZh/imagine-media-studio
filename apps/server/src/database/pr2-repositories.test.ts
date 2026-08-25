@@ -251,6 +251,13 @@ describe('PR 2 database repositories', () => {
     expect(new Set([...pageOne.items, ...pageTwo.items].map((asset) => asset.id))).toEqual(
       new Set([first.id, second.id, third.id]),
     );
+    const mask = assets.create({
+      ...assetInput('media/masks/edit-mask.png'),
+      role: 'mask',
+      parentAssetId: first.id,
+    });
+    expect(assets.page().items.map((asset) => asset.id)).not.toContain(mask.id);
+    expect(assets.page({ role: 'mask' }).items.map((asset) => asset.id)).toEqual([mask.id]);
     expect(assets.softDelete(second.id)).toBe(true);
     expect(assets.get(second.id)).toBeNull();
     expect(assets.get(second.id, true)?.deletedAt).toBeInstanceOf(Date);
@@ -406,5 +413,41 @@ describe('PR 2 database repositories', () => {
     );
     expect(incompleteCompleted?.status).toBe('completed');
     expect(jobs.listRecoverable().map((candidate) => candidate.id)).toContain(incomplete.id);
+  });
+
+  it('links image.edit outputs to the durable source Asset parent', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm);
+    const jobs = new JobRepository(database.orm);
+    const source = assets.create(assetInput('media/uploads/edit-source.png'));
+    const job = jobs.create(createMockGenerationRequest({
+      operation: 'image.edit',
+      inputs: [{ assetId: source.id, role: 'source' }],
+    }));
+    const claimed = jobs.claimQueued(job.id, job.revision);
+    const processing = jobs.compareAndSetStatus(
+      job.id,
+      claimed?.revision ?? -1,
+      ['submitting'],
+      'processing',
+      'processing',
+    );
+    if (!processing) throw new Error('Expected an image edit processing fixture.');
+
+    const finalized = jobs.finalizeOutputs(job.id, processing.revision, [
+      {
+        type: 'image',
+        mimeType: 'image/png',
+        filePath: 'media/originals/edit-result.png',
+        fileSize: 100,
+        sha256: 'edit-result-sha',
+      },
+    ]);
+
+    expect(finalized?.assets[0]).toMatchObject({
+      jobId: job.id,
+      parentAssetId: source.id,
+      role: 'output',
+    });
   });
 });

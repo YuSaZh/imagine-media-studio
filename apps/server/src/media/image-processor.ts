@@ -1,6 +1,12 @@
 import sharp from 'sharp';
 
 import {
+  assertUsableMaskCoverage,
+  classifyMaskRgba,
+  type MaskCoverage,
+} from '@imagine/shared';
+
+import {
   commitStagedFile,
   discardStagedFile,
   stageBuffer,
@@ -24,6 +30,12 @@ export interface ImageProcessorOptions {
   maxInputPixels?: number;
   maxPages?: number;
   thumbnailSize?: number;
+}
+
+export interface DecodedMaskMetadata {
+  coverage: MaskCoverage;
+  height: number;
+  width: number;
 }
 
 export class SharpImageProcessor {
@@ -95,5 +107,33 @@ export class SharpImageProcessor {
       await discardStagedFile(staged);
       throw error;
     }
+  }
+
+  public async inspectMask(filePath: string): Promise<DecodedMaskMetadata> {
+    let decoded: Awaited<
+      ReturnType<ReturnType<ReturnType<ReturnType<typeof sharp>['ensureAlpha']>['raw']>['toBuffer']>
+    >;
+    try {
+      decoded = await sharp(filePath, {
+        autoOrient: true,
+        failOn: 'warning',
+        limitInputPixels: this.maxInputPixels,
+        pages: 1,
+        sequentialRead: true,
+      })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    } catch (error) {
+      throw new InvalidImageError(error instanceof Error ? error.message : 'Mask cannot be decoded.');
+    }
+
+    const coverage = classifyMaskRgba(decoded.data);
+    assertUsableMaskCoverage(coverage);
+    return {
+      coverage,
+      height: decoded.info.height,
+      width: decoded.info.width,
+    };
   }
 }

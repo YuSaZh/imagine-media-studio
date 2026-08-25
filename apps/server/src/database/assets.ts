@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, asc, desc, eq, exists, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, isNull, lt, ne, or, type SQL } from 'drizzle-orm';
 
 import type { AppDatabase } from './client.js';
 import { toChangeEventValues } from './events.js';
@@ -125,6 +125,7 @@ export class AssetRepository {
     if (page.cursor) conditions.push(assetCursorCondition(page.cursor));
     if (request.type !== undefined) conditions.push(eq(assets.type, request.type));
     if (request.role !== undefined) conditions.push(eq(assets.role, request.role));
+    else conditions.push(ne(assets.role, 'mask'));
     if (request.favorite !== undefined) conditions.push(eq(assets.favorite, request.favorite));
     if (request.jobId !== undefined) conditions.push(eq(assets.jobId, request.jobId));
     const collectionId = request.collectionId;

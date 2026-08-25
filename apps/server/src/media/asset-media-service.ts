@@ -5,6 +5,8 @@ import { join } from 'node:path';
 
 import { z } from 'zod';
 
+import { MaskTargetError } from '@imagine/shared';
+
 import {
   commitStagedFile,
   discardStagedFile,
@@ -42,6 +44,27 @@ import type { VideoProcessor } from './video-processor.js';
 
 export class InvalidBase64MediaError extends Error {
   public override readonly name = 'InvalidBase64MediaError';
+}
+
+export type InvalidMaskMediaCode =
+  | 'mask_dimension_mismatch'
+  | 'mask_has_no_edit_area'
+  | 'mask_has_multiple_frames'
+  | 'mask_must_be_png'
+  | 'mask_parent_inactive'
+  | 'mask_parent_missing'
+  | 'mask_parent_must_be_image'
+  | 'mask_parent_required';
+
+export class InvalidMaskMediaError extends Error {
+  public override readonly name = 'InvalidMaskMediaError';
+
+  public constructor(
+    public readonly code: InvalidMaskMediaCode,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export interface AssetMediaServiceOptions {
@@ -584,25 +607,32 @@ export class AssetMediaService {
     try {
       await commitStagedFile(this.paths.root, prepared.staged, contentPath);
       committedContent = true;
+      if (input.role === 'mask' && prepared.mediaType.mimeType !== 'image/png') {
+        throw new InvalidMaskMediaError('mask_must_be_png', 'Mask media must be a PNG image.');
+      }
       if (prepared.mediaType.kind === 'image') {
         const metadata = await this.imageProcessor.inspect(contentPath);
         if (metadata.mimeType !== prepared.mediaType.mimeType) {
           throw new Error('Image decoder format does not match the detected media signature.');
         }
-        await this.imageProcessor.createThumbnail({
-          dataRoot: this.paths.root,
-          destinationPath: thumbnailPath!,
-          inputPath: contentPath,
-          temporaryDirectory: this.paths.temporary,
-          ...(input.signal === undefined ? {} : { signal: input.signal }),
-        });
+        if (input.role === 'mask') {
+          await this.validateMask(input, prepared, contentPath, metadata);
+        } else {
+          await this.imageProcessor.createThumbnail({
+            dataRoot: this.paths.root,
+            destinationPath: thumbnailPath!,
+            inputPath: contentPath,
+            temporaryDirectory: this.paths.temporary,
+            ...(input.signal === undefined ? {} : { signal: input.signal }),
+          });
+        }
         return await this.repository.create(
           this.recordInput(input, prepared, contentPath, {
             durationMs: null,
             height: metadata.height,
             metadata: { format: metadata.format, pages: metadata.pages },
             posterPath: null,
-            thumbnailPath,
+            thumbnailPath: input.role === 'mask' ? null : thumbnailPath,
             width: metadata.width,
           }),
         );
@@ -635,6 +665,67 @@ export class AssetMediaService {
         removeIfPresent(posterPath),
       ]);
       throw error;
+    }
+  }
+
+  private async validateMask(
+    input: MediaSourceInput,
+    prepared: PreparedMedia,
+    contentPath: string,
+    metadata: Awaited<ReturnType<SharpImageProcessor['inspect']>>,
+  ): Promise<void> {
+    if (input.parentAssetId === undefined || input.parentAssetId === null || input.parentAssetId === '') {
+      throw new InvalidMaskMediaError('mask_parent_required', 'Mask media requires a parent asset.');
+    }
+    if (prepared.mediaType.mimeType !== 'image/png') {
+      throw new InvalidMaskMediaError('mask_must_be_png', 'Mask media must be a PNG image.');
+    }
+    if (metadata.pages !== 1) {
+      throw new InvalidMaskMediaError(
+        'mask_has_multiple_frames',
+        'Mask media must contain exactly one image frame.',
+      );
+    }
+
+    const parent = await this.repository.get(input.parentAssetId, true);
+    if (parent === null) {
+      throw new InvalidMaskMediaError('mask_parent_missing', 'The mask parent asset was not found.');
+    }
+    if (parent.deletedAt !== null) {
+      throw new InvalidMaskMediaError('mask_parent_inactive', 'The mask parent asset is deleted.');
+    }
+    if (parent.type !== 'image') {
+      throw new InvalidMaskMediaError(
+        'mask_parent_must_be_image',
+        'The mask parent asset must be an image.',
+      );
+    }
+    if (
+      parent.width === null ||
+      parent.height === null ||
+      parent.width !== metadata.width ||
+      parent.height !== metadata.height
+    ) {
+      throw new InvalidMaskMediaError(
+        'mask_dimension_mismatch',
+        'Mask dimensions must exactly match the oriented parent image dimensions.',
+      );
+    }
+
+    let decoded: Awaited<ReturnType<SharpImageProcessor['inspectMask']>>;
+    try {
+      decoded = await this.imageProcessor.inspectMask(contentPath);
+    } catch (error) {
+      if (error instanceof MaskTargetError && error.code === 'mask_has_no_edit_area') {
+        throw new InvalidMaskMediaError('mask_has_no_edit_area', error.message);
+      }
+      throw error;
+    }
+    if (decoded.width !== metadata.width || decoded.height !== metadata.height) {
+      throw new InvalidMaskMediaError(
+        'mask_dimension_mismatch',
+        'Decoded mask dimensions do not match its oriented metadata.',
+      );
     }
   }
 

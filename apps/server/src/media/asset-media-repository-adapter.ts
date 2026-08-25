@@ -124,8 +124,8 @@ export class AssetMediaRepositoryAdapter implements AssetMediaRepositoryPort {
     return toAssetMediaRecord(this.repository.create(toDatabaseInput(input)));
   }
 
-  public get(id: string): AssetMediaRecord | null {
-    const record = this.repository.get(id);
+  public get(id: string, includeDeleted = false): AssetMediaRecord | null {
+    const record = this.repository.get(id, includeDeleted);
     return record === null ? null : toAssetMediaRecord(record);
   }
 

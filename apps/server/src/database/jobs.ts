@@ -155,7 +155,8 @@ export class JobRepositoryError extends Error {
     public readonly code:
       | 'input_asset_not_found'
       | 'output_asset_conflict'
-      | 'output_slot_mismatch',
+      | 'output_slot_mismatch'
+      | 'source_input_required',
     message: string,
   ) {
     super(message);
@@ -781,6 +782,18 @@ export class JobRepository {
         .get();
       if (!current) return null;
 
+      const request = GenerationRequestSchema.parse(JSON.parse(current.requestJson));
+      const parentAssetId =
+        request.operation === 'image.edit'
+          ? (request.inputs.find((input) => input.role === 'source')?.assetId ?? null)
+          : null;
+      if (request.operation === 'image.edit' && parentAssetId === null) {
+        throw new JobRepositoryError(
+          'source_input_required',
+          'An image.edit output requires a source Asset parent.',
+        );
+      }
+
       const now = new Date();
       let slots = transaction
         .select()
@@ -820,6 +833,7 @@ export class JobRepository {
         if (existing) {
           if (
             existing.jobId !== jobId ||
+            existing.parentAssetId !== parentAssetId ||
             existing.deletedAt !== null ||
             existing.type !== input.type ||
             existing.mimeType !== input.mimeType ||
@@ -843,7 +857,7 @@ export class JobRepository {
             .values({
               id: assetId,
               jobId,
-              parentAssetId: null,
+              parentAssetId,
               type: input.type,
               role: 'output',
               filePath: input.filePath,
@@ -869,7 +883,7 @@ export class JobRepository {
                 aggregateType: 'asset',
                 aggregateId: assetId,
                 eventType: 'asset.created',
-                payload: { id: assetId, jobId, type: input.type, slot: index },
+                payload: { id: assetId, jobId, parentAssetId, type: input.type, slot: index },
                 createdAt: now,
               }),
             )

@@ -25,9 +25,18 @@ export class MockProviderAdapter implements ProviderAdapter {
           id: 'mock-image-v1',
           displayName: 'Mock Image',
           capabilities: {
-            operations: ['image.generate'],
+            operations: ['image.generate', 'image.edit'],
             aspectRatios: ['1:1'],
+            maxReferenceImages: 4,
+            supportsMask: true,
             supportsBatchCount: false,
+            inputImageConstraints: {
+              mimeTypes: ['image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp'],
+              maxBytes: 32 * 1024 * 1024,
+              maxPixels: 100_000_000,
+              maxWidth: 16_384,
+              maxHeight: 16_384,
+            },
           },
         },
       ],
@@ -38,15 +47,33 @@ export class MockProviderAdapter implements ProviderAdapter {
     if (
       request.providerId !== 'mock' ||
       request.modelId !== 'mock-image-v1' ||
-      request.operation !== 'image.generate'
+      !['image.generate', 'image.edit'].includes(request.operation)
     ) {
       throw new MockProviderValidationError(
-        'The PR 0 Mock Provider only supports mock-image-v1 image.generate requests.',
+        'The Mock Provider only supports mock-image-v1 image.generate and image.edit requests.',
       );
     }
 
-    if (request.inputs.length > 0) {
-      throw new MockProviderValidationError('The PR 0 Mock Provider does not accept asset inputs.');
+    const count = (role: GenerationRequest['inputs'][number]['role']) =>
+      request.inputs.filter((input) => input.role === role).length;
+    if (count('reference') > 4) {
+      throw new MockProviderValidationError('The Mock Provider accepts at most four references.');
+    }
+    if (request.operation === 'image.generate') {
+      if (request.inputs.some((input) => input.role !== 'reference')) {
+        throw new MockProviderValidationError(
+          'Mock image.generate only accepts reference inputs.',
+        );
+      }
+    } else if (
+      count('source') !== 1 ||
+      count('mask') > 1 ||
+      count('first_frame') > 0 ||
+      count('last_frame') > 0
+    ) {
+      throw new MockProviderValidationError(
+        'Mock image.edit requires one source and accepts references plus one optional mask.',
+      );
     }
 
     if (request.aspectRatio && request.aspectRatio !== '1:1') {

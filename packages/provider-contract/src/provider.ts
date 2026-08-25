@@ -2,12 +2,22 @@ import type { GenerationRequest, MediaOperation } from '@imagine/shared';
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
+export interface ImageInputConstraints {
+  /** Normalized image MIME types accepted by the model. */
+  mimeTypes?: readonly string[];
+  maxBytes?: number;
+  maxPixels?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+}
+
 export interface ModelCapabilities {
   operations: readonly MediaOperation[];
   aspectRatios?: readonly string[];
   resolutions?: readonly string[];
   durations?: readonly number[] | { readonly min: number; readonly max: number };
   maxReferenceImages?: number;
+  inputImageConstraints?: ImageInputConstraints;
   supportsMask?: boolean;
   supportsNegativePrompt?: boolean;
   supportsSeed?: boolean;

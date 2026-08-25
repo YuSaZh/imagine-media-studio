@@ -151,6 +151,66 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(media.byteLength).toBeGreaterThan(0);
   });
 
+  it('validates durable edit inputs, hides masks by default, and links the result parent', async () => {
+    const server = await createTestServer();
+    const source = server.assets.create({
+      type: 'image',
+      role: 'upload',
+      filePath: 'media/uploads/edit-source.png',
+      originalFilename: 'edit-source.png',
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      fileSize: VALID_PNG.byteLength,
+      sha256: '2'.repeat(64),
+    });
+    const mask = server.assets.create({
+      type: 'image',
+      role: 'mask',
+      parentAssetId: source.id,
+      filePath: 'media/masks/edit-mask.png',
+      originalFilename: 'edit-mask.png',
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      fileSize: VALID_PNG.byteLength,
+      sha256: '3'.repeat(64),
+    });
+    const rejected = await server.app.inject({
+      method: 'POST',
+      url: '/internal/jobs',
+      payload: createMockGenerationRequest({
+        operation: 'image.edit',
+        inputs: [{ assetId: mask.id, role: 'mask' }],
+      }),
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json<{ error: string }>().error).toBe('source_input_required');
+
+    const accepted = await server.app.inject({
+      method: 'POST',
+      url: '/internal/jobs',
+      payload: createMockGenerationRequest({
+        operation: 'image.edit',
+        inputs: [
+          { assetId: source.id, role: 'source' },
+          { assetId: mask.id, role: 'mask' },
+        ],
+      }),
+    });
+    expect(accepted.statusCode).toBe(202);
+    const jobId = accepted.json<{ job: { id: string } }>().job.id;
+    await server.runner.waitForIdle();
+    expect(server.assets.page({ jobId }).items[0]?.parentAssetId).toBe(source.id);
+
+    const defaultAssets = await server.app.inject({ method: 'GET', url: '/internal/assets' });
+    expect(defaultAssets.json<{ items: Array<{ id: string }> }>().items.map((item) => item.id))
+      .not.toContain(mask.id);
+    const masks = await server.app.inject({ method: 'GET', url: '/internal/assets?role=mask' });
+    expect(masks.json<{ items: Array<{ id: string }> }>().items.map((item) => item.id))
+      .toContain(mask.id);
+  });
+
   it('recovers a claimed Mock Job when a new runner starts', async () => {
     const first = await createTestServer(false);
     const queued = first.jobs.create(createMockGenerationRequest({ prompt: 'Recover me' }));

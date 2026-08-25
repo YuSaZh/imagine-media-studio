@@ -16,6 +16,7 @@ import { SettingsRepository } from './database/settings.js';
 import { EventBroker } from './events/event-broker.js';
 import { OutboxPublisher } from './events/outbox-publisher.js';
 import { JobRunner } from './jobs/job-runner.js';
+import { GenerationInputResolver } from './jobs/generation-input-resolver.js';
 import { createSqliteRunnerOptions } from './jobs/sqlite-adapters.js';
 import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adapter.js';
 import { AssetMediaService } from './media/asset-media-service.js';
@@ -61,6 +62,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const settings = new SettingsRepository(database.orm);
   const providerRepository = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
+  const inputResolver = new GenerationInputResolver(assets, models);
   const collections = new CollectionRepository(database.orm);
   const changeEvents = new ChangeEventRepository(database.orm);
   const broker = new EventBroker();
@@ -199,6 +201,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       assets,
       collections,
       jobs,
+      inputResolver,
       media: uploadMedia,
       models,
       outbox,
