@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0, PR 1, PR 2, and PR 3 are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, and settings described in [`PLAN.MD`](./PLAN.MD).
+**PR 0, PR 1, PR 2, PR 3, and PR 4 are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, and verified real image Provider profiles described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -18,12 +18,15 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - Durable Job state machine, outbox, and one browser SSE connection
 - Optional application-password session gate
 - One Docker service and one `/data` volume
+- OpenAI Images/Responses, Gemini Native/Interactions, and xAI Imagine image profiles with capability-driven model catalogs
+- Bounded SSRF-safe Provider HTTP transport with response limits, timeouts, and server-only credentials
+- Durable JobRunner stage retries with Provider `retry-after` handling
 - Local lint, typecheck, unit, build, and isolated Playwright preflight
 - GitHub Actions quality, E2E, screenshot artifact, and Docker smoke verification
 
-Real providers remain intentionally out of scope until PR 4 and later. PR 3 production data flows use the deterministic Mock Provider; PR 1 visual fixtures are available only behind an explicit test session key and are never a production fallback. PR 1 strict Grok Imagine L3/L4 classification remains deferred because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
+PR 4 real image adapters are verified against official protocol fixtures, injected HTTP, and the single-container runtime boundary. No production external credentials or live Provider endpoints were used; credentialed external acceptance remains pending in [`Hold.md`](./Hold.md). PR 1 visual fixtures are available only behind an explicit test session key and are never a production fallback. PR 1 strict Grok Imagine L3/L4 classification remains deferred because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
 
-PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), PR 2 evidence in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md), and PR 3 evidence in [`docs/architecture/pr3-verification.md`](./docs/architecture/pr3-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
+PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), PR 2 evidence in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md), PR 3 evidence in [`docs/architecture/pr3-verification.md`](./docs/architecture/pr3-verification.md), and PR 4 evidence in [`docs/architecture/pr4-verification.md`](./docs/architecture/pr4-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 PR 3 desktop/mobile screenshots and visual review are in [`artifacts/visual/pr3`](./artifacts/visual/pr3) and [`artifacts/visual/pr3/visual-diff-report.md`](./artifacts/visual/pr3/visual-diff-report.md).
 
 ## Local Safety

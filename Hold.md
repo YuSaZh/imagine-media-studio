@@ -19,7 +19,7 @@ This file records non-blocking work that cannot currently be proven or completed
 ### Production bundle advisory
 
 - **Affects:** PR 7 performance polish.
-- **Status:** The production entry chunk remains above Vite's 500 kB advisory threshold; the PR 3 editor route is already split.
+- **Status:** The production entry chunk remains above Vite's 500 kB advisory threshold (564.46 kB in the final PR 4 build); the PR 3 editor route is already split.
 - **Current handling:** Defer broader route/vendor splitting to PR 7 and keep the warning non-blocking for PR 4.
 
 ### Provider terminal cleanup compensation
