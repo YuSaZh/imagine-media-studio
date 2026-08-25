@@ -1,6 +1,10 @@
-import { useState, type ReactNode } from 'react';
-import { Check, Cloud, Database, Download, HardDrive, PlugZap, SlidersHorizontal } from 'lucide-react';
+import { Database, Download, HardDrive, PlugZap, SlidersHorizontal } from 'lucide-react';
 import { NavLink, useOutletContext } from 'react-router-dom';
+
+import { isVisualFixtureMode } from '../../../visual-fixture.js';
+import { GeneralSettings } from './general-settings.js';
+import { ProviderSettings } from './provider-settings.js';
+import { SettingRow } from './settings-controls.js';
 
 interface SettingsPageProps {
   section: 'general' | 'providers' | 'pwa' | 'storage';
@@ -12,71 +16,6 @@ const settingsNavigation = [
   { id: 'storage', label: 'Storage', icon: <Database size={17} />, to: '/settings/storage' },
   { id: 'pwa', label: 'App', icon: <Download size={17} />, to: '/settings/pwa' },
 ] as const;
-
-function SettingRow({ children, description, label }: { children: ReactNode; description: string; label: string }) {
-  return (
-    <div className="setting-row">
-      <div><strong>{label}</strong><span>{description}</span></div>
-      <div className="setting-control">{children}</div>
-    </div>
-  );
-}
-
-function GeneralSettings() {
-  return (
-    <>
-      <div className="settings-heading"><p className="page-eyebrow">Workspace</p><h1>General</h1></div>
-      <section className="settings-section" aria-labelledby="generation-defaults">
-        <h2 id="generation-defaults">Generation defaults</h2>
-        <SettingRow label="Default mode" description="Selected when the Composer opens.">
-          <select aria-label="Default mode" defaultValue="image"><option value="image">Image</option><option value="video">Video</option></select>
-        </SettingRow>
-        <SettingRow label="Clear prompt after submit" description="Keep references until removed manually.">
-          <label className="toggle"><input aria-label="Clear prompt after submit" defaultChecked type="checkbox" /><span /></label>
-        </SettingRow>
-        <SettingRow label="Reduce motion" description="Follow the system preference by default.">
-          <select aria-label="Reduce motion" defaultValue="system"><option value="system">System</option><option value="always">Always</option><option value="never">Never</option></select>
-        </SettingRow>
-      </section>
-      <section className="settings-section" aria-labelledby="gallery-defaults">
-        <h2 id="gallery-defaults">Gallery</h2>
-        <SettingRow label="Initial filter" description="The first view shown in Imagine.">
-          <select aria-label="Initial filter" defaultValue="all"><option value="all">All media</option><option value="image">Images</option><option value="video">Videos</option></select>
-        </SettingRow>
-        <SettingRow label="Autoplay previews" description="Muted video previews on pointer hover.">
-          <label className="toggle"><input aria-label="Autoplay previews" type="checkbox" /><span /></label>
-        </SettingRow>
-      </section>
-    </>
-  );
-}
-
-function ProviderSettings() {
-  const [tested, setTested] = useState(false);
-  return (
-    <>
-      <div className="settings-heading"><p className="page-eyebrow">Connections</p><h1>Providers</h1></div>
-      <section className="provider-list" aria-label="Configured providers">
-        <article className="provider-card">
-          <div className="provider-card-heading">
-            <span className="provider-icon"><Cloud size={19} /></span>
-            <div><h2>Studio Mock</h2><p>Deterministic PR 1 fixture provider</p></div>
-            <span className="provider-state"><Check size={14} />Default</span>
-          </div>
-          <div className="provider-fields">
-            <label><span>Provider type</span><input disabled value="Mock Provider" readOnly /></label>
-            <label><span>Models</span><input disabled value="Studio Image, Studio Motion" readOnly /></label>
-          </div>
-          <div className="provider-card-actions">
-            <button onClick={() => setTested(true)} type="button">{tested ? 'Connection ready' : 'Test connection'}</button>
-            <button disabled type="button">Configure</button>
-          </div>
-        </article>
-      </section>
-      <button className="add-provider-button" disabled type="button"><PlugZap size={17} />Add provider</button>
-    </>
-  );
-}
 
 function StorageSettings() {
   return (
@@ -122,6 +61,7 @@ function PwaSettings({ isOnline, isStandalone }: { isOnline: boolean; isStandalo
 
 export function SettingsPage({ section }: SettingsPageProps) {
   const runtime = useOutletContext<{ isOnline: boolean; isStandalone: boolean }>();
+  const fixtureMode = isVisualFixtureMode();
   return (
     <div className="settings-page">
       <aside className="settings-navigation" aria-label="Settings navigation">
@@ -132,8 +72,8 @@ export function SettingsPage({ section }: SettingsPageProps) {
         ))}
       </aside>
       <div className="settings-content">
-        {section === 'general' && <GeneralSettings />}
-        {section === 'providers' && <ProviderSettings />}
+        {section === 'general' && <GeneralSettings fixtureMode={fixtureMode} />}
+        {section === 'providers' && <ProviderSettings fixtureMode={fixtureMode} />}
         {section === 'storage' && <StorageSettings />}
         {section === 'pwa' && <PwaSettings {...runtime} />}
       </div>

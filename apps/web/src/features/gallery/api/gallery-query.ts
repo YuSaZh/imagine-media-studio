@@ -1,7 +1,16 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
+import type {
+  GenerationRequest,
+  JsonObject,
+  JsonValue,
+  ModelDto,
+  ProviderDto,
+} from '@imagine/shared';
 
+import { internalClient } from '../../../api/internal-client.js';
+import { internalQueryKeys } from '../../../api/query-keys.js';
 import {
   PR1_MOCK_FOLDERS,
   PR1_MOCK_GALLERY_ITEMS,
@@ -13,12 +22,24 @@ import type {
   FixtureFolder,
   FixtureGalleryItem,
   FixtureJobStatus,
+  FixtureMediaOperation,
+  FixtureModel,
+  FixtureProvider,
 } from '../model/types.js';
+import { mapInternalGallery } from '../model/api-mapper.js';
 
-export const galleryQueryKey = ['pr1-gallery-fixture'] as const;
+export const VISUAL_FIXTURE_STORAGE_KEY = 'imagine.visual-fixtures';
+export const VISUAL_FIXTURE_VERSION = 'pr1-v1';
+
+export const galleryQueryKey = internalQueryKeys.gallery;
 export const optimisticSequenceQueryKey = ['pr1-gallery-optimistic-sequence'] as const;
-export const providerQueryKey = ['pr1-provider-fixture'] as const;
-export const modelsQueryKey = ['pr1-model-fixtures'] as const;
+export const providerQueryKey = internalQueryKeys.providers;
+export const modelsQueryKey = internalQueryKeys.models;
+export const foldersQueryKey = internalQueryKeys.collections;
+
+export function folderQueryKey(folderId: string | undefined) {
+  return [...foldersQueryKey, 'folder', folderId ?? 'none'] as const;
+}
 
 const MOCK_SUBMISSION_EPOCH_MS = Date.parse('2026-08-25T00:00:00.000Z');
 const ACTIVE_STATUSES = new Set<FixtureJobStatus>([
@@ -30,23 +51,172 @@ const ACTIVE_STATUSES = new Set<FixtureJobStatus>([
   'processing',
 ]);
 
-async function loadGalleryFixture(): Promise<readonly FixtureGalleryItem[]> {
-  return PR1_MOCK_GALLERY_ITEMS;
+interface CursorPage<T> {
+  readonly items: readonly T[];
+  readonly nextCursor: string | null;
+}
+
+export interface GalleryModel extends FixtureModel {
+  readonly providerId: string;
+}
+
+function sessionStorageValue(): string | null {
+  try {
+    return globalThis.sessionStorage?.getItem(VISUAL_FIXTURE_STORAGE_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function isVisualFixtureMode(): boolean {
+  return sessionStorageValue() === VISUAL_FIXTURE_VERSION;
+}
+
+async function collectPages<T>(
+  load: (cursor: string | undefined) => Promise<CursorPage<T>>,
+): Promise<readonly T[]> {
+  const items: T[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let pageIndex = 0; pageIndex < 10_000; pageIndex += 1) {
+    const page = await load(cursor);
+    items.push(...page.items);
+    if (page.nextCursor === null) return items;
+    if (seenCursors.has(page.nextCursor)) {
+      throw new Error('Internal API returned a repeated pagination cursor.');
+    }
+    seenCursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
+  throw new Error('Internal API pagination exceeded the safety limit.');
+}
+
+function withCursor(cursor: string | undefined): { cursor?: string; limit: number } {
+  return cursor === undefined ? { limit: 100 } : { cursor, limit: 100 };
+}
+
+const knownAspectRatios = new Set<FixtureAspectRatio>(['2:3', '3:2', '1:1', '9:16', '16:9']);
+const knownOperations = new Set<FixtureMediaOperation>([
+  'image.generate',
+  'image.edit',
+  'video.generate',
+  'video.image_to_video',
+]);
+
+function isObject(value: JsonValue | undefined): value is JsonObject {
+  return value !== null && value !== undefined && !Array.isArray(value) && typeof value === 'object';
+}
+
+function stringArray(value: JsonValue | undefined): readonly string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function numberArray(value: JsonValue | undefined): readonly number[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+  }
+  if (isObject(value)) {
+    return [value.min, value.max].filter(
+      (item): item is number => typeof item === 'number' && Number.isFinite(item),
+    );
+  }
+  return [];
+}
+
+function positiveInteger(value: JsonValue | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function mapInternalModel(model: ModelDto): GalleryModel {
+  const capabilities = model.capabilities;
+  const operations = stringArray(capabilities.operations).filter(
+    (operation): operation is FixtureMediaOperation => knownOperations.has(operation as FixtureMediaOperation),
+  );
+  const mediaKind = operations.some((operation) => operation.startsWith('video.'))
+    ? 'video'
+    : 'image';
+  const aspectRatios = stringArray(capabilities.aspectRatios).filter(
+    (ratio): ratio is FixtureAspectRatio => knownAspectRatios.has(ratio as FixtureAspectRatio),
+  );
+  const supportsBatchCount = capabilities.supportsBatchCount === true;
+  return {
+    id: model.modelId,
+    providerId: model.providerId,
+    displayName: model.displayName,
+    mediaKind,
+    capabilities: {
+      operations,
+      aspectRatios: aspectRatios.length > 0 ? aspectRatios : ['1:1'],
+      resolutions: stringArray(capabilities.resolutions),
+      durations: numberArray(capabilities.durations),
+      maxReferenceImages: positiveInteger(capabilities.maxReferenceImages, 0),
+      supportsMask: capabilities.supportsMask === true,
+      supportsProgress: capabilities.supportsProgress === true,
+      supportsCancel: capabilities.supportsCancel === true,
+      supportsBatchCount,
+      maxBatchCount: supportsBatchCount ? positiveInteger(capabilities.maxBatchCount, 1) : 1,
+    },
+  };
+}
+
+function visualModels(): readonly GalleryModel[] {
+  return PR1_MOCK_PROVIDER.models.map((model) => ({
+    ...model,
+    providerId: PR1_MOCK_PROVIDER.id,
+  }));
+}
+
+export async function loadModelsData(): Promise<readonly GalleryModel[]> {
+  if (isVisualFixtureMode()) return visualModels();
+  const models = await collectPages((cursor) =>
+    internalClient.listModels({ ...withCursor(cursor), enabled: true }),
+  );
+  return models.map(mapInternalModel);
+}
+
+function mapInternalProvider(
+  provider: ProviderDto,
+  models: readonly GalleryModel[],
+): FixtureProvider {
+  return {
+    id: provider.id,
+    type: provider.type,
+    displayName: provider.name,
+    enabled: provider.enabled,
+    isDefault: provider.isDefault,
+    models: models.filter((model) => model.providerId === provider.id),
+  };
+}
+
+export async function loadProviderData(): Promise<FixtureProvider | null> {
+  if (isVisualFixtureMode()) return PR1_MOCK_PROVIDER;
+  const [providers, models] = await Promise.all([
+    collectPages((cursor) => internalClient.listProviders({ ...withCursor(cursor), enabled: true })),
+    loadModelsData(),
+  ]);
+  const provider = providers.find((candidate) => candidate.isDefault) ?? providers[0];
+  return provider ? mapInternalProvider(provider, models) : null;
+}
+
+export async function loadGalleryData(): Promise<readonly FixtureGalleryItem[]> {
+  if (isVisualFixtureMode()) return PR1_MOCK_GALLERY_ITEMS;
+  const [assets, jobs] = await Promise.all([
+    collectPages((cursor) => internalClient.listAssets(withCursor(cursor))),
+    collectPages((cursor) => internalClient.listJobs(withCursor(cursor))),
+  ]);
+  return mapInternalGallery(assets, jobs);
 }
 
 export function useGalleryQuery() {
-  return useQuery({ queryKey: galleryQueryKey, queryFn: loadGalleryFixture });
+  return useQuery({ queryKey: galleryQueryKey, queryFn: () => loadGalleryData() });
 }
 
 export function useProviderQuery() {
-  return useQuery({ queryKey: providerQueryKey, queryFn: async () => PR1_MOCK_PROVIDER });
+  return useQuery({ queryKey: providerQueryKey, queryFn: () => loadProviderData() });
 }
 
 export function useModelsQuery() {
-  return useQuery({
-    queryKey: modelsQueryKey,
-    queryFn: async () => PR1_MOCK_PROVIDER.models,
-  });
+  return useQuery({ queryKey: modelsQueryKey, queryFn: () => loadModelsData() });
 }
 
 function deriveFolders(items: readonly FixtureGalleryItem[]): readonly FixtureFolder[] {
@@ -57,10 +227,25 @@ function deriveFolders(items: readonly FixtureGalleryItem[]): readonly FixtureFo
 }
 
 export function useFoldersQuery() {
+  const queryClient = useQueryClient();
   return useQuery({
-    queryKey: galleryQueryKey,
-    queryFn: loadGalleryFixture,
-    select: deriveFolders,
+    queryKey: foldersQueryKey,
+    queryFn: async (): Promise<readonly FixtureFolder[]> => {
+      if (isVisualFixtureMode()) {
+        return deriveFolders(
+          queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ??
+            PR1_MOCK_GALLERY_ITEMS,
+        );
+      }
+      const collections = await collectPages((cursor) =>
+        internalClient.listCollections(withCursor(cursor)),
+      );
+      return collections.map((collection) => ({
+        id: collection.id,
+        name: collection.name,
+        itemIds: [],
+      }));
+    },
   });
 }
 
@@ -70,14 +255,43 @@ export interface FolderGalleryResult {
 }
 
 export function useFolderQuery(folderId: string | undefined) {
+  const visualFixtures = isVisualFixtureMode();
+  const queryClient = useQueryClient();
   return useQuery({
-    queryKey: galleryQueryKey,
-    queryFn: loadGalleryFixture,
-    select: (items): FolderGalleryResult => {
-      const folder = deriveFolders(items).find((candidate) => candidate.id === folderId) ?? null;
+    enabled: visualFixtures || folderId !== undefined,
+    queryKey: folderQueryKey(folderId),
+    queryFn: async (): Promise<FolderGalleryResult> => {
+      if (visualFixtures) {
+        const items =
+          queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ??
+          PR1_MOCK_GALLERY_ITEMS;
+        const folder = deriveFolders(items).find((candidate) => candidate.id === folderId) ?? null;
+        return {
+          folder,
+          items: folder === null ? [] : items.filter((item) => item.folderIds.includes(folder.id)),
+        };
+      }
+      if (folderId === undefined) return { folder: null, items: [] };
+      const [collections, assets, jobs] = await Promise.all([
+        collectPages((cursor) => internalClient.listCollections(withCursor(cursor))),
+        collectPages((cursor) =>
+          internalClient.listAssets({ ...withCursor(cursor), collectionId: folderId }),
+        ),
+        collectPages((cursor) => internalClient.listJobs(withCursor(cursor))),
+      ]);
+      const collection = collections.find((candidate) => candidate.id === folderId) ?? null;
+      const folderJobIds = new Set(
+        assets.flatMap((asset) => asset.jobId === null ? [] : [asset.jobId]),
+      );
+      const items = mapInternalGallery(
+        assets,
+        jobs.filter((job) => folderJobIds.has(job.id)),
+      );
       return {
-        folder,
-        items: folder === null ? [] : items.filter((item) => item.folderIds.includes(folder.id)),
+        folder: collection === null
+          ? null
+          : { id: collection.id, name: collection.name, itemIds: items.map((item) => item.id) },
+        items: collection === null ? [] : items,
       };
     },
   });
@@ -122,7 +336,7 @@ export function reduceGalleryItems(
       });
     case 'retry':
       return updateItem(items, action.itemId, (item) => {
-        if (!['failed', 'cancelled', 'rejected'].includes(item.status)) return item;
+        if (!['expired', 'failed', 'cancelled', 'rejected'].includes(item.status)) return item;
         return {
           ...item,
           status: 'queued',
@@ -156,17 +370,101 @@ export function applyGalleryCacheAction(
   queryClient: QueryClient,
   action: GalleryCacheAction,
 ): void {
-  queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, (current = []) =>
-    reduceGalleryItems(current, action),
-  );
+  let nextItems: readonly FixtureGalleryItem[] = [];
+  queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, (current = []) => {
+    nextItems = reduceGalleryItems(current, action);
+    return nextItems;
+  });
+  const folders = deriveFolders(nextItems);
+  queryClient.setQueryData(foldersQueryKey, folders);
+  for (const folder of folders) {
+    queryClient.setQueryData<FolderGalleryResult>(folderQueryKey(folder.id), {
+      folder,
+      items: nextItems.filter((item) => item.folderIds.includes(folder.id)),
+    });
+  }
+}
+
+function isPersistedAsset(item: FixtureGalleryItem): boolean {
+  return !item.id.startsWith('job-slot-') && !item.id.startsWith('optimistic-');
+}
+
+function itemForAction(
+  items: readonly FixtureGalleryItem[],
+  itemId: string,
+): FixtureGalleryItem | null {
+  return items.find((item) => item.id === itemId) ?? null;
+}
+
+export async function executeGalleryAction(
+  action: GalleryCacheAction,
+  items: readonly FixtureGalleryItem[],
+): Promise<void> {
+  if (action.type === 'removeMany') {
+    const uniqueIds = [...new Set(action.itemIds)];
+    await Promise.all(
+      uniqueIds.map((itemId) =>
+        executeGalleryAction({ type: 'remove', itemId }, items),
+      ),
+    );
+    return;
+  }
+
+  const item = itemForAction(items, action.itemId);
+  if (!item) return;
+  switch (action.type) {
+    case 'toggleSaved':
+      if (isPersistedAsset(item)) {
+        await internalClient.patchAsset(item.id, !item.saved);
+      }
+      return;
+    case 'toggleFolder':
+      if (!isPersistedAsset(item)) return;
+      if (item.folderIds.includes(action.folderId)) {
+        await internalClient.removeCollectionAsset(action.folderId, item.id);
+      } else {
+        await internalClient.addCollectionAssets(action.folderId, [item.id]);
+      }
+      return;
+    case 'retry':
+      await internalClient.retryJob(item.jobId);
+      return;
+    case 'cancel':
+      await internalClient.cancelJob(item.jobId);
+      return;
+    case 'remove':
+      if (isPersistedAsset(item)) {
+        await internalClient.deleteAsset(item.id);
+      } else {
+        await internalClient.deleteJob(item.jobId);
+      }
+      return;
+  }
 }
 
 export function useGalleryActions() {
   const queryClient = useQueryClient();
-  const apply = useCallback(
-    (action: GalleryCacheAction) => applyGalleryCacheAction(queryClient, action),
-    [queryClient],
-  );
+  const visualFixtures = isVisualFixtureMode();
+  const mutation = useMutation<void, Error, GalleryCacheAction>({
+    mutationFn: async (action) => {
+      if (visualFixtures) return;
+      const items = queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ?? [];
+      await executeGalleryAction(action, items);
+    },
+    onMutate: (action) => {
+      if (visualFixtures) applyGalleryCacheAction(queryClient, action);
+    },
+    onSuccess: async () => {
+      if (visualFixtures) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: internalQueryKeys.assets }),
+        queryClient.invalidateQueries({ queryKey: internalQueryKeys.jobs }),
+        queryClient.invalidateQueries({ queryKey: internalQueryKeys.collections }),
+        queryClient.invalidateQueries({ queryKey: galleryQueryKey }),
+      ]);
+    },
+  });
+  const apply = useCallback((action: GalleryCacheAction) => mutation.mutate(action), [mutation]);
 
   return {
     toggleSaved: useCallback((itemId: string) => apply({ type: 'toggleSaved', itemId }), [apply]),
@@ -188,10 +486,12 @@ export interface MockSubmission {
   readonly mode: 'image' | 'video';
   readonly prompt: string;
   readonly modelId: string;
+  readonly providerId?: string;
   readonly count: number;
   readonly aspectRatio: FixtureAspectRatio;
   readonly durationSeconds: number | null;
   readonly referenceCount: number;
+  readonly referenceAssetIds?: readonly string[];
 }
 
 function normalizedInteger(value: number, minimum: number, maximum: number): number {
@@ -323,15 +623,79 @@ export function rollbackOptimisticSubmission(
   );
 }
 
-export function useMockSubmission() {
-  const queryClient = useQueryClient();
+function operationForSubmission(
+  input: MockSubmission,
+  model: GalleryModel,
+): FixtureMediaOperation {
+  const hasReferences = (input.referenceAssetIds?.length ?? 0) > 0;
+  const preferred: FixtureMediaOperation = input.mode === 'image'
+    ? (hasReferences ? 'image.edit' : 'image.generate')
+    : (hasReferences ? 'video.image_to_video' : 'video.generate');
+  if (model.capabilities.operations.includes(preferred)) return preferred;
+  const fallback = model.capabilities.operations.find((operation) =>
+    operation.startsWith(`${input.mode}.`),
+  );
+  if (!fallback) {
+    throw new Error(`Model ${model.id} does not support ${input.mode} generation.`);
+  }
+  return fallback;
+}
 
-  return useMutation<MockSubmission, Error, MockSubmission, MockSubmissionContext>({
+export function createGenerationRequest(
+  input: MockSubmission,
+  models: readonly GalleryModel[],
+): GenerationRequest {
+  const model = models.find((candidate) => candidate.id === input.modelId);
+  if (!model || model.mediaKind !== input.mode) {
+    throw new Error(`Model ${input.modelId} is not available for ${input.mode} generation.`);
+  }
+  const referenceAssetIds = input.referenceAssetIds ?? [];
+  return {
+    operation: operationForSubmission(input, model),
+    providerId: input.providerId ?? model.providerId,
+    modelId: model.id,
+    prompt: input.prompt,
+    inputs: referenceAssetIds.map((assetId) => ({ assetId, role: 'reference' as const })),
+    aspectRatio: input.aspectRatio,
+    count: input.mode === 'video' ? 1 : normalizedInteger(input.count, 1, 4),
+    ...(input.mode === 'video'
+      ? { durationSeconds: normalizedInteger(input.durationSeconds ?? 5, 1, 60) }
+      : {}),
+  };
+}
+
+export function useGallerySubmission() {
+  const queryClient = useQueryClient();
+  const visualFixtures = isVisualFixtureMode();
+
+  return useMutation<
+    MockSubmission,
+    Error,
+    MockSubmission,
+    MockSubmissionContext | undefined
+  >({
     mutationFn: async (input) => {
-      await Promise.resolve();
+      if (!visualFixtures) {
+        const models =
+          queryClient.getQueryData<readonly GalleryModel[]>(modelsQueryKey) ?? await loadModelsData();
+        await internalClient.createJob(createGenerationRequest(input, models));
+      }
       return input;
     },
-    onMutate: (input) => applyOptimisticSubmission(queryClient, input),
-    onError: (_error, _input, context) => rollbackOptimisticSubmission(queryClient, context),
+    onMutate: (input) => visualFixtures
+      ? applyOptimisticSubmission(queryClient, input)
+      : undefined,
+    onError: (_error, _input, context) => {
+      if (visualFixtures) rollbackOptimisticSubmission(queryClient, context);
+    },
+    onSuccess: async () => {
+      if (visualFixtures) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: internalQueryKeys.jobs }),
+        queryClient.invalidateQueries({ queryKey: galleryQueryKey }),
+      ]);
+    },
   });
 }
+
+export const useMockSubmission = useGallerySubmission;

@@ -12,7 +12,11 @@ import { ArrowUp, Image as ImageIcon, Plus, Settings2, Video, X } from 'lucide-r
 
 import { IconButton } from '../../../components/icon-button';
 import { useUiStore } from '../../../stores/ui-store';
-import { useGalleryQuery, useMockSubmission, useModelsQuery } from '../../gallery/api/gallery-query';
+import {
+  useGalleryQuery,
+  useGallerySubmission,
+  useModelsQuery,
+} from '../../gallery/api/gallery-query';
 import type { FixtureAspectRatio } from '../../gallery/model/types';
 
 interface ReferencePreview {
@@ -47,7 +51,7 @@ export function Composer({ isOnline }: ComposerProps) {
   const setParamsOpen = useUiStore((state) => state.setComposerParamsOpen);
   const { data: galleryItems = [] } = useGalleryQuery();
   const { data: models = [] } = useModelsQuery();
-  const submission = useMockSubmission();
+  const submission = useGallerySubmission();
   const selectedModel =
     models.find((model) => model.id === modelId && model.mediaKind === composerMode) ??
     models.find((model) => model.mediaKind === composerMode);
@@ -179,10 +183,13 @@ export function Composer({ isOnline }: ComposerProps) {
         mode: composerMode,
         prompt: prompt.trim(),
         modelId: selectedModel.id,
+        providerId: selectedModel.providerId,
         count,
         aspectRatio,
         durationSeconds: composerMode === 'video' ? duration : null,
         referenceCount: totalReferenceCount,
+        // Local files remain previews until the upload flow returns durable asset IDs.
+        referenceAssetIds: storedReferences.map((reference) => reference.id),
       },
       {
         onSuccess: () => {

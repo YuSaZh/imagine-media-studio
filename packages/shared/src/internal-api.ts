@@ -57,6 +57,18 @@ export const SafeConfigSchema = JsonObjectSchema.superRefine((value, context) =>
 
 export const IsoTimestampSchema = z.string().datetime({ offset: true });
 
+export const AuthStatusSchema = z.object({
+  authenticated: z.boolean(),
+  required: z.boolean(),
+}).strict();
+
+export const AuthLoginSchema = z.object({
+  password: z.string().min(1).max(1024),
+}).strict();
+
+export type AuthStatus = z.infer<typeof AuthStatusSchema>;
+export type AuthLogin = z.infer<typeof AuthLoginSchema>;
+
 export const CursorPageQuerySchema = z.object({
   cursor: z.string().min(1).max(2048).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),

@@ -31,7 +31,9 @@ const FILTERS: Array<{ id: GalleryFilter; label: string }> = [
 function matchesFilter(item: FixtureGalleryItem, filter: GalleryFilter): boolean {
   if (filter === 'image' || filter === 'video') return item.kind === filter;
   if (filter === 'in-progress') return ACTIVE_STATUSES.has(item.status);
-  if (filter === 'failed') return item.status === 'failed' || item.status === 'rejected';
+  if (filter === 'failed') {
+    return item.status === 'expired' || item.status === 'failed' || item.status === 'rejected';
+  }
   if (filter === 'favorites') return item.saved;
   return true;
 }

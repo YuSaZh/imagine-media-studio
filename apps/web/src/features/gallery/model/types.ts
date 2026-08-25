@@ -9,6 +9,7 @@ export const PR1_JOB_STATUSES = [
   'failed',
   'cancelled',
   'rejected',
+  'expired',
 ] as const;
 
 export type FixtureJobStatus = (typeof PR1_JOB_STATUSES)[number];
@@ -43,15 +44,15 @@ export interface FixtureModel {
 
 export interface FixtureProvider {
   readonly id: string;
-  readonly type: 'mock';
+  readonly type: string;
   readonly displayName: string;
-  readonly enabled: true;
-  readonly isDefault: true;
+  readonly enabled: boolean;
+  readonly isDefault: boolean;
   readonly models: readonly FixtureModel[];
 }
 
 export interface FixtureError {
-  readonly code: 'fixture_failed' | 'fixture_rejected';
+  readonly code: string;
   readonly message: string;
   readonly retryable: boolean;
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AssetDtoSchema,
+  AuthLoginSchema,
+  AuthStatusSchema,
   InternalEventSchema,
   ProviderCreateSchema,
   ProviderDtoSchema,
@@ -9,6 +11,21 @@ import {
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
+  it('keeps authentication status and login payloads strict', () => {
+    expect(AuthStatusSchema.parse({ authenticated: false, required: true })).toEqual({
+      authenticated: false,
+      required: true,
+    });
+    expect(
+      AuthStatusSchema.safeParse({ authenticated: true, required: true, token: 'forbidden' }).success,
+    ).toBe(false);
+    expect(AuthLoginSchema.parse({ password: 'local-password' })).toEqual({
+      password: 'local-password',
+    });
+    expect(AuthLoginSchema.safeParse({ password: '' }).success).toBe(false);
+    expect(AuthLoginSchema.safeParse({ password: 'x', remember: true }).success).toBe(false);
+  });
+
   it('keeps Provider DTOs strict and secret-free', () => {
     const safeProvider = {
       id: 'provider-1',

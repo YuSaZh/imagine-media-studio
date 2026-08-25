@@ -126,6 +126,7 @@ const STATUS_BY_IMAGE_INDEX: ReadonlyMap<number, FixtureJobStatus> = new Map([
   [18, 'failed'],
   [21, 'cancelled'],
   [24, 'rejected'],
+  [27, 'expired'],
 ]);
 
 const STATUS_STAGE = {
@@ -139,6 +140,7 @@ const STATUS_STAGE = {
   failed: 'Generation failed',
   cancelled: 'Cancelled',
   rejected: 'Request rejected',
+  expired: 'Provider result expired',
 } as const satisfies Readonly<Record<FixtureJobStatus, string>>;
 
 const STATUS_PROGRESS = {
@@ -152,6 +154,7 @@ const STATUS_PROGRESS = {
   failed: null,
   cancelled: null,
   rejected: null,
+  expired: null,
 } as const satisfies Readonly<Record<FixtureJobStatus, number | null>>;
 
 export const PR1_MOCK_PROVIDER = {
@@ -231,6 +234,13 @@ function errorFor(status: FixtureJobStatus): FixtureError | null {
       code: 'fixture_rejected',
       message: 'Revise the prompt before trying again.',
       retryable: false,
+    };
+  }
+  if (status === 'expired') {
+    return {
+      code: 'fixture_expired',
+      message: 'The remote result expired before it could be downloaded.',
+      retryable: true,
     };
   }
   return null;

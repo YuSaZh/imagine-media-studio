@@ -7,7 +7,7 @@ import { useUiStore } from '../../../stores/ui-store';
 import { useGalleryActions } from '../api/gallery-query';
 import type { FixtureFolder, FixtureGalleryItem, FixtureJobStatus } from '../model/types';
 
-const TERMINAL_ERROR_STATUSES = new Set<FixtureJobStatus>(['failed', 'rejected']);
+const TERMINAL_ERROR_STATUSES = new Set<FixtureJobStatus>(['expired', 'failed', 'rejected']);
 const ACTIVE_STATUSES = new Set<FixtureJobStatus>([
   'queued',
   'submitting',

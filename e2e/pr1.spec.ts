@@ -3,6 +3,12 @@ import { resolve } from 'node:path';
 
 import { expect, test, type Page } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('imagine.visual-fixtures', 'pr1-v1');
+  });
+});
+
 async function dismissPwaNotice(page: Page): Promise<void> {
   const dismiss = page.getByRole('button', { name: 'Dismiss' });
   if (await dismiss.isVisible()) await dismiss.click();
