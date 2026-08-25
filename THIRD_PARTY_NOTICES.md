@@ -12,6 +12,28 @@ Consequently, no code or assets from these reviewed repositories are incorporate
 | [`lidge-jun/ima2-gen`](https://github.com/lidge-jun/ima2-gen) | [`b7369f8a4c042249dcaa282270421d0faa7ed4fe`](https://github.com/lidge-jun/ima2-gen/commit/b7369f8a4c042249dcaa282270421d0faa7ed4fe) | MIT |
 | [`alasano/sora-2-playground`](https://github.com/alasano/sora-2-playground) | [`54d746350c2e0705bbfcec65cf27048aa6cbe556`](https://github.com/alasano/sora-2-playground/commit/54d746350c2e0705bbfcec65cf27048aa6cbe556) | MIT |
 
+## Runtime dependency notice policy
+
+Imagine Media Studio uses third-party packages installed from the exact versions in `pnpm-lock.yaml`. The table below records the direct browser runtime dependencies introduced or used by the PR 1 interface. It is an inventory, not a replacement for the complete license text distributed with each package.
+
+| Package | Version | License |
+| --- | --- | --- |
+| `@radix-ui/react-dialog` | `1.1.23` | MIT |
+| `@radix-ui/react-popover` | `1.1.23` | MIT |
+| `@radix-ui/react-tooltip` | `1.2.16` | MIT |
+| `@tanstack/react-query` | `5.102.3` | MIT |
+| `@tanstack/react-virtual` | `3.14.10` | MIT |
+| `lucide-react` | `1.34.0` | ISC |
+| `react` | `19.2.8` | MIT |
+| `react-dom` | `19.2.8` | MIT |
+| `react-router-dom` | `7.18.2` | MIT |
+| `workbox-window` | `7.4.1` | MIT |
+| `zustand` | `5.0.15` | MIT |
+
+Before a release artifact is published, the release process must derive a complete production dependency inventory from the frozen lockfile and retain each applicable package copyright and full license text in the distributed notices. Transitive dependencies are included by that release inventory even though this source-level summary lists only direct browser dependencies. Package metadata and the license files shipped in the installed package remain authoritative.
+
+The Lucide icons used by the interface are imported from `lucide-react` and are covered by its ISC license; they are not copied from Grok or a reviewed donor project. PR 1 Mock media is project-authored and documented separately in [`docs/third-party/pr1-asset-provenance.md`](docs/third-party/pr1-asset-provenance.md).
+
 ## Gate for future reuse
 
 Before any code, tests, fixtures, or assets from a reviewed repository are copied, substantially rewritten, linked, bundled, or distributed by this project, the implementing change must:

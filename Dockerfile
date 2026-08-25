@@ -31,7 +31,8 @@ RUN pnpm build
 RUN pnpm --filter @imagine/server --prod deploy --legacy /opt/imagine-server
 RUN mkdir -p /opt/imagine-server/public /opt/imagine-server/migrations \
   && cp -R apps/web/dist/. /opt/imagine-server/public/ \
-  && cp -R apps/server/migrations/. /opt/imagine-server/migrations/
+  && cp -R apps/server/migrations/. /opt/imagine-server/migrations/ \
+  && cp LICENSE THIRD_PARTY_NOTICES.md /opt/imagine-server/
 
 FROM node:24-bookworm-slim AS runtime
 

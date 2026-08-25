@@ -6,6 +6,13 @@ coverage/
 
 # Test and browser output
 playwright-report/
+artifacts/*
+!artifacts/visual/
+artifacts/visual/*
+!artifacts/visual/pr1/
+!artifacts/visual/pr1/*.png
+!artifacts/visual/pr1/visual-diff-report.md
+artifacts/visual/pr1/states/
 test-results/
 blob-report/
 

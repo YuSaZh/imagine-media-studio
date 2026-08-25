@@ -1,0 +1,110 @@
+export const PR1_JOB_STATUSES = [
+  'queued',
+  'submitting',
+  'remote_pending',
+  'remote_running',
+  'downloading',
+  'processing',
+  'completed',
+  'failed',
+  'cancelled',
+  'rejected',
+] as const;
+
+export type FixtureJobStatus = (typeof PR1_JOB_STATUSES)[number];
+
+export type FixtureMediaOperation =
+  | 'image.generate'
+  | 'image.edit'
+  | 'video.generate'
+  | 'video.image_to_video';
+
+export type FixtureAspectRatio = '2:3' | '3:2' | '1:1' | '9:16' | '16:9';
+
+export interface FixtureCapabilities {
+  readonly operations: readonly FixtureMediaOperation[];
+  readonly aspectRatios: readonly FixtureAspectRatio[];
+  readonly resolutions: readonly string[];
+  readonly durations: readonly number[];
+  readonly maxReferenceImages: number;
+  readonly supportsMask: boolean;
+  readonly supportsProgress: boolean;
+  readonly supportsCancel: boolean;
+  readonly supportsBatchCount: boolean;
+  readonly maxBatchCount: number;
+}
+
+export interface FixtureModel {
+  readonly id: string;
+  readonly displayName: string;
+  readonly mediaKind: 'image' | 'video';
+  readonly capabilities: FixtureCapabilities;
+}
+
+export interface FixtureProvider {
+  readonly id: string;
+  readonly type: 'mock';
+  readonly displayName: string;
+  readonly enabled: true;
+  readonly isDefault: true;
+  readonly models: readonly FixtureModel[];
+}
+
+export interface FixtureError {
+  readonly code: 'fixture_failed' | 'fixture_rejected';
+  readonly message: string;
+  readonly retryable: boolean;
+}
+
+interface FixtureGalleryItemBase {
+  readonly id: string;
+  readonly jobId: string;
+  readonly prompt: string;
+  readonly alt: string;
+  readonly createdAt: string;
+  readonly status: FixtureJobStatus;
+  readonly stage: string;
+  readonly progress: number | null;
+  readonly error: FixtureError | null;
+  readonly saved: boolean;
+  readonly folderIds: readonly string[];
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly width: number;
+  readonly height: number;
+  readonly aspectRatio: FixtureAspectRatio;
+  readonly referenceCount: number;
+  readonly batchCount: number;
+  readonly previewPath: string;
+}
+
+export interface FixtureImageItem extends FixtureGalleryItemBase {
+  readonly kind: 'image';
+  readonly sourcePath: string;
+  readonly posterPath: null;
+  readonly durationSeconds: null;
+}
+
+export interface FixtureVideoItem extends FixtureGalleryItemBase {
+  readonly kind: 'video';
+  readonly sourcePath: null;
+  readonly posterPath: string;
+  readonly durationSeconds: number;
+}
+
+export type FixtureGalleryItem = FixtureImageItem | FixtureVideoItem;
+
+export interface FixtureFolder {
+  readonly id: string;
+  readonly name: string;
+  readonly itemIds: readonly string[];
+}
+
+export interface GalleryFixture {
+  readonly version: 'pr1-v1';
+  readonly provider: FixtureProvider;
+  readonly imageAssets: readonly FixtureImageItem[];
+  readonly videoItems: readonly FixtureVideoItem[];
+  readonly items: readonly FixtureGalleryItem[];
+  readonly folders: readonly FixtureFolder[];
+}

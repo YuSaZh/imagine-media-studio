@@ -32,7 +32,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: Playwright PWA smoke
+    name: Playwright PR 1 UI and PWA
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -47,11 +47,11 @@ jobs:
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-      - if: success() && hashFiles('artifacts/pr0/*.png') != ''
+      - if: success() && hashFiles('artifacts/visual/pr1/*.png') != ''
         uses: actions/upload-artifact@v6
         with:
-          name: pr0-pwa-screenshots
-          path: artifacts/pr0
+          name: pr1-ui-screenshots
+          path: artifacts/visual/pr1
           retention-days: 7
       - if: failure() && hashFiles('playwright-report/**') != ''
         uses: actions/upload-artifact@v6

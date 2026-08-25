@@ -11,6 +11,17 @@
 - `Dynamic mask`：视觉回归时需排除的动态区域；无则填 `None`。
 - 未确认内容统一填 `TBD`，不凭印象填写。
 
+## 公开未登录补充证据
+
+这些 Surface 只登记公开页面中实际捕获的状态，用于约束有限布局关系。它们不等同于登录后的产品 Surface，也不能替代下方完整状态矩阵。
+
+| Surface ID | 页面/状态 | 目标视口 | Reference ID | Evidence | Dynamic mask | Status | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `SURFACE-PUBLIC-DESKTOP-001` | 未登录公开首页 / 默认图片 Composer / 模板画廊 | 1440x900 | `REF-PR1-PUBLIC-DESKTOP-BASE-001` | `E1` | public media | Captured | 支持白色画布、居中双层 Composer 和紧凑瀑布流；不支持登录后 Shell |
+| `SURFACE-PUBLIC-DESKTOP-002` | 图片数量菜单打开 | 1440x900 | `REF-PR1-PUBLIC-DESKTOP-COUNT-002` | `E2` | public media | Captured | 只支持自动、2、4、8、12 的静态选项与锚定位置 |
+| `SURFACE-PUBLIC-DESKTOP-003` | 图片比例菜单打开 | 1440x900 | `REF-PR1-PUBLIC-DESKTOP-RATIO-003` | `E2` | public media | Captured | 只支持 2:3、3:2、1:1、9:16、16:9 的静态选项与锚定位置 |
+| `SURFACE-PUBLIC-MOBILE-001` | 未登录公开首页 / 双列模板画廊 / 底部 Composer | 390x844 | `REF-PR1-PUBLIC-MOBILE-BASE-004` | `E1` | public media / browser chrome unknown | Captured | 不证明 PWA standalone、软键盘或安全区数值 |
+
 ## 桌面端必采状态
 
 | Surface ID | 页面/状态 | 目标视口 | Reference ID | Evidence | Dynamic mask | Status | 备注 |
@@ -73,4 +84,4 @@
 
 | PR | Surface ID | 实现截图 | Reference ID | Diff report | 结论 | Reviewer |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| `PR 1` | Desktop/mobile Shell, Gallery, Composer, Viewer, Library, Settings | 1920x1080, 1440x900, 430x932, 390x844 | Public supplement only; authenticated IDs `TBD` | `pr1-visual-diff-report.md` | Local preflight; remote CI and L3/L4 Gate pending | Automated checks + local Codex visual review |

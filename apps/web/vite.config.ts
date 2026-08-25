@@ -46,22 +46,23 @@ export default defineConfig({
         ],
         screenshots: [
           {
-            src: '/screenshots/pwa-desktop-1280x720.png',
-            sizes: '1280x720',
+            src: '/screenshots/pwa-desktop-1440x900.png',
+            sizes: '1440x900',
             type: 'image/png',
             form_factor: 'wide',
-            label: 'Imagine Media Studio PR 0 desktop App Shell',
+            label: 'Imagine Media Studio desktop gallery and Composer',
           },
           {
-            src: '/screenshots/pwa-mobile-390x844.png',
+            src: '/screenshots/pwa-mobile-390x844-pr1.png',
             sizes: '390x844',
             type: 'image/png',
-            label: 'Imagine Media Studio PR 0 mobile App Shell',
+            label: 'Imagine Media Studio mobile gallery and Composer',
           },
         ],
       },
       workbox: {
         cleanupOutdatedCaches: true,
+        globIgnores: ['mock-media/**', 'screenshots/**'],
         globPatterns: ['**/*.{css,html,js,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/internal(?:\/|$)/],

@@ -1,0 +1,56 @@
+:root {
+  --color-canvas: #fbfbfa;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f3f3f1;
+  --color-surface-strong: #171817;
+  --color-overlay: rgba(18, 19, 18, 0.54);
+  --color-border-subtle: #e5e5e2;
+  --color-border-strong: #c9cac6;
+  --color-text-primary: #171817;
+  --color-text-secondary: #636560;
+  --color-text-inverse: #ffffff;
+  --color-focus: #16725d;
+  --color-success: #19735c;
+  --color-warning: #a76012;
+  --color-danger: #b33f45;
+  --color-info: #316da4;
+  --color-cancelled: #6d6875;
+
+  --font-ui: "Aptos", "IBM Plex Sans", "Noto Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-control: 18px;
+  --radius-card: 8px;
+  --radius-panel: 8px;
+  --radius-round: 999px;
+
+  --control-compact: 32px;
+  --control-default: 36px;
+  --control-touch: 44px;
+  --rail-width: 64px;
+  --topbar-height: 58px;
+  --composer-width: 768px;
+  --composer-height: 90px;
+
+  --shadow-popover: 0 12px 38px rgba(18, 19, 18, 0.14), 0 2px 8px rgba(18, 19, 18, 0.08);
+  --shadow-composer: 0 14px 50px rgba(18, 19, 18, 0.13), 0 2px 8px rgba(18, 19, 18, 0.08);
+
+  --duration-fast: 140ms;
+  --duration-medium: 220ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0.75, 0.2, 1);
+
+  --z-rail: 20;
+  --z-composer: 30;
+  --z-popover: 40;
+  --z-toast: 50;
+  --z-viewer: 60;
+}

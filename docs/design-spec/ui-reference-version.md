@@ -6,9 +6,12 @@
 UI_REFERENCE_DATE=2026-08-24
 UI_REFERENCE_TARGET=https://grok.com/imagine
 REFERENCE_PACKAGE=.design-reference/grok-imagine-2026-08-24/
+PUBLIC_REFERENCE_PACKAGE=.design-reference/grok-imagine-public-2026-08-25/
 ```
 
 Grok Imagine 是本项目 UI/UX 的唯一基准。此冻结记录用于阻止目标网站后续变化无意改变当前迭代。PR 0 只建立参考制度和填写模板，不声明任何尚未由参考证据确认的最终 UI。
+
+2026-08-25 增加了一个公开未登录补充包。它只支持 [`pr1-public-reference.md`](./pr1-public-reference.md) 记录的有限静态规格，不改变完整冻结基准，也不代表登录后界面已经捕获。
 
 ## 使用边界
 
@@ -24,9 +27,12 @@ Grok Imagine 是本项目 UI/UX 的唯一基准。此冻结记录用于阻止目
 
 | Reference ID | 设备/视口 | 页面或状态 | 采集时间 | 登录态 | 主题/语言 | 文件相对路径 | 已脱敏 | 记录人 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `REF-TBD-001` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
+| `REF-PR1-PUBLIC-DESKTOP-BASE-001` | Desktop / 1440x900 | 公开首页 / 默认图片 Composer | 2026-08-25 | 未登录 | 浅色 / 中文界面 | `desktop-1440x900.png` | 是 | Codex | 仅公开未登录补充证据 |
+| `REF-PR1-PUBLIC-DESKTOP-COUNT-002` | Desktop / 1440x900 | 图片数量菜单打开 | 2026-08-25 | 未登录 | 浅色 / 中文界面 | `desktop-image-count-1440x900.png` | 是 | Codex | 与默认状态形成有限 E2 |
+| `REF-PR1-PUBLIC-DESKTOP-RATIO-003` | Desktop / 1440x900 | 图片比例菜单打开 | 2026-08-25 | 未登录 | 浅色 / 中文界面 | `desktop-aspect-ratio-1440x900.png` | 是 | Codex | 与默认状态形成有限 E2 |
+| `REF-PR1-PUBLIC-MOBILE-BASE-004` | Mobile / 390x844 | 公开首页 / 手机布局 | 2026-08-25 | 未登录 | 浅色 / 中文界面 | `mobile-390x844.png` | 是 | Codex | 不证明 standalone 或设备安全区 |
 
-文件相对路径只写相对于 `REFERENCE_PACKAGE` 的路径，不写本机绝对路径。
+文件相对路径只写相对于该条目所属 `REFERENCE_PACKAGE` 或 `PUBLIC_REFERENCE_PACKAGE` 的路径，不写本机绝对路径。
 
 ## 证据质量
 
@@ -43,11 +49,11 @@ Grok Imagine 是本项目 UI/UX 的唯一基准。此冻结记录用于阻止目
 
 | Spec | Owner | Evidence | 状态 | 冻结日期 | 变更记录 |
 | --- | --- | --- | --- | --- | --- |
-| `screen-matrix.md` | `TBD` | `E0` | Draft | - | - |
+| `screen-matrix.md` | `TBD` | `E2`（有限公开状态） | Draft | - | 2026-08-25 登记公开未登录补充证据 |
 | `information-architecture.md` | `TBD` | `E0` | Draft | - | - |
 | `interaction-map.md` | `TBD` | `E0` | Draft | - | - |
-| `responsive-map.md` | `TBD` | `E0` | Draft | - | - |
-| `geometry.md` | `TBD` | `E0` | Draft | - | - |
+| `responsive-map.md` | `TBD` | `E2`（仅 1440/390） | Draft | - | 2026-08-25 记录有限静态重排关系 |
+| `geometry.md` | `TBD` | `E1`（近似测量） | Measured | - | 2026-08-25 记录公开 Composer/控件几何 |
 | `tokens.md` | `TBD` | `E0` | Draft | - | - |
 | `motion.md` | `TBD` | `E0` | Draft | - | - |
 | `visual-diff-policy.md` | `TBD` | `E0` | Draft | - | - |

@@ -4,6 +4,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 const port = 3030;
 const baseURL = `http://127.0.0.1:${port}`;
+const localChromium = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+const localLaunchOptions = localChromium
+  ? { launchOptions: { executablePath: localChromium } }
+  : {};
 
 export default defineConfig({
   testDir: './e2e',
@@ -13,19 +17,38 @@ export default defineConfig({
   reporter: process.env.CI ? [['html', { open: 'never' }], ['list']] : 'list',
   use: {
     baseURL,
+    ...localLaunchOptions,
     trace: 'on-first-retry',
   },
   projects: [
     {
-      name: 'pwa-desktop-1280x720',
+      name: 'pr1-desktop-1920x1080',
       use: {
         ...devices['Desktop Chrome'],
         deviceScaleFactor: 1,
-        viewport: { width: 1280, height: 720 },
+        viewport: { width: 1920, height: 1080 },
       },
     },
     {
-      name: 'pwa-mobile-390x844',
+      name: 'pr1-desktop-1440x900',
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        viewport: { width: 1440, height: 900 },
+      },
+    },
+    {
+      name: 'pr1-mobile-430x932',
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 430, height: 932 },
+      },
+    },
+    {
+      name: 'pr1-mobile-390x844',
       use: {
         ...devices['Desktop Chrome'],
         deviceScaleFactor: 1,

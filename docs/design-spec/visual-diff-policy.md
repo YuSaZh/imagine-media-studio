@@ -8,14 +8,14 @@
 | --- | --- | --- |
 | UI reference date | `2026-08-24` | Frozen |
 | UI reference target | `https://grok.com/imagine` | Frozen |
-| Mock fixture version | `TBD` | Draft |
-| Browser + version | `TBD` | Draft |
-| OS/container image | `TBD` | Draft |
-| Font files/version | `TBD` | Draft |
-| Color scheme | `TBD` | Draft |
-| Locale/timezone | `TBD` | Draft |
-| DPR | `TBD` | Draft |
-| Animation policy | disable or wait for stable frame `TBD` | Draft |
+| Mock fixture version | `pr1-v1` | Frozen for PR 1 |
+| Browser + version | Playwright 1.62.1 bundled Chromium | Frozen by lockfile/Actions |
+| OS/container image | `ubuntu-24.04` GitHub-hosted runner | Frozen by workflow |
+| Font files/version | Runner system UI stack; no remote font | Frozen by environment |
+| Color scheme | Light | Frozen for PR 1 |
+| Locale/timezone | `en-US` / UTC fixture timestamps | Frozen for PR 1 |
+| DPR | `1` | Frozen for PR 1 |
+| Animation policy | CSS animations disabled at screenshot time | Frozen for PR 1 |
 
 ## 必交视口
 

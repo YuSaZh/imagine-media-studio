@@ -7,12 +7,12 @@
 | Viewport ID | CSS viewport | 分类 | 必测重点 | Reference ID | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | `VP-DESKTOP-WIDE` | 1920x1080 | 桌面宽屏 | App Shell、画廊、Viewer | `TBD` | Missing |
-| `VP-DESKTOP` | 1440x900 | 常用桌面 | 全部核心路径 | `TBD` | Missing |
+| `VP-DESKTOP` | 1440x900 | 常用桌面 | 全部核心路径 | `REF-PR1-PUBLIC-DESKTOP-BASE-001` | Partial - public unauthenticated only |
 | `VP-LAPTOP` | 1280x800 | 小型笔记本 | 高度受限、Composer 遮挡 | `TBD` | Missing |
 | `VP-TABLET-1024` | 1024x1366 | 平板竖屏 | 导航转换、画廊列数 | `TBD` | Missing |
 | `VP-TABLET-834` | 834x1194 | 平板竖屏 | 导航、Sheet、触摸目标 | `TBD` | Missing |
 | `VP-MOBILE-LARGE` | 430x932 | 大屏手机 | 安全区、Composer、Viewer | `TBD` | Missing |
-| `VP-MOBILE` | 390x844 | 常见手机 | 全部手机核心路径 | `TBD` | Missing |
+| `VP-MOBILE` | 390x844 | 常见手机 | 全部手机核心路径 | `REF-PR1-PUBLIC-MOBILE-BASE-004` | Partial - public unauthenticated only |
 | `VP-MOBILE-SMALL` | 360x800 | 小屏手机 | 文本溢出、可用高度 | `TBD` | Missing |
 
 ## 响应式区域模板
@@ -23,9 +23,9 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Navigation | `TBD` | `TBD` | Desktop Rail / Mobile `TBD` | `TBD` | `TBD` | `TBD` | `E0` |
 | Top controls | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `E0` |
-| Gallery | `TBD` | `TBD` | 列数/列宽/gap `TBD` | `TBD` | `TBD` | `TBD` | `E0` |
-| Composer | `TBD` | `TBD` | Desktop floating / Mobile safe area | 控件显隐 `TBD` | 展开/键盘 `TBD` | `TBD` | `E0` |
-| Parameter controls | `TBD` | replace | Popover/Sheet `TBD` | `TBD` | `TBD` | `TBD` | `E0` |
+| Gallery | 1440x900 -> 390x844 静态对照 | reflow | 公开模板区：桌面居中三列可见；手机近全宽双列；精确 gap `TBD` | 卡片比例混排保持 | 手势/加载 `TBD` | `REF-PR1-PUBLIC-DESKTOP-BASE-001`, `REF-PR1-PUBLIC-MOBILE-BASE-004` | `E2` |
+| Composer | 1440x900 -> 390x844 静态对照 | reflow | 公开页面：桌面约 768px 居中；手机近全宽底部浮层 | 两层结构保留；完整控件差异 `TBD` | 键盘/展开/提交 `TBD` | `REF-PR1-PUBLIC-DESKTOP-BASE-001`, `REF-PR1-PUBLIC-MOBILE-BASE-004` | `E2` |
+| Parameter controls | Desktop 1440x900 only | overlay | 数量和比例菜单锚定在对应控件上方；手机载体 `TBD` | 数量与比例选项已记录 | 打开/关闭/焦点 `TBD` | `REF-PR1-PUBLIC-DESKTOP-COUNT-002`, `REF-PR1-PUBLIC-DESKTOP-RATIO-003` | `E2` |
 | Reference strip | `TBD` | reflow | Mobile horizontal strip | `TBD` | 横向滚动 `TBD` | `TBD` | `E0` |
 | Viewer | `TBD` | fluid | Full-screen | 工具栏 `TBD` | Desktop keys / Mobile gesture | `TBD` | `E0` |
 | Toast/update | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `E0` |
@@ -47,6 +47,7 @@
 | Android browser | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | Android installed | 430x932 / 360x800 | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` | `TBD` |
 | Soft keyboard open | 430x932 / 390x844 | N/A | `TBD` | `TBD` | `TBD` | Composer 不得被遮挡 | `TBD` |
+| Public mobile capture | 390x844 | `TBD` | `TBD` | `TBD` | 底部可见避让空间，数值 `TBD` | 不能判定浏览器/standalone/键盘行为 | `REF-PR1-PUBLIC-MOBILE-BASE-004` |
 
 ## 内容压力测试
 

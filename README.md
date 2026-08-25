@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0 is complete.** It establishes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, minimal PWA, and UI reference process described in [`PLAN.MD`](./PLAN.MD).
+**PR 0 is complete, and the PR 1 functional UI Shell is in acceptance.** The current application includes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, installable PWA, responsive Gallery/Composer/Viewer flows, Library routes, and settings shell described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -12,15 +12,16 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - Fastify application server
 - SQLite and Drizzle ORM
 - One Docker service and one `/data` volume
-- Build, E2E, and Docker smoke verification in GitHub Actions
+- Local lint, typecheck, unit, build, and isolated Playwright preflight
+- GitHub Actions quality, E2E, screenshot artifact, and Docker smoke verification
 
-Real providers and the final Grok Imagine-referenced interface are intentionally out of scope until their planned phases.
+Real providers remain intentionally out of scope until PR 4 and later. PR 1 uses only deterministic Mock fixtures. Its strict Grok Imagine L3/L4 classification remains pending because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
 
-The acceptance matrix and reproducible evidence for this phase are recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md).
+PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 
 ## Local Safety
 
-This repository is developed on a host with existing services. Do not start the application or its Compose stack locally. Use local lint, typecheck, and unit tests only; GitHub Actions owns build and runtime verification.
+This repository is developed on a host with existing services. Local dependency installation, lint, typecheck, unit tests, production builds, and Playwright tests are allowed only after confirming their temporary port is free. Do not run the project Compose stack or Docker build on this host; GitHub Actions owns container verification. Never stop, restart, rename, or inspect secrets from existing host services.
 
 For deployment on another host, create the bind-mounted data directory as the runtime user and pass that user's numeric IDs when they differ from `1000:1000`:
 
