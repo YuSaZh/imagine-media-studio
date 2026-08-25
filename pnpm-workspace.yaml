@@ -24,3 +24,6 @@ minimumReleaseAgeExclude:
   - '@typescript-eslint/utils@8.68.0'
   - '@typescript-eslint/visitor-keys@8.68.0'
   - typescript-eslint@8.68.0
+  - '@tanstack/query-core@5.102.3'
+  - '@tanstack/react-query@5.102.3'
+  - lucide-react@1.34.0
