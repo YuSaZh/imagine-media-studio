@@ -149,10 +149,13 @@ test('uploads multiple references and completes a persistent Mask edit', async (
   const generationJobId = ((await generationResponse.json()) as { job: { id: string } }).job.id;
   const generationDetail = await waitForCompletedJob(request, generationJobId);
   expect(generationDetail.assets).toHaveLength(1);
-  const source = generationDetail.assets[0]!;
-  expect(source.parentAssetId).toBeNull();
+  const generatedOutput = generationDetail.assets[0]!;
+  expect(generatedOutput.parentAssetId).toBeNull();
+  expect(generatedOutput.width).toBeGreaterThan(0);
+  expect(generatedOutput.height).toBeGreaterThan(0);
+  const source = uploadedReferences[0]!;
   if (source.width === null || source.height === null) {
-    throw new Error('The persistent image output has no decoded dimensions.');
+    throw new Error('The uploaded source has no decoded dimensions.');
   }
   expect(source.width).toBeGreaterThan(0);
   expect(source.height).toBeGreaterThan(0);
@@ -176,6 +179,12 @@ test('uploads multiple references and completes a persistent Mask edit', async (
   const brushSize = page.getByRole('slider', { name: 'Brush size' });
   await expect(canvas).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancel editing' })).toBeVisible();
+  const desktopDirectory = resolve('artifacts/visual/pr3');
+  await mkdir(desktopDirectory, { recursive: true });
+  await page.screenshot({
+    animations: 'disabled',
+    path: resolve(desktopDirectory, 'editor-desktop-1440x900.png'),
+  });
   await brushSize.fill('24');
   await expect(brushSize).toHaveValue('24');
   await overlay.click();
