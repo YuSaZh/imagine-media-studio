@@ -34,6 +34,23 @@ Before a release artifact is published, the release process must derive a comple
 
 The Lucide icons used by the interface are imported from `lucide-react` and are covered by its ISC license; they are not copied from Grok or a reviewed donor project. PR 1 Mock media is project-authored and documented separately in [`docs/third-party/pr1-asset-provenance.md`](docs/third-party/pr1-asset-provenance.md).
 
+### PR 2 server media dependencies
+
+The PR 2 server foundation adds the following exact direct runtime dependencies. Sharp's platform package dynamically uses the prebuilt libvips distribution selected by pnpm for the target operating system, so that library is recorded separately.
+
+| Package | Version | License |
+| --- | --- | --- |
+| `@fastify/multipart` | `10.1.1` | MIT |
+| `file-type` | `22.0.2` | MIT |
+| `ipaddr.js` | `2.5.0` | MIT |
+| `p-queue` | `9.3.3` | MIT |
+| `range-parser` | `1.3.0` | MIT |
+| `sharp` | `0.35.3` | Apache-2.0 |
+| `undici` | `8.10.0` | MIT |
+| `@img/sharp-libvips-*` | `1.3.2` | LGPL-3.0-or-later |
+
+The release notice generator must include the exact platform-specific Sharp/libvips packages present in the published image and retain the corresponding complete license texts. Nothing in this inventory changes the MIT license of project-authored source code.
+
 ## Gate for future reuse
 
 Before any code, tests, fixtures, or assets from a reviewed repository are copied, substantially rewritten, linked, bundled, or distributed by this project, the implementing change must:
