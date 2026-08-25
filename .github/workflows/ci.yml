@@ -61,7 +61,7 @@ jobs:
           retention-days: 7
 
   docker-smoke:
-    name: Single-container PR 2 API and persistence smoke
+    name: Single-container PR 3 API and persistence smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -83,26 +83,26 @@ jobs:
           )
           echo "DATA_HOST_DIR=$runtime_dir" >> "$GITHUB_ENV"
           echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-          echo "APP_SECRET=github-actions-pr2-smoke-secret-not-for-production" >> "$GITHUB_ENV"
+          echo "APP_SECRET=github-actions-pr3-smoke-secret-not-for-production" >> "$GITHUB_ENV"
           echo "PUID=$(id -u)" >> "$GITHUB_ENV"
           echo "PGID=$(id -g)" >> "$GITHUB_ENV"
           echo "IMAGINE_MEDIA_HOST_PORT=$host_port" >> "$GITHUB_ENV"
       - name: Validate and build the single service
         run: |
-          test "$(docker compose config --services | wc -l | tr -d ' ')" = "1"
-          docker compose build
+          test "$(timeout --foreground 60 docker compose config --services | wc -l | tr -d ' ')" = "1"
+          timeout --foreground 900 docker compose build
       - name: Run persistence and restart smoke test
         run: bash .github/scripts/docker-smoke.sh
       - name: Show Compose diagnostics
         if: failure()
         run: |
-          docker compose ps --all || true
-          docker compose logs --no-color || true
+          timeout --foreground 60 docker compose ps --all || true
+          timeout --foreground 60 docker compose logs --no-color || true
       - name: Clean up isolated Compose resources
         if: always()
         run: |
           cleanup_status=0
-          docker compose down --volumes --remove-orphans || cleanup_status=$?
+          timeout --foreground 180 docker compose down --volumes --remove-orphans || cleanup_status=$?
           case "$DATA_HOST_DIR" in
             "$RUNNER_TEMP"/imagine-media.*)
               find "$DATA_HOST_DIR" -mindepth 1 -depth -delete || cleanup_status=$?
