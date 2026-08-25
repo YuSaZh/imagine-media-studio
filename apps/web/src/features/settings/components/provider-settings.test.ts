@@ -1,8 +1,11 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import type { ProviderDto } from '@imagine/shared';
 import { describe, expect, it } from 'vitest';
 
 import {
   PROVIDER_PROFILE_OPTIONS,
+  ProviderApiKeyField,
   buildManualModelWriteInput,
   buildProviderWriteInput,
   modelToForm,
@@ -24,6 +27,18 @@ const storedProvider: ProviderDto = {
 };
 
 describe('Provider editor mapping', () => {
+  it('exposes one stable accessible name for the password field', () => {
+    const markup = renderToStaticMarkup(createElement(ProviderApiKeyField, {
+      hasStoredKey: true,
+      onChange: () => undefined,
+      value: '',
+    }));
+
+    expect(markup.match(/aria-label="API key"/g)).toHaveLength(1);
+    expect(markup.match(/type="password"/g)).toHaveLength(1);
+    expect(markup).toContain('Write only. Saved credentials are never returned to this page.');
+  });
+
   it('never places a stored Secret into editor state', () => {
     const form = providerToForm(storedProvider);
     expect(form.apiKey).toBe('');

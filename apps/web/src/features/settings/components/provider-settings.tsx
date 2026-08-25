@@ -143,6 +143,34 @@ export function buildProviderWriteInput(form: ProviderFormState): ProviderWriteI
   };
 }
 
+export function ProviderApiKeyField({
+  hasStoredKey,
+  onChange,
+  value,
+}: {
+  hasStoredKey: boolean;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label>
+      <span>API key</span>
+      <span className="provider-secret-input">
+        <KeyRound aria-hidden="true" size={15} />
+        <input
+          aria-label="API key"
+          autoComplete="new-password"
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={hasStoredKey ? 'Stored key remains unchanged' : 'Optional'}
+          type="password"
+          value={value}
+        />
+      </span>
+      <small>Write only. Saved credentials are never returned to this page.</small>
+    </label>
+  );
+}
+
 function providerTypeLabel(type: string): string {
   return PROVIDER_PROFILE_OPTIONS.find((option) => option.value === type)?.label ?? type;
 }
@@ -268,20 +296,11 @@ function ProviderEditor({
               value={form.baseUrl}
             />
           </label>
-          <label>
-            <span>API key</span>
-            <span className="provider-secret-input">
-              <KeyRound aria-hidden="true" size={15} />
-              <input
-                autoComplete="new-password"
-                onChange={(event) => update('apiKey', event.target.value)}
-                placeholder={provider?.hasApiKey ? 'Stored key remains unchanged' : 'Optional'}
-                type="password"
-                value={form.apiKey}
-              />
-            </span>
-            <small>Write only. Saved credentials are never returned to this page.</small>
-          </label>
+          <ProviderApiKeyField
+            hasStoredKey={provider?.hasApiKey === true}
+            onChange={(value) => update('apiKey', value)}
+            value={form.apiKey}
+          />
           <label>
             <span>Custom headers JSON</span>
             <textarea
