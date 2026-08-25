@@ -2,7 +2,7 @@
 
 Audit date: 2026-08-25 (Asia/Tokyo)
 
-Status: **PR 3 selective-reuse gate approved for two pure algorithm subsets**. No upstream source, UI, assets, tests, or generated artifacts had been copied when this gate was recorded. The approved implementation must use only the exact source blobs and targets listed below, retain file-level attribution, and satisfy the stated tests.
+Status: **PR 3 selective reuse completed for two pure algorithm subsets**. Only the exact source blobs and targets listed below were adapted; file-level attribution, the complete MIT notice, and local contract tests are present. No upstream UI, assets, tests, or generated artifacts were copied.
 
 ## Policy and scope
 
@@ -10,7 +10,7 @@ Status: **PR 3 selective-reuse gate approved for two pure algorithm subsets**. N
 
 - `CookSleep/gpt_image_playground` may be considered later as a donor for narrowly scoped, non-visual image logic.
 - `lidge-jun/ima2-gen` and `alasano/sora-2-playground` are architecture and behavior references only. Their source is not a migration candidate under the current plan.
-- PR 0 performs inspection only. Selective migration is deferred to PR 3 or a later provider/video PR.
+- PR 0 performed inspection only; PR 3 implemented only the two approved pure subsets, while later Provider/video reuse remains gated.
 - A future migration must pin the reviewed SHA, retain required MIT notices, adapt the logic to local contracts, and add local tests before merge.
 
 ## Verified upstream revisions and licenses
@@ -107,4 +107,4 @@ Before any upstream-derived code lands, the implementing PR must:
 5. Add the complete required MIT notice to `THIRD_PARTY_NOTICES.md` and retain a file header when appropriate.
 6. Confirm with repository search and visual review that no upstream page, component tree, CSS, icons, screenshots, fonts, or other visual assets were introduced.
 
-Current gate result: **PASS for PR 0 documentation only; no code reuse approved or performed.**
+Current gate result: **PASS for PR 3 selective reuse. The two approved pure kernels were implemented with pinned-source headers and tests; all other PR 3 code is clean-room.**
