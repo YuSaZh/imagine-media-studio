@@ -32,6 +32,9 @@ export interface ProviderCapabilities {
 
 export interface ProviderContext {
   providerId: string;
+  jobId?: string;
+  idempotencyKey?: string;
+  attempt?: number;
   signal?: AbortSignal;
   secrets: Readonly<Record<string, string>>;
 }
@@ -39,6 +42,9 @@ export interface ProviderContext {
 interface SubmittedAssetBase {
   type: 'image' | 'video';
   mimeType: string;
+  resultId?: string;
+  filename?: string;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
 export type SubmittedAsset =
@@ -59,17 +65,22 @@ export type SubmitResult =
   | {
       state: 'pending';
       remoteJobId: string;
+      pollAfterMs?: number;
     };
 
 export type PollResult =
-  | { state: 'pending'; progress?: number }
+  | { state: 'remote_pending' | 'remote_running'; progress?: number; pollAfterMs?: number }
   | { state: 'completed'; assets: readonly SubmittedAsset[] }
   | { state: 'failed'; error: ProviderError };
 
+export type ProviderErrorKind = 'expired' | 'rejected' | 'transient' | 'unknown';
+
 export interface ProviderError {
   code: string;
+  kind: ProviderErrorKind;
   message: string;
   retryable: boolean;
+  retryAfterMs?: number;
   statusCode?: number;
 }
 

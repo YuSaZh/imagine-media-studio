@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export interface StoragePaths {
@@ -46,6 +46,9 @@ export async function ensureStorage(paths: StoragePaths): Promise<void> {
       paths.adapters,
       paths.backups,
       paths.logs,
-    ].map((directory) => mkdir(directory, { recursive: true })),
+    ].map(async (directory) => {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await chmod(directory, 0o700);
+    }),
   );
 }

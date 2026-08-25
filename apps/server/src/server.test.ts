@@ -12,6 +12,36 @@ import { createServer, type ImagineServer } from './server.js';
 const temporaryDirectories: string[] = [];
 const servers: ImagineServer[] = [];
 const migrationsDirectory = fileURLToPath(new URL('../migrations', import.meta.url));
+const VALID_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
+
+function multipartUpload(
+  fields: Readonly<Record<string, string>>,
+  filename: string,
+  mimeType: string,
+  content: Buffer,
+) {
+  const boundary = '----imagine-media-studio-test-boundary';
+  const chunks: Buffer[] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    chunks.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+    ));
+  }
+  chunks.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
+    ),
+    content,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  );
+  return {
+    body: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.app.close()));
@@ -33,10 +63,19 @@ async function createTestServer(
     await writeFile(webDistDir + '/index.html', '<h1>Static App Shell fixture</h1>');
   }
   const config: AppConfig = {
+    allowHttpMediaDownloads: false,
+    allowPrivateNetworkAccess: false,
     appPort: 3030,
+    appSecret: 'test-app-secret-with-at-least-32-characters',
     dataDir,
     logLevel: 'silent',
+    maxImageUploadBytes: 32 * 1024 * 1024,
+    maxRemoteImageBytes: 64 * 1024 * 1024,
+    maxRemoteVideoBytes: 1024 * 1024 * 1024,
+    maxVideoUploadBytes: 512 * 1024 * 1024,
+    mediaProcessTimeoutMs: 30_000,
     mockProviderEnabled,
+    nodeEnvironment: 'test',
     webDistDir: withWebDist ? webDistDir : resolve(dataDir, 'missing-web-dist'),
   };
   const server = await createServer({
@@ -52,10 +91,19 @@ async function createTestServer(
 async function reopenTestServer(dataDir: string): Promise<ImagineServer> {
   const server = await createServer({
     config: {
+      allowHttpMediaDownloads: false,
+      allowPrivateNetworkAccess: false,
       appPort: 3030,
+      appSecret: 'test-app-secret-with-at-least-32-characters',
       dataDir,
       logLevel: 'silent',
+      maxImageUploadBytes: 32 * 1024 * 1024,
+      maxRemoteImageBytes: 64 * 1024 * 1024,
+      maxRemoteVideoBytes: 1024 * 1024 * 1024,
+      maxVideoUploadBytes: 512 * 1024 * 1024,
+      mediaProcessTimeoutMs: 30_000,
       mockProviderEnabled: true,
+      nodeEnvironment: 'test',
       webDistDir: resolve(dataDir, 'missing-web-dist'),
     },
     logger: false,
@@ -88,9 +136,9 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(server.jobs.get(jobId)?.status).toBe('completed');
     expect(server.assets.countForJob(jobId)).toBe(1);
 
-    const media = await readFile(
-      resolve(temporaryDirectories.at(-1)!, 'media/originals', `${jobId}-0.png`),
-    );
+    const asset = server.assets.page({ jobId }).items[0];
+    if (!asset) throw new Error('Expected the completed Job to persist an Asset.');
+    const media = await readFile(resolve(temporaryDirectories.at(-1)!, asset.filePath));
     expect(media.byteLength).toBeGreaterThan(0);
   });
 
@@ -168,5 +216,112 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(internal.statusCode).toBe(404);
     expect(spa.statusCode).toBe(200);
     expect(spa.body).toContain('Static App Shell fixture');
+  });
+
+  it('serves the complete PR 2 media and collection workflow without listening', async () => {
+    const server = await createTestServer();
+    const upload = multipartUpload({ role: 'upload' }, 'pixel.png', 'image/png', VALID_PNG);
+    const uploaded = await server.app.inject({
+      method: 'POST',
+      url: '/internal/assets/upload',
+      headers: { 'content-type': upload.contentType },
+      payload: upload.body,
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const asset = uploaded.json<{ asset: { id: string; contentUrl: string; thumbnailUrl: string } }>().asset;
+    expect(asset.thumbnailUrl).toContain(`/internal/assets/${asset.id}/thumbnail`);
+
+    const head = await server.app.inject({ method: 'HEAD', url: asset.contentUrl });
+    expect(head.statusCode).toBe(200);
+    expect(head.headers['content-length']).toBe(String(VALID_PNG.byteLength));
+    expect(head.body).toBe('');
+    const partial = await server.app.inject({
+      method: 'GET',
+      url: asset.contentUrl,
+      headers: { range: 'bytes=0-7' },
+    });
+    expect(partial.statusCode).toBe(206);
+    expect(partial.rawPayload).toEqual(VALID_PNG.subarray(0, 8));
+    expect(partial.headers['content-range']).toBe(`bytes 0-7/${VALID_PNG.byteLength}`);
+
+    const favorite = await server.app.inject({
+      method: 'PATCH',
+      url: `/internal/assets/${asset.id}`,
+      payload: { favorite: true },
+    });
+    expect(favorite.statusCode).toBe(200);
+    expect(favorite.json<{ asset: { favorite: boolean } }>().asset.favorite).toBe(true);
+
+    const createdCollection = await server.app.inject({
+      method: 'POST',
+      url: '/internal/collections',
+      payload: { name: 'Acceptance' },
+    });
+    const collectionId = createdCollection.json<{ collection: { id: string } }>().collection.id;
+    const added = await server.app.inject({
+      method: 'POST',
+      url: `/internal/collections/${collectionId}/assets`,
+      payload: { assetIds: [asset.id] },
+    });
+    expect(added.statusCode).toBe(200);
+    expect(added.json<{ added: number }>().added).toBe(1);
+    const filtered = await server.app.inject({
+      method: 'GET',
+      url: `/internal/assets?collectionId=${collectionId}`,
+    });
+    expect(filtered.json<{ items: Array<{ id: string; collectionIds: string[] }> }>().items)
+      .toEqual([expect.objectContaining({ id: asset.id, collectionIds: [collectionId] })]);
+  });
+
+  it('persists safe settings and exposes Provider configuration without secrets', async () => {
+    const server = await createTestServer();
+    const settings = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      payload: { values: { 'gallery.initial_filter': 'image', 'composer.clear_prompt': true } },
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(settings.json()).toEqual({
+      settings: { 'composer.clear_prompt': true, 'gallery.initial_filter': 'image' },
+    });
+    const rejectedSecret = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      payload: { values: { 'provider.api-key': 'must-not-be-stored-here' } },
+    });
+    expect(rejectedSecret.statusCode).toBe(400);
+
+    const providers = await server.app.inject({ method: 'GET', url: '/internal/providers' });
+    const mock = providers.json<{ items: Array<Record<string, unknown>> }>().items[0];
+    expect(mock).toMatchObject({ id: 'mock', type: 'mock', hasApiKey: false });
+    expect(JSON.stringify(mock)).not.toContain('Ciphertext');
+    const models = await server.app.inject({ method: 'GET', url: '/internal/models' });
+    expect(models.json<{ items: Array<{ modelId: string }> }>().items).toEqual([
+      expect.objectContaining({ modelId: 'mock-image-v1' }),
+    ]);
+    const connection = await server.app.inject({
+      method: 'POST',
+      url: '/internal/providers/mock/test',
+      payload: {},
+    });
+    expect(connection.json()).toMatchObject({ ok: true });
+  });
+
+  it('rejects cross-origin writes while allowing same-origin and non-browser clients', async () => {
+    const server = await createTestServer();
+    const denied = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      headers: { host: 'studio.local', origin: 'https://attacker.invalid' },
+      payload: { values: { mode: 'image' } },
+    });
+    const allowed = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      headers: { host: 'studio.local', origin: 'https://studio.local' },
+      payload: { values: { mode: 'image' } },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(allowed.statusCode).toBe(200);
   });
 });

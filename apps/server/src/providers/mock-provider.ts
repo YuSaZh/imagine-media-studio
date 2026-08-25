@@ -8,7 +8,7 @@ import type {
 } from '@imagine/provider-contract';
 
 const TRANSPARENT_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lZX1GQAAAABJRU5ErkJggg==';
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 export class MockProviderValidationError extends Error {
   public override readonly name = 'MockProviderValidationError';
@@ -103,6 +103,7 @@ export class MockProviderAdapter implements ProviderAdapter {
         error instanceof MockProviderValidationError
           ? 'mock_validation_error'
           : 'mock_provider_error',
+      kind: error instanceof MockProviderValidationError ? 'rejected' : 'unknown',
       message: error instanceof Error ? error.message : 'Unknown Mock Provider error',
       retryable: false,
     };

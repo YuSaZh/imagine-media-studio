@@ -1,7 +1,7 @@
 import { createMockGenerationRequest } from '@imagine/testkit';
 import { describe, expect, it, vi } from 'vitest';
 
-import { MockProviderAdapter } from './mock-provider.js';
+import { MockProviderAdapter, MockProviderValidationError } from './mock-provider.js';
 
 const context = { providerId: 'mock', secrets: {} };
 
@@ -43,5 +43,19 @@ describe('MockProviderAdapter', () => {
     await expect(
       provider.validate(createMockGenerationRequest({ seed: 42 }), context),
     ).rejects.toThrow();
+  });
+
+  it('normalizes validation failures as non-retryable rejections', () => {
+    const provider = new MockProviderAdapter();
+
+    expect(provider.normalizeError(new MockProviderValidationError('unsupported'))).toMatchObject({
+      code: 'mock_validation_error',
+      kind: 'rejected',
+      retryable: false,
+    });
+    expect(provider.normalizeError(new Error('unexpected'))).toMatchObject({
+      kind: 'unknown',
+      retryable: false,
+    });
   });
 });
