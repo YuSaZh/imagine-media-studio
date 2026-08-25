@@ -17,7 +17,7 @@ test "$(compose config --services)" = "imagine-media"
 
 compose up --detach --wait --wait-timeout 120
 
-IFS=$'\t' read -r job_id asset_id collection_id < <(
+IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id edit_asset_id < <(
   BASE_URL="$base_url" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 
@@ -53,6 +53,18 @@ async function waitForJob(jobId) {
   throw new Error('Mock Job did not complete before the smoke timeout.');
 }
 
+async function uploadPng(base64, role, parentAssetId, expectedStatus = 201) {
+  const form = new FormData();
+  form.append('role', role);
+  if (parentAssetId !== undefined) form.append('parentAssetId', parentAssetId);
+  form.append(
+    'file',
+    new Blob([Buffer.from(base64, 'base64')], { type: 'image/png' }),
+    `${role}.png`,
+  );
+  return json('/internal/assets/upload', { method: 'POST', body: form }, expectedStatus);
+}
+
 const providers = await json('/internal/providers?limit=10');
 const mockProvider = providers.items.find((provider) => provider.id === 'mock');
 assert.ok(mockProvider, 'The reserved Mock Provider DTO was not returned.');
@@ -80,6 +92,68 @@ const mockModel = models.items.find((model) => model.modelId === 'mock-image-v1'
 assert.ok(mockModel, 'The Mock image model was not returned.');
 assert.equal(mockModel.capabilitySource, 'mock');
 assert.ok(mockModel.capabilities.operations.includes('image.generate'));
+assert.ok(mockModel.capabilities.operations.includes('image.edit'));
+assert.equal(mockModel.capabilities.supportsMask, true);
+assert.equal(mockModel.capabilities.maxReferenceImages, 4);
+
+const sourcePng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWMwSpn2HwAEJAIsdtK5/wAAAABJRU5ErkJggg==';
+const nonEmptyMaskPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWMwSpnGAAADJQEt7A6dOAAAAABJRU5ErkJggg==';
+const dimensionMismatchMaskPng = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWMwSpnGYJQy7T8AC/gDWANOkGUAAAAASUVORK5CYII=';
+
+const source = (await uploadPng(sourcePng, 'upload')).asset;
+assert.equal(source.width, 1);
+assert.equal(source.height, 1);
+assert.equal(source.mimeType, 'image/png');
+
+const emptyMaskError = await uploadPng(sourcePng, 'mask', source.id, 400);
+assert.equal(emptyMaskError.error, 'invalid_media_upload');
+assert.match(emptyMaskError.message ?? '', /at least one edited pixel/i);
+const dimensionError = await uploadPng(dimensionMismatchMaskPng, 'mask', source.id, 400);
+assert.equal(dimensionError.error, 'invalid_media_upload');
+assert.match(dimensionError.message ?? '', /dimensions must exactly match/i);
+
+const mask = (await uploadPng(nonEmptyMaskPng, 'mask', source.id)).asset;
+assert.equal(mask.role, 'mask');
+assert.equal(mask.parentAssetId, source.id);
+assert.equal(mask.width, source.width);
+assert.equal(mask.height, source.height);
+assert.equal(mask.thumbnailUrl, null);
+
+const defaultAssets = await json('/internal/assets?limit=100');
+assert.ok(defaultAssets.items.some((candidate) => candidate.id === source.id));
+assert.ok(!defaultAssets.items.some((candidate) => candidate.id === mask.id));
+const maskAssets = await json('/internal/assets?role=mask&limit=100');
+assert.ok(maskAssets.items.some((candidate) => candidate.id === mask.id));
+
+const acceptedEdit = await json(
+  '/internal/jobs',
+  {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'image.edit',
+      providerId: 'mock',
+      modelId: 'mock-image-v1',
+      prompt: 'Docker PR 3 edit smoke fixture',
+      inputs: [
+        { assetId: source.id, role: 'source' },
+        { assetId: mask.id, role: 'mask' },
+      ],
+    }),
+  },
+  202,
+);
+const editJobId = acceptedEdit.job.id;
+const editDetail = await waitForJob(editJobId);
+assert.equal(editDetail.inputs.length, 2);
+assert.deepEqual(
+  new Map(editDetail.inputs.map((input) => [input.role, input.assetId])),
+  new Map([['mask', mask.id], ['source', source.id]]),
+);
+assert.equal(editDetail.assets.length, 1);
+const editAsset = editDetail.assets[0];
+assert.equal(editAsset.parentAssetId, source.id);
+assert.equal(editAsset.role, 'output');
 
 const accepted = await json(
   '/internal/jobs',
@@ -148,19 +222,29 @@ assert.equal(membership.collection.itemCount, 1);
 const withCollection = await json(`/internal/assets/${encodeURIComponent(asset.id)}`);
 assert.ok(withCollection.asset.collectionIds.includes(collectionId));
 
-process.stdout.write(`${jobId}\t${asset.id}\t${collectionId}\n`);
+process.stdout.write(
+  `${jobId}\t${asset.id}\t${collectionId}\t${source.id}\t${mask.id}\t${editJobId}\t${editAsset.id}\n`,
+);
 NODE
 )
 
 test -n "$job_id"
 test -n "$asset_id"
 test -n "$collection_id"
+test -n "$source_id"
+test -n "$mask_id"
+test -n "$edit_job_id"
+test -n "$edit_asset_id"
 test -s "$DATA_HOST_DIR/app.db"
 test -n "$(find "$DATA_HOST_DIR/media/originals" -maxdepth 1 -type f -print -quit)"
+test "$(find "$DATA_HOST_DIR/media/masks" -maxdepth 1 -type f | wc -l | tr -d ' ')" = "1"
 
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
+SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
+EDIT_ASSET_ID="$edit_asset_id" \
   compose exec --no-TTY \
-  -e JOB_ID -e ASSET_ID -e COLLECTION_ID imagine-media node --input-type=module <<'NODE'
+  -e JOB_ID -e ASSET_ID -e COLLECTION_ID -e SOURCE_ID -e MASK_ID -e EDIT_JOB_ID \
+  -e EDIT_ASSET_ID imagine-media node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -189,6 +273,21 @@ const membership = database
 const eventCount = database
   .prepare('SELECT COUNT(*) AS count FROM change_events WHERE aggregate_id IN (?, ?, ?)')
   .get(process.env.JOB_ID, process.env.ASSET_ID, process.env.COLLECTION_ID).count;
+const editJob = database
+  .prepare('SELECT status, submit_attempt AS submitAttempt FROM jobs WHERE id = ?')
+  .get(process.env.EDIT_JOB_ID);
+const editInputs = database
+  .prepare('SELECT asset_id AS assetId, role, sort_order AS sortOrder FROM job_inputs WHERE job_id = ? ORDER BY role, sort_order')
+  .all(process.env.EDIT_JOB_ID);
+const source = database
+  .prepare('SELECT id, type, role, width, height, deleted_at AS deletedAt FROM assets WHERE id = ?')
+  .get(process.env.SOURCE_ID);
+const masks = database
+  .prepare("SELECT id, parent_asset_id AS parentAssetId, type, role, mime_type AS mimeType, width, height, thumbnail_path AS thumbnailPath FROM assets WHERE role = 'mask'")
+  .all();
+const editAsset = database
+  .prepare('SELECT id, job_id AS jobId, parent_asset_id AS parentAssetId, role FROM assets WHERE id = ?')
+  .get(process.env.EDIT_ASSET_ID);
 database.close();
 
 if (!migrations.includes('0000_pr0.sql') || !migrations.includes('0001_pr2_core.sql')) {
@@ -202,6 +301,44 @@ if (outputs.length !== 1 || outputs[0].assetId !== process.env.ASSET_ID) {
 }
 if (!asset || asset.favorite !== 1 || !membership?.present || eventCount < 3) {
   throw new Error('Asset favorite, Collection membership, or outbox events were not persisted.');
+}
+if (editJob?.status !== 'completed' || editJob.submitAttempt !== 1) {
+  throw new Error('Mock image.edit Job state was not persisted correctly.');
+}
+if (
+  editInputs.length !== 2 ||
+  !editInputs.some((input) => input.role === 'source' && input.assetId === process.env.SOURCE_ID) ||
+  !editInputs.some((input) => input.role === 'mask' && input.assetId === process.env.MASK_ID)
+) {
+  throw new Error('Durable image.edit inputs do not match the uploaded source and mask.');
+}
+if (
+  source?.type !== 'image' ||
+  source.role !== 'upload' ||
+  source.width !== 1 ||
+  source.height !== 1 ||
+  source.deletedAt !== null
+) {
+  throw new Error('The uploaded source image metadata was not persisted correctly.');
+}
+if (
+  masks.length !== 1 ||
+  masks[0].id !== process.env.MASK_ID ||
+  masks[0].parentAssetId !== process.env.SOURCE_ID ||
+  masks[0].type !== 'image' ||
+  masks[0].mimeType !== 'image/png' ||
+  masks[0].width !== 1 ||
+  masks[0].height !== 1 ||
+  masks[0].thumbnailPath !== null
+) {
+  throw new Error('Exactly one canonical mask with the source relationship must be persisted.');
+}
+if (
+  editAsset?.jobId !== process.env.EDIT_JOB_ID ||
+  editAsset.parentAssetId !== process.env.SOURCE_ID ||
+  editAsset.role !== 'output'
+) {
+  throw new Error('The image.edit output did not persist its source parent relationship.');
 }
 
 const absolutePath = resolve('/data', asset.filePath);
@@ -342,7 +479,9 @@ compose restart imagine-media
 compose up --detach --wait --wait-timeout 120
 
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
-QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" node --input-type=module <<'NODE'
+SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
+EDIT_ASSET_ID="$edit_asset_id" QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" \
+  node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
@@ -377,6 +516,28 @@ assert.ok(
     (collection) => collection.id === process.env.COLLECTION_ID && collection.itemCount === 1,
   ),
 );
+
+const edit = await json(`/internal/jobs/${process.env.EDIT_JOB_ID}`);
+assert.equal(edit.job.status, 'completed');
+assert.deepEqual(
+  new Map(edit.inputs.map((input) => [input.role, input.assetId])),
+  new Map([['mask', process.env.MASK_ID], ['source', process.env.SOURCE_ID]]),
+);
+assert.equal(edit.assets.length, 1);
+assert.equal(edit.assets[0].id, process.env.EDIT_ASSET_ID);
+assert.equal(edit.assets[0].parentAssetId, process.env.SOURCE_ID);
+
+const persistedSource = (await json(`/internal/assets/${process.env.SOURCE_ID}`)).asset;
+assert.equal(persistedSource.role, 'upload');
+assert.equal(persistedSource.width, 1);
+assert.equal(persistedSource.height, 1);
+const persistedMask = (await json(`/internal/assets/${process.env.MASK_ID}`)).asset;
+assert.equal(persistedMask.role, 'mask');
+assert.equal(persistedMask.parentAssetId, process.env.SOURCE_ID);
+const defaultAssets = await json('/internal/assets?limit=100');
+assert.ok(!defaultAssets.items.some((candidate) => candidate.id === process.env.MASK_ID));
+const masks = await json('/internal/assets?role=mask&limit=100');
+assert.ok(masks.items.some((candidate) => candidate.id === process.env.MASK_ID));
 
 const ranged = await fetch(baseUrl + asset.contentUrl, {
   headers: { range: 'bytes=0-7' },
