@@ -61,7 +61,7 @@ jobs:
           retention-days: 7
 
   docker-smoke:
-    name: Single-container persistence smoke
+    name: Single-container PR 2 API and persistence smoke
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -69,12 +69,23 @@ jobs:
         run: |
           runtime_dir=$(mktemp -d "$RUNNER_TEMP/imagine-media.XXXXXXXX")
           chmod 0700 "$runtime_dir"
+          host_port=$(node --input-type=module <<'NODE'
+          import { createServer } from 'node:net';
+          const server = createServer();
+          server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            if (!address || typeof address === 'string') throw new Error('Unable to allocate a smoke port.');
+            process.stdout.write(String(address.port));
+            server.close();
+          });
+          NODE
+          )
           echo "DATA_HOST_DIR=$runtime_dir" >> "$GITHUB_ENV"
           echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-          echo "APP_SECRET=github-actions-pr0-smoke-secret-not-for-production" >> "$GITHUB_ENV"
+          echo "APP_SECRET=github-actions-pr2-smoke-secret-not-for-production" >> "$GITHUB_ENV"
           echo "PUID=$(id -u)" >> "$GITHUB_ENV"
           echo "PGID=$(id -g)" >> "$GITHUB_ENV"
-          echo "IMAGINE_MEDIA_HOST_PORT=18080" >> "$GITHUB_ENV"
+          echo "IMAGINE_MEDIA_HOST_PORT=$host_port" >> "$GITHUB_ENV"
       - name: Validate and build the single service
         run: |
           test "$(docker compose config --services | wc -l | tr -d ' ')" = "1"
