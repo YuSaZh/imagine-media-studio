@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0 is complete, and the PR 1 functional UI Shell is in acceptance.** The current application includes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, installable PWA, responsive Gallery/Composer/Viewer flows, Library routes, and settings shell described in [`PLAN.MD`](./PLAN.MD).
+**PR 0 and the PR 1 functional UI Shell are complete.** The current application includes the clean monorepo, single-container runtime skeleton, SQLite persistence, Mock Provider, installable PWA, responsive Gallery/Composer/Viewer flows, Library routes, and settings shell described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -15,7 +15,7 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - Local lint, typecheck, unit, build, and isolated Playwright preflight
 - GitHub Actions quality, E2E, screenshot artifact, and Docker smoke verification
 
-Real providers remain intentionally out of scope until PR 4 and later. PR 1 uses only deterministic Mock fixtures. Its strict Grok Imagine L3/L4 classification remains pending because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
+Real providers remain intentionally out of scope until PR 4 and later. PR 1 uses only deterministic Mock fixtures and passed remote functional acceptance. Its strict Grok Imagine L3/L4 classification remains deferred because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
 
 PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 

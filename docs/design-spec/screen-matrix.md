@@ -84,4 +84,4 @@
 
 | PR | Surface ID | 实现截图 | Reference ID | Diff report | 结论 | Reviewer |
 | --- | --- | --- | --- | --- | --- | --- |
-| `PR 1` | Desktop/mobile Shell, Gallery, Composer, Viewer, Library, Settings | 1920x1080, 1440x900, 430x932, 390x844 | Public supplement only; authenticated IDs `TBD` | `pr1-visual-diff-report.md` | Local preflight; remote CI and L3/L4 Gate pending | Automated checks + local Codex visual review |
+| `PR 1` | Desktop/mobile Shell, Gallery, Composer, Viewer, Library, Settings | 1920x1080, 1440x900, 430x932, 390x844 | Public supplement only; authenticated IDs `TBD` | `pr1-visual-diff-report.md` | Functional remote pass; L3/L4 Gate deferred | GitHub Actions + Codex visual review |
