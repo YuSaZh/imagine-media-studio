@@ -21,6 +21,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { IconButton } from '../../../components/icon-button';
 import { useUiStore } from '../../../stores/ui-store';
+import { isVisualFixtureMode } from '../../../visual-fixture';
 import { useGalleryActions } from '../../gallery/api/gallery-query';
 import type { FixtureGalleryItem } from '../../gallery/model/types';
 import { canContinueWithImageInput } from '../../gallery/model/input-eligibility';
@@ -85,6 +86,11 @@ export function MediaViewer({ items }: MediaViewerProps) {
 
   const continueWith = (intent: 'edit' | 'reference' | 'video') => {
     if (!item) return;
+    if (intent === 'edit' && !isVisualFixtureMode()) {
+      closeViewer();
+      void navigate(`/edit/${encodeURIComponent(item.id)}`);
+      return;
+    }
     if (intent === 'reference') {
       addComposerInput({ assetId: item.id, role: 'reference' });
       setComposerMode('image');

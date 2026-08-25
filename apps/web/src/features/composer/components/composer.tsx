@@ -30,8 +30,8 @@ import {
   type StoredInputAvailability,
 } from '../../media-input/model/input-compatibility';
 import {
-  useGalleryQuery,
   useGallerySubmission,
+  useInputAssetInventoryQuery,
   useModelsQuery,
 } from '../../gallery/api/gallery-query';
 import type { FixtureAspectRatio } from '../../gallery/model/types';
@@ -59,8 +59,8 @@ export function Composer({ isOnline }: ComposerProps) {
   const setComposerMode = useUiStore((state) => state.setComposerMode);
   const setComposerExpanded = useUiStore((state) => state.setComposerExpanded);
   const setParamsOpen = useUiStore((state) => state.setComposerParamsOpen);
-  const galleryQuery = useGalleryQuery();
-  const galleryItems = galleryQuery.data ?? [];
+  const inputInventoryQuery = useInputAssetInventoryQuery();
+  const inputInventory = inputInventoryQuery.data ?? [];
   const { data: models = [] } = useModelsQuery();
   const queryClient = useQueryClient();
   const visualFixtures = isVisualFixtureMode();
@@ -134,7 +134,7 @@ export function Composer({ isOnline }: ComposerProps) {
     uploads.state.entries.flatMap((entry) =>
       entry.assetId === null ? [] : [[entry.assetId, entry] as const]),
   );
-  const galleryItemById = new Map(galleryItems.map((item) => [item.id, item]));
+  const galleryItemById = new Map(inputInventory.map((item) => [item.id, item]));
   const initialStoredInputChecks = composerInputs.map((input) => {
     const localEntry = readyUploadByAssetId.get(input.assetId);
     const galleryItem = galleryItemById.get(input.assetId);
@@ -144,7 +144,7 @@ export function Composer({ isOnline }: ComposerProps) {
     const inventoryAvailability = storedInputAvailability(
       candidate,
       selectedInputPolicy,
-      !galleryQuery.isPending,
+      !inputInventoryQuery.isPending,
     );
     return {
       availability: inventoryAvailability === 'ready' &&

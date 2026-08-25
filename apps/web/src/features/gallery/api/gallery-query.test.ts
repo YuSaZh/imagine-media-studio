@@ -16,6 +16,7 @@ import {
   galleryQueryKey,
   isVisualFixtureMode,
   loadGalleryData,
+  loadInputAssetInventoryData,
   loadProviderData,
   reduceGalleryItems,
   rollbackOptimisticSubmission,
@@ -296,12 +297,42 @@ describe('PR 2 gallery API integration', () => {
     await expect(loadGalleryData()).rejects.toThrow('API unavailable');
   });
 
+  it('combines visible images with explicitly requested Mask assets for Composer inputs', async () => {
+    const mask = {
+      ...API_ASSET,
+      id: 'mask-api-1',
+      role: 'mask' as const,
+      parentAssetId: API_ASSET.id,
+      contentUrl: '/internal/assets/mask-api-1/content',
+      thumbnailUrl: null,
+    };
+    const listAssets = vi.spyOn(internalClient, 'listAssets')
+      .mockResolvedValueOnce({ items: [API_ASSET], nextCursor: null })
+      .mockResolvedValueOnce({ items: [mask], nextCursor: null });
+
+    const inventory = await loadInputAssetInventoryData();
+    expect(inventory).toHaveLength(2);
+    expect(inventory).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: API_ASSET.id, persistedAsset: true }),
+      expect.objectContaining({ id: mask.id, persistedAsset: true }),
+    ]));
+    expect(listAssets).toHaveBeenNthCalledWith(1, { limit: 100, type: 'image' });
+    expect(listAssets).toHaveBeenNthCalledWith(2, {
+      limit: 100,
+      role: 'mask',
+      type: 'image',
+    });
+  });
+
   it('uses fixtures only when explicitly requested and does not call the API', async () => {
     vi.stubGlobal('sessionStorage', { getItem: () => 'pr1-v1' });
     const listAssets = vi.spyOn(internalClient, 'listAssets');
     const listJobs = vi.spyOn(internalClient, 'listJobs');
 
     await expect(loadGalleryData()).resolves.toBe(PR1_MOCK_GALLERY_ITEMS);
+    await expect(loadInputAssetInventoryData()).resolves.toEqual(
+      PR1_MOCK_GALLERY_ITEMS.filter((item) => item.kind === 'image'),
+    );
     expect(listAssets).not.toHaveBeenCalled();
     expect(listJobs).not.toHaveBeenCalled();
   });

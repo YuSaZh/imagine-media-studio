@@ -13,6 +13,9 @@ artifacts/visual/*
 !artifacts/visual/pr1/*.png
 !artifacts/visual/pr1/visual-diff-report.md
 artifacts/visual/pr1/states/
+!artifacts/visual/pr3/
+!artifacts/visual/pr3/*.png
+!artifacts/visual/pr3/visual-diff-report.md
 test-results/
 blob-report/
 

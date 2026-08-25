@@ -32,7 +32,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: Playwright PR 1 UI and PWA
+    name: Playwright PR 1 and PR 3 UI and PWA
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -52,6 +52,12 @@ jobs:
         with:
           name: pr1-ui-screenshots
           path: artifacts/visual/pr1
+          retention-days: 7
+      - if: success() && hashFiles('artifacts/visual/pr3/*.png') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr3-ui-screenshots
+          path: artifacts/visual/pr3
           retention-days: 7
       - if: failure() && hashFiles('playwright-report/**') != ''
         uses: actions/upload-artifact@v6

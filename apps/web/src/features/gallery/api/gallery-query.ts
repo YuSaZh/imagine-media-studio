@@ -35,6 +35,7 @@ import { mapInternalGallery } from '../model/api-mapper.js';
 export { isVisualFixtureMode } from '../../../visual-fixture.js';
 
 export const galleryQueryKey = internalQueryKeys.gallery;
+export const inputAssetInventoryQueryKey = [...internalQueryKeys.assets, 'input-inventory'] as const;
 export const optimisticSequenceQueryKey = ['pr1-gallery-optimistic-sequence'] as const;
 export const providerQueryKey = internalQueryKeys.providers;
 export const modelsQueryKey = internalQueryKeys.models;
@@ -226,6 +227,27 @@ export async function loadGalleryData(): Promise<readonly FixtureGalleryItem[]> 
 
 export function useGalleryQuery() {
   return useQuery({ queryKey: galleryQueryKey, queryFn: () => loadGalleryData() });
+}
+
+export async function loadInputAssetInventoryData(): Promise<readonly FixtureGalleryItem[]> {
+  if (isVisualFixtureMode()) {
+    return PR1_MOCK_GALLERY_ITEMS.filter((item) => item.kind === 'image');
+  }
+  const [visibleImages, masks] = await Promise.all([
+    collectPages((cursor) => internalClient.listAssets({ ...withCursor(cursor), type: 'image' })),
+    collectPages((cursor) =>
+      internalClient.listAssets({ ...withCursor(cursor), role: 'mask', type: 'image' }),
+    ),
+  ]);
+  const assetsById = new Map([...visibleImages, ...masks].map((asset) => [asset.id, asset]));
+  return mapInternalGallery([...assetsById.values()], []).filter((item) => item.kind === 'image');
+}
+
+export function useInputAssetInventoryQuery() {
+  return useQuery({
+    queryKey: inputAssetInventoryQueryKey,
+    queryFn: () => loadInputAssetInventoryData(),
+  });
 }
 
 export function useProviderQuery() {
