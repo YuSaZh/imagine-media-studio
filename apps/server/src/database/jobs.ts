@@ -4,6 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   MAX_GENERATION_COUNT,
   GenerationRequestSchema,
+  CustomAdapterRefSchema,
+  type CustomAdapterRef,
   type GenerationRequest,
   type JobStatus,
 } from '@imagine/shared';
@@ -33,7 +35,14 @@ import {
   type CursorPage,
   type PageRequest,
 } from './pagination.js';
-import { assets, changeEvents, jobInputs, jobOutputs, jobs } from './schema.js';
+import {
+  assets,
+  changeEvents,
+  jobInputs,
+  jobOutputs,
+  jobs,
+  providerAdapterDefinitions,
+} from './schema.js';
 import { parseStageRetryCounts, type StageRetryCounts } from '../jobs/retry-budget.js';
 import {
   MAX_SUBMITTED_MANIFEST_BYTES,
@@ -60,6 +69,9 @@ const ACTIVE_STATUSES: readonly JobStatus[] = [
   'processing',
 ];
 const MAX_PERSISTED_REQUEST_BYTES = 1 * 1024 * 1024;
+const MAX_PERSISTED_STAGE_RETRY_BYTES = 16 * 1024;
+const MAX_PERSISTED_STAGE_RETRY_DEPTH = 8;
+const MAX_PERSISTED_STAGE_RETRY_NODES = 64;
 
 const COMPATIBLE_PREVIOUS_STATUSES: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
   queued: ['queued', 'submitting'],
@@ -102,6 +114,7 @@ export interface JobRecord {
   readonly cancelRequestedAt: Date | null;
   readonly requestSha256: string;
   readonly deletedAt: Date | null;
+  readonly adapterRef: CustomAdapterRef | null;
 }
 
 export interface CreateJobInput {
@@ -172,7 +185,11 @@ export class JobRepositoryError extends Error {
       | 'input_asset_not_found'
       | 'output_asset_conflict'
       | 'output_slot_mismatch'
-      | 'source_input_required',
+      | 'source_input_required'
+      | 'adapter_ref_invalid'
+      | 'adapter_definition_not_found'
+      | 'adapter_ref_corrupt'
+      | 'persisted_data_corrupt',
     message: string,
   ) {
     super(message);
@@ -218,7 +235,72 @@ function requestFromJson(value: string, label: string): GenerationRequest {
   return GenerationRequestSchema.parse(parseJsonDocument(value, label, MAX_PERSISTED_REQUEST_BYTES));
 }
 
+function persistedStageRetryCounts(value: string, label: string): StageRetryCounts {
+  if (Buffer.byteLength(value, 'utf8') > MAX_PERSISTED_STAGE_RETRY_BYTES) {
+    throw new JobRepositoryError('persisted_data_corrupt', `${label} is invalid.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new JobRepositoryError('persisted_data_corrupt', `${label} is invalid.`);
+  }
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: parsed, depth: 0 }];
+  let nodes = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) continue;
+    nodes += 1;
+    if (nodes > MAX_PERSISTED_STAGE_RETRY_NODES || current.depth > MAX_PERSISTED_STAGE_RETRY_DEPTH) {
+      throw new JobRepositoryError('persisted_data_corrupt', `${label} is invalid.`);
+    }
+    if (current.value !== null && typeof current.value === 'object') {
+      if (Array.isArray(current.value)) {
+        for (const item of current.value) pending.push({ value: item, depth: current.depth + 1 });
+      } else {
+        for (const [key, item] of Object.entries(current.value)) {
+          if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            throw new JobRepositoryError('persisted_data_corrupt', `${label} is invalid.`);
+          }
+          pending.push({ value: item, depth: current.depth + 1 });
+        }
+      }
+    }
+  }
+  try {
+    return parseStageRetryCounts(parsed);
+  } catch {
+    throw new JobRepositoryError('persisted_data_corrupt', `${label} is invalid.`);
+  }
+}
+
+function adapterRefFromColumns(row: {
+  readonly adapterKind: string | null;
+  readonly adapterId: string | null;
+  readonly adapterVersion: string | null;
+  readonly adapterDigest: string | null;
+}): CustomAdapterRef | null {
+  const values = [row.adapterKind, row.adapterId, row.adapterVersion, row.adapterDigest];
+  const isEmpty = values.every((value) => value === null);
+  const isComplete = values.every((value) => value !== null);
+  if (!isEmpty && !isComplete) {
+    throw new JobRepositoryError('adapter_ref_corrupt', 'Job adapter reference is invalid.');
+  }
+  if (isEmpty) return null;
+  const parsed = CustomAdapterRefSchema.safeParse({
+    kind: row.adapterKind,
+    adapterId: row.adapterId,
+    version: row.adapterVersion,
+    digest: row.adapterDigest,
+  });
+  if (!parsed.success) {
+    throw new JobRepositoryError('adapter_ref_corrupt', 'Job adapter reference is invalid.');
+  }
+  return parsed.data;
+}
+
 function mapJob(row: typeof jobs.$inferSelect): JobRecord {
+  const adapterRef = adapterRefFromColumns(row);
   return {
     id: row.id,
     request: requestFromJson(row.requestJson, `Job ${row.id} request`),
@@ -237,7 +319,7 @@ function mapJob(row: typeof jobs.$inferSelect): JobRecord {
     errorMessage: row.errorMessage,
     retryCount: row.retryCount,
     submitAttempt: row.submitAttempt,
-    stageRetryCounts: parseStageRetryCounts(JSON.parse(row.stageRetryCountsJson)),
+    stageRetryCounts: persistedStageRetryCounts(row.stageRetryCountsJson, `Job ${row.id} stage retry budget`),
     pollAfterAt: row.pollAfterAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -249,7 +331,15 @@ function mapJob(row: typeof jobs.$inferSelect): JobRecord {
     cancelRequestedAt: row.cancelRequestedAt,
     requestSha256: row.requestSha256,
     deletedAt: row.deletedAt,
+    adapterRef,
   };
+}
+
+function normalizeAdapterRef(value: CustomAdapterRef | null | undefined): CustomAdapterRef | null {
+  if (value === undefined || value === null) return null;
+  const parsed = CustomAdapterRefSchema.safeParse(value);
+  if (!parsed.success) throw new JobRepositoryError('adapter_ref_invalid', 'Job adapter reference is invalid.');
+  return parsed.data;
 }
 
 function jobCursorCondition(cursor: { timestampMs: number; id: string }): SQL {
@@ -302,18 +392,21 @@ function statusUpdateValues(
 export class JobRepository {
   public constructor(private readonly database: AppDatabase) {}
 
-  public create(request: GenerationRequest): JobRecord {
+  public create(request: GenerationRequest, adapterRef?: CustomAdapterRef | null): JobRecord {
     return this.createWithInputs(
       request,
       request.inputs.map((input, sortOrder) => ({ ...input, sortOrder })),
+      adapterRef,
     );
   }
 
   public createWithInputs(
     rawRequest: GenerationRequest,
     inputs: readonly CreateJobInput[],
+    adapterRef?: CustomAdapterRef | null,
   ): JobRecord {
     const request = GenerationRequestSchema.parse(rawRequest);
+    const normalizedAdapterRef = normalizeAdapterRef(adapterRef);
     const id = randomUUID();
     const now = new Date();
     const requestJson = JSON.stringify(request);
@@ -330,6 +423,27 @@ export class JobRepository {
             'input_asset_not_found',
             'One or more job input assets do not exist.',
           );
+        }
+      }
+      if (normalizedAdapterRef !== null) {
+        const definition = transaction
+          .select({
+            kind: providerAdapterDefinitions.kind,
+            adapterId: providerAdapterDefinitions.adapterId,
+            version: providerAdapterDefinitions.version,
+            digest: providerAdapterDefinitions.digest,
+          })
+          .from(providerAdapterDefinitions)
+          .where(and(
+            eq(providerAdapterDefinitions.providerId, request.providerId),
+            eq(providerAdapterDefinitions.kind, normalizedAdapterRef.kind),
+            eq(providerAdapterDefinitions.adapterId, normalizedAdapterRef.adapterId),
+            eq(providerAdapterDefinitions.version, normalizedAdapterRef.version),
+            eq(providerAdapterDefinitions.digest, normalizedAdapterRef.digest),
+          ))
+          .get();
+        if (definition === undefined) {
+          throw new JobRepositoryError('adapter_definition_not_found', 'Referenced adapter definition was not found.');
         }
       }
       transaction
@@ -365,6 +479,10 @@ export class JobRepository {
           cancelRequestedAt: null,
           requestSha256: requestHash(requestJson),
           deletedAt: null,
+          adapterKind: normalizedAdapterRef?.kind ?? null,
+          adapterId: normalizedAdapterRef?.adapterId ?? null,
+          adapterVersion: normalizedAdapterRef?.version ?? null,
+          adapterDigest: normalizedAdapterRef?.digest ?? null,
         })
         .run();
       for (const input of inputs) {
@@ -462,8 +580,18 @@ export class JobRepository {
       try {
         candidates.push(mapJob(row));
       } catch (error) {
-        if (!(error instanceof SubmittedAssetValidationError)) throw error;
-        this.quarantineInvalidManifest(row.id, row.revision);
+        if (error instanceof SubmittedAssetValidationError) {
+          this.quarantineInvalidManifest(row.id, row.revision);
+          continue;
+        }
+        if (
+          error instanceof JobRepositoryError &&
+          (error.code === 'adapter_ref_corrupt' || error.code === 'persisted_data_corrupt')
+        ) {
+          this.quarantineInvalidAdapterRef(row.id, row.revision);
+          continue;
+        }
+        throw error;
       }
     }
     return candidates.filter((job) => {
@@ -491,6 +619,56 @@ export class JobRepository {
           errorCode: 'provider_output_rejected',
           errorMessage: 'The persisted provider output manifest was rejected.',
           stageRetryCountsJson: '{}',
+          updatedAt: now,
+          revision: expectedRevision + 1,
+        })
+        .where(and(
+          eq(jobs.id, id),
+          eq(jobs.revision, expectedRevision),
+          inArray(jobs.status, [...ACTIVE_STATUSES, 'completed']),
+          isNull(jobs.deletedAt),
+        ))
+        .run();
+      if (changed.changes !== 1) return null;
+      transaction
+        .insert(changeEvents)
+        .values(
+          toChangeEventValues({
+            aggregateType: 'job',
+            aggregateId: id,
+            eventType: 'job.updated',
+            payload: { id, status: 'rejected', revision: expectedRevision + 1 },
+            createdAt: now,
+          }),
+        )
+        .run();
+      const row = transaction.select().from(jobs).where(eq(jobs.id, id)).get();
+      return row ? mapJob(row) : null;
+    });
+  }
+
+  /** Isolate a corrupt adapter reference or stage retry document per job. */
+  public quarantineInvalidAdapterRef(id: string, expectedRevision: number): JobRecord | null {
+    return this.database.transaction((transaction) => {
+      const now = new Date();
+      const changed = transaction
+        .update(jobs)
+        .set({
+          status: 'rejected',
+          stage: 'rejected',
+          progress: null,
+          pollAfterAt: null,
+          resultManifestJson: '[]',
+          remoteDeadlineAt: null,
+          resultExpiresAt: null,
+          completedAt: null,
+          errorCode: 'provider_adapter_ref_rejected',
+          errorMessage: 'The persisted provider adapter reference was rejected.',
+          stageRetryCountsJson: '{}',
+          adapterKind: null,
+          adapterId: null,
+          adapterVersion: null,
+          adapterDigest: null,
           updatedAt: now,
           revision: expectedRevision + 1,
         })
@@ -826,6 +1004,23 @@ export class JobRepository {
       const retryId = randomUUID();
       const now = new Date();
       const inputs = transaction.select().from(jobInputs).where(eq(jobInputs.jobId, source.id)).all();
+      const sourceAdapterRef = adapterRefFromColumns(source);
+      if (sourceAdapterRef !== null) {
+        const definition = transaction
+          .select({ providerId: providerAdapterDefinitions.providerId })
+          .from(providerAdapterDefinitions)
+          .where(and(
+            eq(providerAdapterDefinitions.providerId, source.providerId),
+            eq(providerAdapterDefinitions.kind, sourceAdapterRef.kind),
+            eq(providerAdapterDefinitions.adapterId, sourceAdapterRef.adapterId),
+            eq(providerAdapterDefinitions.version, sourceAdapterRef.version),
+            eq(providerAdapterDefinitions.digest, sourceAdapterRef.digest),
+          ))
+          .get();
+        if (definition === undefined) {
+          throw new JobRepositoryError('adapter_definition_not_found', 'Referenced adapter definition was not found.');
+        }
+      }
       const inputIds = [...new Set(inputs.map((input) => input.assetId))];
       if (inputIds.length > 0) {
         const activeInputs = transaction
@@ -873,6 +1068,10 @@ export class JobRepository {
           cancelRequestedAt: null,
           requestSha256: source.requestSha256 || requestHash(source.requestJson),
           deletedAt: null,
+          adapterKind: source.adapterKind,
+          adapterId: source.adapterId,
+          adapterVersion: source.adapterVersion,
+          adapterDigest: source.adapterDigest,
         })
         .run();
       for (const input of inputs) {

@@ -88,7 +88,6 @@ export interface OpenAiRuntimeContext extends ProviderContext {
     readonly width?: number;
     readonly height?: number;
   })[];
-  readonly http?: OpenAiHttpTransport | OpenAiHttpRequestExecutor;
   readonly transport?: OpenAiHttpTransport | OpenAiHttpRequestExecutor;
 }
 

@@ -9,6 +9,7 @@ import {
   AdapterWorkerHost,
   AdapterWorkerTimeoutError,
   AdapterStore,
+  AdapterStoreError,
   createAdapterWorkerFactory,
   parseBoundedManifestJson,
   validateAdapterResult,
@@ -62,6 +63,12 @@ const context: AdapterProviderContext = {
   config: { mode: 'safe', nested: { value: 'bounded' } },
   secrets: { apiKey: 'real-secret', other: 'must-not-cross' },
 };
+const runtimeReference = {
+  kind: 'trusted-javascript',
+  adapterId: 'fixture-adapter',
+  version: '1.0.0',
+  digest: baseManifest.sha256,
+} as const;
 
 const roots: string[] = [];
 
@@ -209,7 +216,7 @@ async function makeStore(): Promise<AdapterStore> {
   const root = await mkdtemp(join(tmpdir(), 'imagine-worker-'));
   roots.push(root);
   const store = new AdapterStore(root, { adminEnabled: true, assertAdmin() {} });
-  await store.install({ manifest: manifest(), source, adminEnabled: true });
+  await store.install({ manifest: manifest(), source });
   return store;
 }
 
@@ -242,12 +249,12 @@ describe('AdapterWorkerHost', () => {
   it('does not expose provider secrets to capabilities and filters them for submit', async () => {
     const store = await makeStore();
     const captured: AdapterWorkerData[] = [];
-    const host = new AdapterWorkerHost(store, httpPort(), factory('capabilities', captured));
-    await expect(host.call('fixture-adapter', 'capabilities', context)).resolves.toMatchObject({ providerType: 'fixture' });
+    const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('capabilities', captured));
+    await expect(host.call(runtimeReference, 'capabilities', context)).resolves.toMatchObject({ providerType: 'fixture' });
     expect(captured[0]?.provider).toBeUndefined();
     const submitCaptured: AdapterWorkerData[] = [];
-    const submitHost = new AdapterWorkerHost(store, httpPort(), factory('submit', submitCaptured));
-    await submitHost.call('fixture-adapter', 'submit', context);
+    const submitHost = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('submit', submitCaptured));
+    await submitHost.call(runtimeReference, 'submit', context);
     expect(submitCaptured[0]?.provider?.secrets).toEqual({ apiKey: 'real-secret' });
     expect(submitCaptured[0]?.provider?.config).toEqual({ mode: 'safe', nested: { value: 'bounded' } });
     expect(Object.getPrototypeOf(submitCaptured[0]?.provider?.config ?? {})).toBeNull();
@@ -255,36 +262,45 @@ describe('AdapterWorkerHost', () => {
     expect(JSON.stringify(submitCaptured[0])).not.toContain('discarded');
   });
 
+  it('does not execute a declarative reference through the trusted runtime reader', async () => {
+    const store = await makeStore();
+    const captured: AdapterWorkerData[] = [];
+    const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('submit', captured));
+    const wrongKind = { ...runtimeReference, kind: 'declarative-http' } as never;
+    await expect(host.call(wrongKind, 'submit', context)).rejects.toThrow(AdapterStoreError);
+    expect(captured).toHaveLength(0);
+  });
+
   it('requires capabilities to stay within the manifest provider, models and operations', async () => {
     const store = await makeStore();
     for (const mode of ['capabilities-wrong-provider', 'capabilities-unknown-model', 'capabilities-extra-operation', 'capabilities-extra-support'] as const) {
-      const host = new AdapterWorkerHost(store, httpPort(), factory(mode));
-      await expect(host.call('fixture-adapter', 'capabilities', context)).rejects.toMatchObject({ code: 'adapter_result_invalid' });
+      const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory(mode));
+      await expect(host.call(runtimeReference, 'capabilities', context)).rejects.toMatchObject({ code: 'adapter_result_invalid' });
     }
   });
 
   it('counts nested Uint8Array values by raw bytes and enforces the full worker message limit', async () => {
     expect(messageBytes({ body: new Uint8Array(100) })).toBeLessThan(200);
     const store = await makeStoreWithLimits({ maxMessageBytes: 128 });
-    await expect(new AdapterWorkerHost(store, httpPort(), factory('submit')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterProtocolError);
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('submit')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterProtocolError);
   });
 
   it('rejects secret-like keys in provider config and required missing secrets', async () => {
     const store = await makeStore();
-    const host = new AdapterWorkerHost(store, httpPort(), factory('submit'));
-    await expect(host.call('fixture-adapter', 'submit', { ...context, config: { nested: { token: 'blocked' } } })).rejects.toThrow('forbidden key');
-    await expect(host.call('fixture-adapter', 'submit', { ...context, secrets: {} })).rejects.toThrow('Required provider secret');
+    const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('submit'));
+    await expect(host.call(runtimeReference, 'submit', { ...context, config: { nested: { token: 'blocked' } } })).rejects.toThrow('forbidden key');
+    await expect(host.call(runtimeReference, 'submit', { ...context, secrets: {} })).rejects.toThrow('Required provider secret');
   });
 
   it('passes bounded bytes and returns a strictly validated submit result', async () => {
     const store = await makeStore();
     const captured: AdapterWorkerData[] = [];
-    const host = new AdapterWorkerHost(store, httpPort(), factory('submit', captured));
+    const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('submit', captured));
     const invocation: AdapterInvocation = {
       request: { operation: 'image.generate', prompt: 'real-secret should be redacted' },
       files: [{ assetId: 'asset-1', role: 'source', mimeType: 'image/png', bytes: new Uint8Array([1, 2, 3]) }],
     };
-    await expect(host.call('fixture-adapter', 'submit', context, invocation)).resolves.toMatchObject({ state: 'completed' });
+    await expect(host.call(runtimeReference, 'submit', context, invocation)).resolves.toMatchObject({ state: 'completed' });
     expect(captured[0]?.files?.[0]?.bytes).toEqual(new Uint8Array([1, 2, 3]));
     expect(Object.getPrototypeOf(captured[0]?.files?.[0] ?? {})).toBeNull();
     expect(Object.getPrototypeOf(captured[0]?.request ?? {})).toBeNull();
@@ -294,25 +310,25 @@ describe('AdapterWorkerHost', () => {
 
   it('dispatches poll, cancel and normalizeError through the same one-call worker boundary', async () => {
     const store = await makeStore();
-    const pollHost = new AdapterWorkerHost(store, httpPort(), factory('submit'));
-    await expect(pollHost.call('fixture-adapter', 'poll', context, { remoteJobId: 'remote-1' })).resolves.toMatchObject({ state: 'completed' });
-    await expect(pollHost.call('fixture-adapter', 'cancel', context, { remoteJobId: 'remote-1' })).resolves.toBeUndefined();
-    await expect(pollHost.call('fixture-adapter', 'normalizeError', context, { error: { message: 'upstream failed', status: 500 } })).resolves.toMatchObject({ code: 'normalized' });
+    const pollHost = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('submit'));
+    await expect(pollHost.call(runtimeReference, 'poll', context, { remoteJobId: 'remote-1' })).resolves.toMatchObject({ state: 'completed' });
+    await expect(pollHost.call(runtimeReference, 'cancel', context, { remoteJobId: 'remote-1' })).resolves.toBeUndefined();
+    await expect(pollHost.call(runtimeReference, 'normalizeError', context, { error: { message: 'upstream failed', status: 500 } })).resolves.toMatchObject({ code: 'normalized' });
   });
 
   it('routes HTTP only through the injected port and enforces manifest hosts', async () => {
     const store = await makeStore();
     const requests: AdapterHttpRequest[] = [];
-    const host = new AdapterWorkerHost(store, httpPort(requests), factory('http'));
-    await expect(host.call('fixture-adapter', 'submit', context)).resolves.toMatchObject({ state: 'completed' });
+    const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(requests), factory('http'));
+    await expect(host.call(runtimeReference, 'submit', context)).resolves.toMatchObject({ state: 'completed' });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe('https://api.example.com/v1/generate');
-    const blockedHost = new AdapterWorkerHost(store, httpPort(), factory('evil-http'));
-    await expect(blockedHost.call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    const blockedHost = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('evil-http'));
+    await expect(blockedHost.call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
     const redirectPort: SafeHttpPort = { async request() { return { status: 302, headers: { location: 'https://evil.example' }, body: new Uint8Array() }; } };
-    await expect(new AdapterWorkerHost(store, redirectPort, factory('redirect')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    await expect(new AdapterWorkerHost(store.runtimeReader(), redirectPort, factory('redirect')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
     const leakingPort: SafeHttpPort = { async request() { throw new Error('upstream real-secret leaked'); } };
-    await expect(new AdapterWorkerHost(store, leakingPort, factory('http')).call('fixture-adapter', 'submit', context)).rejects.not.toThrow('real-secret');
+    await expect(new AdapterWorkerHost(store.runtimeReader(), leakingPort, factory('http')).call(runtimeReference, 'submit', context)).rejects.not.toThrow('real-secret');
   });
 
   it('rejects credential URLs, hop-by-hop headers and case-insensitive duplicates', () => {
@@ -354,36 +370,36 @@ describe('AdapterWorkerHost', () => {
 
   it('maps timeout, abort, worker errors, output flood, message flood and id mismatch', async () => {
     const store = await makeStore();
-    await expect(new AdapterWorkerHost(store, httpPort(), factory('timeout')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerTimeoutError);
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('timeout')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerTimeoutError);
     const controller = new AbortController();
-    const abortHost = new AdapterWorkerHost(store, httpPort(), factory('timeout'));
-    const pending = abortHost.call('fixture-adapter', 'submit', context, {}, controller.signal);
+    const abortHost = new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('timeout'));
+    const pending = abortHost.call(runtimeReference, 'submit', context, {}, controller.signal);
     controller.abort();
     await expect(pending).rejects.toThrow(AdapterWorkerAbortError);
-    await expect(new AdapterWorkerHost(store, httpPort(), factory('oom')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
-    await expect(new AdapterWorkerHost(store, httpPort(), factory('flood')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
-    await expect(new AdapterWorkerHost(store, httpPort(), factory('mismatch')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('oom')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('flood')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('mismatch')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
     const smallOutputStore = await makeStoreWithLimits({ maxOutputBytes: 128 });
-    await expect(new AdapterWorkerHost(smallOutputStore, httpPort(), factory('large-output')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    await expect(new AdapterWorkerHost(smallOutputStore.runtimeReader(), httpPort(), factory('large-output')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
     const smallLogStore = await makeStoreWithLimits({ maxLogBytes: 32 });
-    await expect(new AdapterWorkerHost(smallLogStore, httpPort(), factory('stdout')).call('fixture-adapter', 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
+    await expect(new AdapterWorkerHost(smallLogStore.runtimeReader(), httpPort(), factory('stdout')).call(runtimeReference, 'submit', context)).rejects.toThrow(AdapterWorkerFailure);
     const terminatingStore = await makeStore();
     let terminatingWorker: FakeWorker | undefined;
-    await expect(new AdapterWorkerHost(terminatingStore, httpPort(), (data) => {
+    await expect(new AdapterWorkerHost(terminatingStore.runtimeReader(), httpPort(), (data) => {
       terminatingWorker = new FakeWorker(data, 'terminate-reject');
       return terminatingWorker;
-    }).call('fixture-adapter', 'submit', context)).rejects.toMatchObject({ code: 'adapter_terminate_failed' });
+    }).call(runtimeReference, 'submit', context)).rejects.toMatchObject({ code: 'adapter_terminate_failed' });
     expect(terminatingWorker?.terminateCalls).toBe(2);
-    await expect(new AdapterWorkerHost(store, httpPort(), factory('post-fail-http')).call('fixture-adapter', 'submit', context)).rejects.toMatchObject({ code: 'adapter_worker_channel' });
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), factory('post-fail-http')).call(runtimeReference, 'submit', context)).rejects.toMatchObject({ code: 'adapter_worker_channel' });
   });
 
   it('removes worker listeners and stream listeners after a normal result', async () => {
     const store = await makeStore();
     let worker: FakeWorker | undefined;
-    await expect(new AdapterWorkerHost(store, httpPort(), (data) => {
+    await expect(new AdapterWorkerHost(store.runtimeReader(), httpPort(), (data) => {
       worker = new FakeWorker(data, 'submit');
       return worker;
-    }).call('fixture-adapter', 'submit', context)).resolves.toMatchObject({ state: 'completed' });
+    }).call(runtimeReference, 'submit', context)).resolves.toMatchObject({ state: 'completed' });
     expect(worker?.listenerCount('message')).toBe(0);
     expect(worker?.listenerCount('error')).toBe(0);
     expect(worker?.listenerCount('exit')).toBe(0);
@@ -395,11 +411,11 @@ describe('AdapterWorkerHost', () => {
     const store = await makeStore();
     const controller = new AbortController();
     let worker: FakeWorker | undefined;
-    const host = new AdapterWorkerHost(store, httpPort(), (data) => {
+    const host = new AdapterWorkerHost(store.runtimeReader(), httpPort(), (data) => {
       worker = new FakeWorker(data, 'timeout', 20);
       return worker;
     });
-    const pending = host.call('fixture-adapter', 'submit', context, {}, controller.signal);
+    const pending = host.call(runtimeReference, 'submit', context, {}, controller.signal);
     await vi.waitFor(() => expect(worker).toBeDefined());
     controller.abort();
     await expect(pending).rejects.toThrow(AdapterWorkerAbortError);
@@ -411,7 +427,7 @@ describe('AdapterWorkerHost', () => {
     const store = await makeStore();
     let requestStarted = false;
     let requestAborted = false;
-    const host = new AdapterWorkerHost(store, {
+    const host = new AdapterWorkerHost(store.runtimeReader(), {
       request(_input, signal) {
         requestStarted = true;
         return new Promise<AdapterHttpResponse>((_resolve, reject) => {
@@ -422,7 +438,7 @@ describe('AdapterWorkerHost', () => {
         });
       },
     }, factory('http'));
-    const pending = host.call('fixture-adapter', 'submit', context);
+    const pending = host.call(runtimeReference, 'submit', context);
     const rejection = expect(pending).rejects.toThrow(AdapterWorkerAbortError);
     await vi.waitFor(() => expect(requestStarted).toBe(true));
     await host.close();
@@ -432,9 +448,12 @@ describe('AdapterWorkerHost', () => {
 
   it('executes the checked fixture through a real worker entry and RPCs HTTP', async () => {
     const store = await makeFixtureStore();
+    const fixtureManifest = parseBoundedManifestJson(
+      await readFile(new URL('manifest.json', new URL('../../../../fixtures/adapters/trusted-fixture-v1/', import.meta.url))),
+    );
     const requests: AdapterHttpRequest[] = [];
     const host = new AdapterWorkerHost(
-      store,
+      store.runtimeReader(),
       {
         async request(input) {
           requests.push(input);
@@ -453,11 +472,17 @@ describe('AdapterWorkerHost', () => {
       config: { region: 'test' },
       secrets: { apiKey: 'real-secret', other: 'discarded' },
     };
-    const submitted = await host.submit('trusted-fixture-v1', fixtureContext, { request: { operation: 'image.generate', prompt: 'http' } });
+    const fixtureReference = {
+      kind: 'trusted-javascript',
+      adapterId: 'trusted-fixture-v1',
+      version: fixtureManifest.version,
+      digest: fixtureManifest.sha256,
+    } as const;
+    const submitted = await host.submit(fixtureReference, fixtureContext, { request: { operation: 'image.generate', prompt: 'http' } });
     expect(submitted).toMatchObject({ state: 'completed', assets: [{ metadata: { httpHeaderCount: 1 } }] });
-    await expect(host.poll('trusted-fixture-v1', fixtureContext, 'remote-1')).resolves.toMatchObject({ state: 'completed' });
-    await expect(host.normalizeError('trusted-fixture-v1', fixtureContext, { message: 'remote error', status: 500 })).resolves.toMatchObject({ code: 'adapter_error' });
-    await expect(host.cancel('trusted-fixture-v1', fixtureContext, 'remote-1')).resolves.toBeUndefined();
+    await expect(host.poll(fixtureReference, fixtureContext, 'remote-1')).resolves.toMatchObject({ state: 'completed' });
+    await expect(host.normalizeError(fixtureReference, fixtureContext, { message: 'remote error', status: 500 })).resolves.toMatchObject({ code: 'adapter_error' });
+    await expect(host.cancel(fixtureReference, fixtureContext, 'remote-1')).resolves.toBeUndefined();
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe('https://api.example.com/v1/generate');
     expect(requests[0]?.headers.authorization).toBe('Bearer real-secret');
@@ -471,7 +496,7 @@ async function makeStoreWithLimits(overrides: Partial<typeof limits>): Promise<A
   const root = await mkdtemp(join(tmpdir(), 'imagine-worker-limits-'));
   roots.push(root);
   const store = new AdapterStore(root, { adminEnabled: true, assertAdmin() {} });
-  await store.install({ manifest: manifest({ resourceLimits: { ...limits, ...overrides } }), source, adminEnabled: true });
+  await store.install({ manifest: manifest({ resourceLimits: { ...limits, ...overrides } }), source });
   return store;
 }
 
@@ -482,9 +507,9 @@ async function makeFixtureStore(): Promise<AdapterStore> {
   const root = await mkdtemp(join(tmpdir(), 'imagine-real-worker-'));
   roots.push(root);
   const directory = new URL('../../../../fixtures/adapters/trusted-fixture-v1/', import.meta.url);
-  const sourceBytes = await readFile(new URL('adapter.mjs', directory));
-  const manifest = parseBoundedManifestJson(await readFile(new URL('manifest.json', directory)));
-  const store = new AdapterStore(root, { adminEnabled: true, assertAdmin() {} });
-  await store.install({ manifest, source: sourceBytes, adminEnabled: true });
-  return store;
+    const sourceBytes = await readFile(new URL('adapter.mjs', directory));
+    const manifest = parseBoundedManifestJson(await readFile(new URL('manifest.json', directory)));
+    const store = new AdapterStore(root, { adminEnabled: true, assertAdmin() {} });
+    await store.install({ manifest, source: sourceBytes });
+    return store;
 }

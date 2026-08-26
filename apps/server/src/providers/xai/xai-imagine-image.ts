@@ -104,7 +104,6 @@ export interface XaiImagineImageInput extends ProviderInput {
 export interface XaiImagineProviderContext extends ProviderContext {
   readonly baseUrl?: string;
   readonly config?: Readonly<Record<string, unknown>>;
-  readonly http?: XaiImagineHttpClient | XaiImagineHttpRequestExecutor;
   readonly headers?: Readonly<Record<string, string>>;
   readonly inputs?: readonly XaiImagineImageInput[];
   readonly transport?: XaiImagineHttpClient | XaiImagineHttpRequestExecutor;
@@ -1024,7 +1023,7 @@ function modelsEndpointFor(baseUrl: string): string {
 }
 
 function contextHttp(context: XaiImagineProviderContext): XaiImagineHttpClient | XaiImagineHttpRequestExecutor | undefined {
-  return context.http;
+  return context.http ?? context.transport;
 }
 
 function contextBaseUrl(context: XaiImagineProviderContext, fallback: string | undefined): string {

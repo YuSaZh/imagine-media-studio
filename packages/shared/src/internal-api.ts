@@ -145,6 +145,36 @@ export const ProviderBaseUrlSchema = z.string().url().max(2048).refine(isSafePro
   message: 'Provider Base URL must use HTTP or HTTPS without credentials, query, or fragment.',
 });
 
+function hasControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127;
+  });
+}
+
+const CustomAdapterIdSchema = z.string()
+  .min(1)
+  .max(63)
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$/u)
+  .refine((value) => !hasControlCharacters(value), 'Adapter id must not contain control characters.')
+  .refine((value) => !value.includes('..') && !value.includes('/') && !value.includes('\\'), 'Adapter id must not contain path syntax.');
+const CustomAdapterVersionSchema = z.string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/u)
+  .refine((value) => !hasControlCharacters(value), 'Adapter version must not contain control characters.');
+const CustomAdapterDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+export const CustomAdapterKindSchema = z.enum(['declarative-http', 'trusted-javascript']);
+export const CustomAdapterRefSchema = z.object({
+  kind: CustomAdapterKindSchema,
+  adapterId: CustomAdapterIdSchema,
+  version: CustomAdapterVersionSchema,
+  digest: CustomAdapterDigestSchema,
+}).strict();
+export type CustomAdapterKind = z.infer<typeof CustomAdapterKindSchema>;
+export type CustomAdapterRef = z.infer<typeof CustomAdapterRefSchema>;
+
 export const ProviderTypeSchema = z.enum([
   'mock',
   'openai-images-v1',
@@ -156,6 +186,8 @@ export const ProviderTypeSchema = z.enum([
   'gemini-omni-interactions-video-v1',
   'xai-imagine-image-v1',
   'xai-imagine-video-v1',
+  'custom-http-v1',
+  'custom-js-v1',
 ]);
 
 const ProviderDtoBaseUrlSchema = z.string().transform((value) =>

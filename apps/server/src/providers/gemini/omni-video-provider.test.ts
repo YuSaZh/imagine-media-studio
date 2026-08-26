@@ -32,7 +32,7 @@ function request(overrides: Partial<GenerationRequest> = {}): GenerationRequest 
 }
 
 function context(
-  transport?: GeminiProviderContext['http'],
+  transport?: GeminiProviderContext['transport'],
   overrides: Partial<GeminiProviderContext> = {},
 ): GeminiProviderContext {
   return {
@@ -41,7 +41,7 @@ function context(
       apiKey: 'AIza-omni-fixture-secret',
       'header:x-trace-id': 'omni-test',
     },
-    ...(transport === undefined ? {} : { http: transport }),
+    ...(transport === undefined ? {} : { transport }),
     ...overrides,
   };
 }

@@ -26,6 +26,9 @@ export {
   type AdapterAdminAuthorization,
   type AdapterInstallRequest,
   type AdapterRecord,
+  type AdapterRuntimeReader,
+  type AdapterRuntimeRecord,
+  type AdapterRuntimeReference,
 } from './store.js';
 export {
   AdapterWorkerHost,

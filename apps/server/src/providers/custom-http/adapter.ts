@@ -5,6 +5,9 @@ import type {
   ProviderContext,
   ProviderError,
   ProviderModel,
+  ProviderHttpClientPort,
+  ProviderHttpRequest,
+  ProviderHttpResponse,
   SubmitResult,
 } from '@imagine/provider-contract';
 import type { GenerationRequest } from '@imagine/shared';
@@ -31,29 +34,17 @@ import {
   type DeclarativeHttpSpec,
 } from './schema.js';
 import { DeclarativeResponseError } from './extractor.js';
+import { projectDeclarativeModel } from './capabilities.js';
 
-export interface DeclarativeHttpRequest {
-  readonly method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  readonly url: string;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body?: string;
-  readonly bodyBytes?: Uint8Array;
-  /** Shared transport must enforce this before parsing a response body. */
-  readonly maxResponseBodyBytes: number;
-  readonly signal?: AbortSignal;
-}
+type DeclarativeModel = DeclarativeHttpSpec['models'][number];
 
-export interface DeclarativeHttpResponse extends DeclarativeResponse {
-  readonly statusCode?: number;
-  readonly dispose?: () => Promise<void> | void;
-}
-
-export interface DeclarativeHttpClient {
-  request(request: DeclarativeHttpRequest): Promise<DeclarativeHttpResponse>;
-}
+/** Compatibility names for custom adapter tests; the port itself is shared. */
+export type DeclarativeHttpClient = ProviderHttpClientPort;
+export type DeclarativeHttpRequest = ProviderHttpRequest;
+export type DeclarativeHttpResponse = ProviderHttpResponse;
 
 export interface DeclarativeHttpAdapterOptions {
-  readonly http?: DeclarativeHttpClient;
+  readonly http?: ProviderHttpClientPort;
 }
 
 export class DeclarativeProviderOperationError extends Error {
@@ -61,10 +52,6 @@ export class DeclarativeProviderOperationError extends Error {
   public constructor(public readonly providerError: ProviderError) {
     super(providerError.message);
   }
-}
-
-function runtimeContext(context: ProviderContext): ProviderContext & { readonly http?: DeclarativeHttpClient } {
-  return context as ProviderContext & { readonly http?: DeclarativeHttpClient };
 }
 
 function safeProviderError(error: ProviderError): ProviderError {
@@ -83,13 +70,25 @@ function safeProviderError(error: ProviderError): ProviderError {
   };
 }
 
-function responseFromHttp(response: DeclarativeHttpResponse): DeclarativeResponse {
+function responseFromHttp(response: ProviderHttpResponse): DeclarativeResponse {
   return {
     ...(response.body === undefined ? {} : { body: response.body }),
-    ...(response.headers === undefined ? {} : { headers: response.headers }),
+    headers: response.headers,
     ...(response.json === undefined ? {} : { json: response.json }),
     ...(response.text === undefined ? {} : { text: response.text }),
-    status: response.status ?? response.statusCode ?? 0,
+    status: response.status,
+  };
+}
+
+function providerModel(model: DeclarativeModel): ProviderModel {
+  const customFields = projectDeclarativeModel(model).customFields;
+  const capabilities = { ...(model.capabilities as unknown as ProviderModel['capabilities']) };
+  if (customFields === undefined) delete capabilities.customFields;
+  else capabilities.customFields = customFields;
+  return {
+    capabilities,
+    displayName: model.displayName,
+    id: model.id,
   };
 }
 
@@ -114,11 +113,7 @@ export class DeclarativeHttpAdapter implements ProviderAdapter {
   public async getCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
     return {
       providerType: this.type,
-      models: this.spec.models.map((model) => ({
-        capabilities: model.capabilities as unknown as ProviderModel['capabilities'],
-        displayName: model.displayName,
-        id: model.id,
-      })),
+      models: this.spec.models.map(providerModel),
     };
   }
 
@@ -132,11 +127,7 @@ export class DeclarativeHttpAdapter implements ProviderAdapter {
       models: catalog.flatMap((model) => {
         const known = this.spec.models.find((candidate) => candidate.id === model.id);
         if (known === undefined) return [];
-        return [{
-          capabilities: known.capabilities as unknown as ProviderModel['capabilities'],
-          displayName: known.displayName,
-          id: model.id,
-        }];
+        return [providerModel(known)];
       }),
     };
   }
@@ -203,8 +194,10 @@ export class DeclarativeHttpAdapter implements ProviderAdapter {
     phase: 'submit' | 'poll' | 'cancel' | 'connection' | 'catalog',
     request?: GenerationRequest,
   ): Promise<PerformedResponse> {
-    const http = runtimeContext(context).http ?? this.options.http;
-    if (http === undefined) throw new DeclarativeProviderOperationError({ code: 'http_not_configured', kind: 'rejected', message: 'Provider HTTP client is not configured.', retryable: false });
+    const http = context.http ?? this.options.http;
+    if (http === undefined) {
+      throw new DeclarativeProviderOperationError({ code: 'http_not_configured', kind: 'rejected', message: 'Provider HTTP client is not configured.', retryable: false });
+    }
     const operation = request ?? {
       operation: this.spec.operations[0]!,
       providerId: context.providerId,
@@ -224,7 +217,7 @@ export class DeclarativeHttpAdapter implements ProviderAdapter {
     const url = composeUrl(context.baseUrl, compiled);
     const encoded = encodeCompiledBody(compiled.body);
     const headers = { ...compiled.headers, ...(encoded.contentType === undefined ? {} : { 'Content-Type': encoded.contentType }) };
-    let response: DeclarativeHttpResponse | undefined;
+    let response: ProviderHttpResponse | undefined;
     try {
       response = await http.request({
         ...encoded,
@@ -249,7 +242,7 @@ export class DeclarativeHttpAdapter implements ProviderAdapter {
 
   private allowedExtraFields(modelId: string): ReadonlySet<string> {
     const model = this.spec.models.find((candidate) => candidate.id === modelId) ?? this.spec.models[0];
-    return new Set(Object.keys(model?.requestSchema?.properties ?? {}));
+    return new Set(Object.keys(projectDeclarativeModel(model!).requestSchema?.properties ?? {}));
   }
 }
 

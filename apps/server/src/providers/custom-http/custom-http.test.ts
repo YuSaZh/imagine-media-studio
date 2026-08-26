@@ -20,6 +20,11 @@ import {
   type DeclarativeHttpClient,
   type DeclarativeHttpResponse,
 } from './index.js';
+import {
+  ProviderHttpClient,
+  type ProviderHttpExecutor,
+  type ProviderHttpRawResponse,
+} from '../provider-http-client.js';
 
 const FIXTURES = new URL('../../../../../fixtures/providers/custom-http/', import.meta.url);
 
@@ -48,6 +53,24 @@ function context(overrides: Partial<ProviderContext> = {}): ProviderContext {
     baseUrl: 'https://api.example.test',
     secrets: { apiKey: 'custom-secret-value' },
     ...overrides,
+  };
+}
+
+function fixtureResponse(input: {
+  status: number;
+  headers?: DeclarativeHttpResponse['headers'];
+  body?: Uint8Array;
+  json?: unknown;
+  text?: string;
+}): DeclarativeHttpResponse {
+  return {
+    dispose: async () => undefined,
+    headers: input.headers ?? Object.create(null) as DeclarativeHttpResponse['headers'],
+    status: input.status,
+    statusCode: input.status,
+    ...(input.body === undefined ? {} : { body: input.body }),
+    ...(input.json === undefined ? {} : { json: input.json }),
+    ...(input.text === undefined ? {} : { text: input.text }),
   };
 }
 
@@ -309,8 +332,8 @@ describe('custom declarative HTTP parser and compiler', () => {
     const adapter = new DeclarativeHttpAdapter(spec, {
       http: {
         async request(input) {
-          requests.push({ maxResponseBodyBytes: input.maxResponseBodyBytes, url: input.url });
-          return { status: 204 };
+          requests.push({ maxResponseBodyBytes: input.maxResponseBodyBytes ?? 0, url: input.url });
+          return fixtureResponse({ status: 204 });
         },
       },
     });
@@ -338,8 +361,8 @@ describe('custom declarative HTTP parser and compiler', () => {
       },
     };
     const httpResponses: DeclarativeHttpResponse[] = [
-      { status: 200, json: {} },
-      { status: 200, json: { status: 'completed', data: 'aGVsbG8=' } },
+      fixtureResponse({ status: 200, json: {} }),
+      fixtureResponse({ status: 200, json: { status: 'completed', data: 'aGVsbG8=' } }),
     ];
     const adapter = new DeclarativeHttpAdapter(spec, { http: { async request() { return httpResponses.shift()!; } } });
     await expect(adapter.testConnection!(context())).resolves.toBeUndefined();
@@ -361,7 +384,7 @@ describe('custom declarative HTTP parser and compiler', () => {
     const adapter = new DeclarativeHttpAdapter(spec, {
       http: {
         async request() {
-          return { status: 200, json: { data: [{ id: 'video-model', name: 'Known' }, { id: 'unknown-video', name: 'Unknown' }] } };
+          return fixtureResponse({ status: 200, json: { data: [{ id: 'video-model', name: 'Known' }, { id: 'unknown-video', name: 'Unknown' }] } });
         },
       },
     });
@@ -416,6 +439,165 @@ describe('custom declarative HTTP response extraction', () => {
 });
 
 describe('DeclarativeHttpAdapter', () => {
+  it('uses requestSchema as the authoritative schema and keeps only metadata from explicit custom fields', async () => {
+    const spec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+    const requestSchema = {
+      additionalProperties: false,
+      properties: {
+        style: { enum: ['editorial'], maxLength: 32, type: 'string' },
+        vendorRequired: { type: 'boolean' },
+      },
+      required: ['style'],
+      type: 'object',
+    } as const;
+    spec.models[0]!.requestSchema = requestSchema;
+    spec.models[0]!.capabilities.customFields = {
+      additionalProperties: true,
+      properties: {
+        style: { enum: ['editorial', 'portrait'], type: 'string' },
+        vendorFlag: { type: 'boolean' },
+      },
+      required: [],
+      type: 'object',
+      description: 'The API key is configured separately from model fields.',
+      labels: ['Editorial', 'Portrait'],
+      modelFields: { style: { description: 'Visual treatment.' } },
+    };
+    const adapter = new DeclarativeHttpAdapter(spec);
+    const capabilities = await adapter.getCapabilities(context());
+    expect(capabilities.models[0]?.capabilities.customFields).toEqual({
+      additionalProperties: false,
+      properties: {
+        style: { enum: ['editorial'], maxLength: 32, type: 'string' },
+        vendorRequired: { type: 'boolean' },
+      },
+      required: ['style'],
+      type: 'object',
+      description: 'The API key is configured separately from model fields.',
+      labels: ['Editorial', 'Portrait'],
+      modelFields: { style: { description: 'Visual treatment.' } },
+    });
+
+    const accepted = request({ extra: { style: 'editorial', vendorRequired: true } });
+    await expect(adapter.validate(accepted, context())).resolves.toBeUndefined();
+    const submitAdapter = new DeclarativeHttpAdapter(spec, {
+      http: {
+        async request() {
+          return fixtureResponse({ status: 200, json: readJsonFixture('sync-image/submit-response.json') });
+        },
+      },
+    });
+    await expect(submitAdapter.submit(accepted, context())).resolves.toMatchObject({ state: 'completed' });
+    await expect(adapter.validate(request({ extra: { style: 'portrait', vendorRequired: true } }), context()))
+      .rejects.toThrow(/outside the enum/);
+    await expect(adapter.validate(request({ extra: { vendorRequired: true } }), context()))
+      .rejects.toThrow(/Missing request parameter 'style'/);
+    await expect(adapter.validate(request({ extra: { style: 'editorial', vendorFlag: true } }), context()))
+      .rejects.toThrow(/Unknown request parameter/);
+  });
+
+  it('rejects credential values and secret templates in metadata while preserving descriptive metadata', async () => {
+    const unsafeMetadata = [
+      { apiKey: 'static-secret' },
+      { client_secret: 'static-secret' },
+      { Authorization: 'Bearer static-secret' },
+      { ui: { template: '{{ secret.apiKey }}' } },
+    ];
+    for (const customFields of unsafeMetadata) {
+      const spec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+      spec.models[0]!.capabilities.customFields = customFields;
+      await expect(new DeclarativeHttpAdapter(spec).getCapabilities(context())).rejects.toThrow(/credential/i);
+    }
+
+    const spec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+    spec.models[0]!.capabilities.customFields = {
+      description: 'The API key is configured separately.',
+      labels: ['Authorization', 'safe label'],
+      modelFields: { style: { description: 'A model field.' } },
+    };
+    await expect(new DeclarativeHttpAdapter(spec).getCapabilities(context())).resolves.toMatchObject({
+      models: [{ capabilities: { customFields: spec.models[0]!.capabilities.customFields } }],
+    });
+  });
+
+  it('does not invent customFields when a model has no requestSchema', async () => {
+    const spec = parseDeclarativeJson(readFixture('multipart-image-edit/adapter.json'));
+    const capabilities = await new DeclarativeHttpAdapter(spec).getCapabilities(context());
+    expect(capabilities.models[0]?.capabilities.customFields).toBeUndefined();
+  });
+
+  it('does not treat an incomplete schema-shaped customFields object as requestable metadata', async () => {
+    const spec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+    spec.models[0]!.requestSchema = undefined;
+    spec.models[0]!.capabilities.customFields = {
+      properties: { quality: { type: 'string' } },
+      type: 'object',
+    };
+    const adapter = new DeclarativeHttpAdapter(spec, {
+      http: {
+        async request() {
+          throw new Error('submit must fail validation before HTTP');
+        },
+      },
+    });
+    const capabilities = await adapter.getCapabilities(context());
+    expect(capabilities.models[0]?.capabilities.customFields).toBeUndefined();
+    await expect(adapter.validate(request({ extra: { quality: 'high' } }), context()))
+      .rejects.toThrow(/does not declare extra request parameters/);
+    await expect(adapter.submit(request({ extra: { quality: 'high' } }), context()))
+      .rejects.toThrow(/does not declare extra request parameters/);
+  });
+
+  it('does not ignore unknown schema keys or discard only invalid legacy properties', async () => {
+    const credentialSpec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+    credentialSpec.models[0]!.requestSchema = undefined;
+    credentialSpec.models[0]!.capabilities.customFields = {
+      apiKey: { foo: 'LEAK', type: 'string' },
+    };
+    await expect(new DeclarativeHttpAdapter(credentialSpec).getCapabilities(context()))
+      .rejects.toThrow(/credential/i);
+
+    const invalidFallbackSpec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+    invalidFallbackSpec.models[0]!.requestSchema = undefined;
+    invalidFallbackSpec.models[0]!.capabilities.customFields = {
+      additionalProperties: false,
+      properties: {
+        style: { type: 'string', ui: { unknown: 'extension' } },
+      },
+      type: 'object',
+    };
+    const invalidFallbackAdapter = new DeclarativeHttpAdapter(invalidFallbackSpec);
+    expect((await invalidFallbackAdapter.getCapabilities(context())).models[0]?.capabilities.customFields).toBeUndefined();
+    await expect(invalidFallbackAdapter.validate(request({ extra: { style: 'editorial' } }), context()))
+      .rejects.toThrow(/does not declare extra request parameters/);
+  });
+
+  it('uses a complete restricted customFields schema as the legacy validation fallback', async () => {
+    const spec = parseDeclarativeJson(readFixture('sync-image/adapter.json'));
+    spec.models[0]!.requestSchema = undefined;
+    spec.models[0]!.capabilities.customFields = {
+      additionalProperties: false,
+      properties: { style: { enum: ['editorial'], type: 'string' } },
+      type: 'object',
+    };
+    const adapter = new DeclarativeHttpAdapter(spec, {
+      http: {
+        async request() {
+          return fixtureResponse({ status: 200, json: readJsonFixture('sync-image/submit-response.json') });
+        },
+      },
+    });
+    expect((await adapter.getCapabilities(context())).models[0]?.capabilities.customFields).toEqual({
+      additionalProperties: false,
+      properties: { style: { enum: ['editorial'], type: 'string' } },
+      type: 'object',
+    });
+    await expect(adapter.submit(request({ extra: { style: 'editorial' } }), context()))
+      .resolves.toMatchObject({ state: 'completed' });
+    await expect(adapter.validate(request({ extra: { style: 'editorial', unknown: true } }), context()))
+      .rejects.toThrow(/Unknown request parameter/);
+  });
+
   class FixtureHttp implements DeclarativeHttpClient {
     public readonly requests: Array<{ url: string; body?: string; bodyBytes?: Uint8Array }> = [];
     public constructor(private readonly responses: readonly DeclarativeHttpResponse[]) {}
@@ -435,8 +617,8 @@ describe('DeclarativeHttpAdapter', () => {
   it('uses only the injected client for submit and poll and normalizes failures safely', async () => {
     const spec = parseDeclarativeYaml(readFixture('async-video/adapter.yaml'));
     const http = new FixtureHttp([
-      { status: 202, json: readJsonFixture('async-video/submit-response.json') },
-      { status: 200, json: readJsonFixture('async-video/poll-completed.json') },
+      fixtureResponse({ status: 202, json: readJsonFixture('async-video/submit-response.json') }),
+      fixtureResponse({ status: 200, json: readJsonFixture('async-video/poll-completed.json') }),
     ]);
     const adapter = new DeclarativeHttpAdapter(spec, { http });
     const videoRequest: GenerationRequest = {
@@ -458,5 +640,33 @@ describe('DeclarativeHttpAdapter', () => {
       message: 'Declarative provider request failed.',
       retryable: false,
     });
+  });
+
+  it('consumes the shared ProviderHttpClient port without performing real network I/O', async () => {
+    let disposed = false;
+    const executor: ProviderHttpExecutor = async (_target, input) => {
+      expect(input.method).toBe('POST');
+      expect(input.url).toBe('https://api.example.test/v1/images');
+      const response: ProviderHttpRawResponse = {
+        body: readFixture('sync-image/submit-response.json'),
+        dispose: () => {
+          disposed = true;
+        },
+        headers: { 'content-type': 'application/json' },
+        statusCode: 200,
+      };
+      return response;
+    };
+    const http = new ProviderHttpClient({
+      executor,
+      resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+    });
+    const adapter = new DeclarativeHttpAdapter(parseDeclarativeJson(readFixture('sync-image/adapter.json')));
+
+    await expect(adapter.submit(request({ extra: { style: 'editorial' } }), context({ http }))).resolves.toMatchObject({
+      state: 'completed',
+      assets: [{ mimeType: 'image/png', source: 'base64', type: 'image' }],
+    });
+    expect(disposed).toBe(true);
   });
 });

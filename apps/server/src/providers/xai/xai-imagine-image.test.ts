@@ -173,7 +173,7 @@ describe('XaiImagineImageProvider', () => {
     const capabilities = await provider.getLiveCapabilities({
       ...context,
       baseUrl: 'https://proxy.example.test/xai/v1',
-      http: client,
+      transport: client,
     } as XaiImagineProviderContext);
 
     expect(client.requests[0]).toMatchObject({

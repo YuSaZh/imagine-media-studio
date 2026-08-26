@@ -1,5 +1,12 @@
 import { Agent, request as undiciRequest } from 'undici';
 import type { LookupFunction } from 'node:net';
+import type {
+  ProviderHttpClientPort,
+  ProviderHttpHeaderValue as ContractProviderHttpHeaderValue,
+  ProviderHttpHeaders as ContractProviderHttpHeaders,
+  ProviderHttpRequest as ContractProviderHttpRequest,
+  ProviderHttpResponse as ContractProviderHttpResponse,
+} from '@imagine/provider-contract';
 
 import {
   NetworkPolicy,
@@ -10,6 +17,10 @@ import {
 } from '../security/network-policy.js';
 
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const MAX_HEADER_COUNT = 128;
+const MAX_HEADER_NAME_LENGTH = 256;
+const MAX_HEADER_VALUE_LENGTH = 16 * 1024;
+const MAX_HEADER_BYTES = 64 * 1024;
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'content-length',
@@ -24,6 +35,8 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
+const CREDENTIAL_QUERY_TOKEN_PATTERN = /(?:^|[-_.])(?:token|key|api[-_.]?key|access[-_.]?token|auth|authorization|credential|credentials|signature|sig|secret|password|idempotency[-_.]?key|bearer)(?:$|[-_.])/iu;
+const CREDENTIAL_QUERY_PREFIX_PATTERN = /^(?:x[-_.]?(?:amz|goog|ms)(?:[-_.].+)?|oauth(?:[-_.].*)?)$/iu;
 
 export const PROVIDER_HTTP_DEFAULTS = Object.freeze({
   bodyTimeoutMs: 30_000,
@@ -33,21 +46,15 @@ export const PROVIDER_HTTP_DEFAULTS = Object.freeze({
   maxResponseBodyBytes: 96 * 1024 * 1024,
 });
 
-export type ProviderHttpHeaderValue = string | readonly string[] | undefined;
-export type ProviderHttpHeaders = Readonly<Record<string, ProviderHttpHeaderValue>>;
+export type ProviderHttpHeaderValue = ContractProviderHttpHeaderValue;
+/** Map-shaped headers used by the server executor; provider compatibility
+ * transports may expose a Headers-like object at their own boundary. */
+export type ProviderHttpHeaders = ContractProviderHttpHeaders;
 export type ProviderHttpBodySource = Uint8Array | string | AsyncIterable<Uint8Array | string>;
-export type ProviderHttpResponseBody = Record<string, unknown> | string | Uint8Array;
+export type ProviderHttpResponseBody = Uint8Array;
 
-/** Request shape accepted by the OpenAI, Gemini, and xAI adapter ports. */
-export interface ProviderHttpRequest {
-  readonly method: 'GET' | 'POST';
-  readonly url: string;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body?: string;
-  /** When present, these bytes are sent instead of the textual body. */
-  readonly bodyBytes?: Uint8Array;
-  readonly signal?: AbortSignal;
-}
+/** Shared request shape, re-exported from the server for transport consumers. */
+export type ProviderHttpRequest = ContractProviderHttpRequest;
 
 /** Raw response shape used only by the injected/default executor. */
 export interface ProviderHttpRawResponse {
@@ -57,16 +64,11 @@ export interface ProviderHttpRawResponse {
   readonly dispose?: () => Promise<void> | void;
 }
 
-export interface ProviderHttpResponse {
-  readonly status: number;
-  readonly statusCode: number;
-  readonly headers: ProviderHttpHeaders;
-  readonly body?: ProviderHttpResponseBody;
-  readonly json?: unknown;
-  readonly text?: string;
-  /** Kept for adapter compatibility; the body is already disposed before return. */
-  readonly dispose: () => Promise<void>;
-}
+/**
+ * Server's fully consumed response view. This is a strict subtype of the
+ * shared contract and keeps status/headers/dispose complete for new callers.
+ */
+export type ProviderHttpResponse = ContractProviderHttpResponse;
 
 export interface ProviderHttpExecutorOptions {
   readonly signal: AbortSignal;
@@ -134,16 +136,50 @@ function positiveLimit(value: number | undefined, fallback: number, name: string
   return resolved;
 }
 
+function requestLimit(value: number | undefined, configured: number, name: string): number {
+  const resolved = positiveLimit(value, configured, name);
+  if (resolved > configured) {
+    throw new ProviderHttpError('invalid_request', `${name} exceeds the configured provider HTTP limit.`);
+  }
+  return resolved;
+}
+
+function isCredentialLikeQueryName(name: string): boolean {
+  const normalized = name.trim();
+  return CREDENTIAL_QUERY_TOKEN_PATTERN.test(normalized) || CREDENTIAL_QUERY_PREFIX_PATTERN.test(normalized);
+}
+
+function assertSafeQuery(urlValue: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlValue);
+  } catch {
+    return;
+  }
+  for (const name of parsed.searchParams.keys()) {
+    if (isCredentialLikeQueryName(name)) {
+      throw new ProviderHttpError('invalid_request', 'Provider HTTP URLs cannot contain credential-like query parameters.');
+    }
+  }
+}
+
 function normalizedHeaders(
   headers: Readonly<Record<string, string>>,
 ): Record<string, string> {
-  const result: Record<string, string> = {};
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
+  let totalBytes = 0;
+  let count = 0;
   for (const [name, value] of Object.entries(headers)) {
-    if (!HEADER_NAME_PATTERN.test(name)) {
+    count += 1;
+    if (count > MAX_HEADER_COUNT || name.length === 0 || name.length > MAX_HEADER_NAME_LENGTH || !HEADER_NAME_PATTERN.test(name) || ['__proto__', 'constructor', 'prototype'].includes(name.toLowerCase())) {
       throw new ProviderHttpError('invalid_request', 'Provider HTTP header name is invalid.');
     }
-    if (typeof value !== 'string' || /\r|\n/.test(value)) {
+    if (typeof value !== 'string' || value.length > MAX_HEADER_VALUE_LENGTH || /\r|\n/.test(value)) {
       throw new ProviderHttpError('invalid_request', 'Provider HTTP header value is invalid.');
+    }
+    totalBytes += Buffer.byteLength(name, 'utf8') + Buffer.byteLength(value, 'utf8');
+    if (totalBytes > MAX_HEADER_BYTES) {
+      throw new ProviderHttpError('invalid_request', 'Provider HTTP headers are too large.');
     }
     const normalized = name.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(normalized)) continue;
@@ -186,8 +222,9 @@ const defaultExecutor: ProviderHttpExecutor = async (target, input, options) => 
     pipelining: 0,
   });
   try {
+    const requestBody = input.bodyBytes ?? (input.body === undefined ? undefined : Buffer.from(input.body, 'utf8'));
     const response = await undiciRequest(target.url, {
-      ...(input.method === 'POST' ? { body: bodyBytes(input) } : {}),
+      ...(input.method === 'GET' || requestBody === undefined ? {} : { body: requestBody }),
       bodyTimeout: options.bodyTimeoutMs,
       dispatcher,
       headers: input.headers,
@@ -225,8 +262,28 @@ function headerValue(headers: ProviderHttpHeaders | undefined, name: string): st
 }
 
 function copyHeaders(headers: ProviderHttpHeaders | undefined): Record<string, ProviderHttpHeaderValue> {
-  const result: Record<string, ProviderHttpHeaderValue> = {};
+  const result: Record<string, ProviderHttpHeaderValue> = Object.create(null) as Record<string, ProviderHttpHeaderValue>;
+  let totalBytes = 0;
+  let count = 0;
   for (const [name, value] of Object.entries(headers ?? {})) {
+    count += 1;
+    if (count > MAX_HEADER_COUNT || name.length === 0 || name.length > MAX_HEADER_NAME_LENGTH || !HEADER_NAME_PATTERN.test(name)) {
+      throw new ProviderHttpError('response_invalid', 'Provider HTTP response headers are invalid.');
+    }
+    if (['__proto__', 'constructor', 'prototype'].includes(name.toLowerCase())) {
+      throw new ProviderHttpError('response_invalid', 'Provider HTTP response headers are invalid.');
+    }
+    if (value !== undefined && typeof value !== 'string' && !Array.isArray(value)) {
+      throw new ProviderHttpError('response_invalid', 'Provider HTTP response headers are invalid.');
+    }
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    if (values.length > MAX_HEADER_COUNT || values.some((item) => typeof item !== 'string' || item.length > MAX_HEADER_VALUE_LENGTH || /\r|\n/.test(item))) {
+      throw new ProviderHttpError('response_invalid', 'Provider HTTP response header value is invalid.');
+    }
+    totalBytes += Buffer.byteLength(name, 'utf8') + values.reduce((sum, item) => sum + Buffer.byteLength(item, 'utf8'), 0);
+    if (totalBytes > MAX_HEADER_BYTES) {
+      throw new ProviderHttpError('response_invalid', 'Provider HTTP response headers are too large.');
+    }
     result[name] = Array.isArray(value) ? [...value] : value;
   }
   return result;
@@ -249,8 +306,10 @@ function isTextContentType(contentType: string | undefined): boolean {
   return contentType === 'text/event-stream' || contentType?.startsWith('text/') === true;
 }
 
-function asBytes(chunk: Uint8Array | string): Uint8Array {
-  return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+function asBytes(chunk: unknown): Uint8Array {
+  if (typeof chunk === 'string') return Buffer.from(chunk, 'utf8');
+  if (chunk instanceof Uint8Array) return chunk;
+  throw new ProviderHttpError('response_invalid', 'Provider HTTP response body chunk is invalid.');
 }
 
 function concatBytes(chunks: readonly Uint8Array[], total: number): Uint8Array {
@@ -420,7 +479,7 @@ function safeExecutorError(error: unknown): ProviderHttpError {
   return new ProviderHttpError('network_error', 'Provider HTTP request failed.');
 }
 
-export class ProviderHttpClient {
+export class ProviderHttpClient implements ProviderHttpClientPort {
   private readonly policy: NetworkPolicy;
   private readonly executor: ProviderHttpExecutor;
   private readonly maxRequestBodyBytes: number;
@@ -447,14 +506,11 @@ export class ProviderHttpClient {
   }
 
   public async request(input: ProviderHttpRequest): Promise<ProviderHttpResponse> {
-    if ((input.method !== 'GET' && input.method !== 'POST') || typeof input.url !== 'string') {
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(input.method) || typeof input.url !== 'string') {
       throw new ProviderHttpError('invalid_request', 'Provider HTTP request method or URL is invalid.');
     }
-    if (input.method === 'POST' && input.body === undefined && input.bodyBytes === undefined) {
-      throw new ProviderHttpError('invalid_request', 'Provider HTTP POST requests require a body.');
-    }
     if (input.body !== undefined && typeof input.body !== 'string') {
-      throw new ProviderHttpError('invalid_request', 'Provider HTTP POST body must be text when provided.');
+      throw new ProviderHttpError('invalid_request', 'Provider HTTP body must be text when provided.');
     }
     if (input.method === 'GET' && (input.body !== undefined || input.bodyBytes !== undefined)) {
       throw new ProviderHttpError('invalid_request', 'Provider HTTP GET requests cannot include a body.');
@@ -471,6 +527,15 @@ export class ProviderHttpClient {
       throw new ProviderHttpError('request_body_too_large', 'Provider HTTP request body is too large.');
     }
     if (input.signal?.aborted) throw abortError();
+    assertSafeQuery(input.url);
+    const maxResponseBodyBytes = requestLimit(
+      input.maxResponseBodyBytes,
+      this.maxResponseBodyBytes,
+      'maxResponseBodyBytes',
+    );
+    const headersTimeoutMs = requestLimit(input.headersTimeoutMs, this.headersTimeoutMs, 'headersTimeoutMs');
+    const bodyTimeoutMs = requestLimit(input.bodyTimeoutMs, this.bodyTimeoutMs, 'bodyTimeoutMs');
+    const connectTimeoutMs = requestLimit(input.connectTimeoutMs, this.connectTimeoutMs, 'connectTimeoutMs');
 
     const { controller, cleanup: cleanupSignal } = createRequestSignal(input.signal);
     let raw: ProviderHttpRawResponse | undefined;
@@ -488,7 +553,11 @@ export class ProviderHttpClient {
       const request: ProviderHttpRequest = {
         ...(input.bodyBytes === undefined ? {} : { bodyBytes: input.bodyBytes }),
         ...(input.body === undefined ? {} : { body: input.body }),
+        ...(input.bodyTimeoutMs === undefined ? {} : { bodyTimeoutMs }),
+        ...(input.connectTimeoutMs === undefined ? {} : { connectTimeoutMs }),
         headers,
+        ...(input.headersTimeoutMs === undefined ? {} : { headersTimeoutMs }),
+        ...(input.maxResponseBodyBytes === undefined ? {} : { maxResponseBodyBytes }),
         method: input.method,
         signal: controller.signal,
         url: input.url,
@@ -496,13 +565,13 @@ export class ProviderHttpClient {
       try {
         raw = await waitFor(
           this.executor(target, request, {
-            bodyTimeoutMs: this.bodyTimeoutMs,
-            connectTimeoutMs: this.connectTimeoutMs,
-            headersTimeoutMs: this.headersTimeoutMs,
+            bodyTimeoutMs,
+            connectTimeoutMs,
+            headersTimeoutMs,
             signal: controller.signal,
           }),
           controller.signal,
-          this.headersTimeoutMs,
+          headersTimeoutMs,
           () => {
             headerTimedOut = true;
             controller.abort();
@@ -529,14 +598,14 @@ export class ProviderHttpClient {
         throw new ProviderHttpError('response_invalid', 'Compressed Provider HTTP responses are not accepted.');
       }
       const contentLength = parseContentLength(responseHeaders);
-      if (contentLength !== undefined && contentLength > this.maxResponseBodyBytes) {
+      if (contentLength !== undefined && contentLength > maxResponseBodyBytes) {
         throw new ProviderHttpError('response_body_too_large', 'Provider HTTP response body is too large.');
       }
       const body = await readBody(
         raw.body,
-        this.maxResponseBodyBytes,
+        maxResponseBodyBytes,
         controller.signal,
-        this.bodyTimeoutMs,
+        bodyTimeoutMs,
         () => {
           bodyTimedOut = true;
           controller.abort();

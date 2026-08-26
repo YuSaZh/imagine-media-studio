@@ -38,6 +38,31 @@ export const providers = sqliteTable(
   ],
 );
 
+export const providerAdapterDefinitions = sqliteTable(
+  'provider_adapter_definitions',
+  {
+    providerId: text('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    adapterId: text('adapter_id').notNull(),
+    version: text('version').notNull(),
+    digest: text('digest').notNull(),
+    definitionJson: text('definition_json'),
+    isCurrent: integer('is_current', { mode: 'boolean' }).notNull().default(false),
+    disabled: integer('disabled', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.providerId, table.kind, table.adapterId, table.version, table.digest] }),
+    uniqueIndex('provider_adapter_definitions_current_idx')
+      .on(table.providerId)
+      .where(sql`${table.isCurrent} = 1`),
+    index('provider_adapter_definitions_provider_idx').on(table.providerId),
+  ],
+);
+
 export const models = sqliteTable(
   'models',
   {
@@ -101,6 +126,10 @@ export const jobs = sqliteTable(
     cancelRequestedAt: integer('cancel_requested_at', { mode: 'timestamp_ms' }),
     requestSha256: text('request_sha256').notNull().default(''),
     deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
+    adapterKind: text('adapter_kind'),
+    adapterId: text('adapter_id'),
+    adapterVersion: text('adapter_version'),
+    adapterDigest: text('adapter_digest'),
   },
   (table) => [
     index('jobs_status_idx').on(table.status),

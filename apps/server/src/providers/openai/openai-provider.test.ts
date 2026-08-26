@@ -723,7 +723,7 @@ describe('OpenAI provider profiles', () => {
       ...context,
       baseUrl: 'https://proxy.example.test/openai/v1/',
       headers: { 'X-Client-Label': 'image-studio' },
-      http: transport,
+      transport,
     });
 
     expect(transport.requests[0]?.url).toBe('https://proxy.example.test/openai/v1/images/generations');

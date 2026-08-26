@@ -145,7 +145,7 @@ describe('AdapterStore', () => {
   it('installs atomically with private modes and returns no source in DTO', async () => {
     const root = await newRoot();
     const store = new AdapterStore(root, adminAuthorization());
-    const installed = await store.install({ manifest: manifest(), source: source(), adminEnabled: true });
+    const installed = await store.install({ manifest: manifest(), source: source() });
     expect(installed.manifest.allowedHosts).toEqual(['api.example.com']);
     expect('source' in installed).toBe(false);
     const directory = await lstat(join(root, 'fixture-adapter'));
@@ -154,25 +154,36 @@ describe('AdapterStore', () => {
     expect(directory.mode & 0o777).toBe(0o700);
     expect(adapterFile.mode & 0o777).toBe(0o600);
     expect(manifestFile.mode & 0o777).toBe(0o600);
-    expect(await store.readSource('fixture-adapter')).toEqual(new TextEncoder().encode(source()));
+    const runtimeReader = store.runtimeReader();
+    const runtime = await runtimeReader.readByRef({ kind: 'trusted-javascript', adapterId: 'fixture-adapter', version: '1.0.0', digest: digestAdapterSource(source()) });
+    expect(runtime.source).toEqual(new TextEncoder().encode(source()));
+    await expect(runtimeReader.readByRef({ kind: 'declarative-http', adapterId: 'fixture-adapter', version: '1.0.0', digest: digestAdapterSource(source()) } as never)).rejects.toThrow(AdapterStoreError);
+    await expect(runtimeReader.readByRef({ kind: 'trusted-javascript', adapterId: 'fixture-adapter', version: '9.0.0', digest: digestAdapterSource(source()) })).rejects.toThrow(AdapterStoreError);
+    await expect(runtimeReader.readByRef({ kind: 'trusted-javascript', adapterId: 'fixture-adapter', version: '1.0.0', digest: '0'.repeat(64) })).rejects.toThrow(AdapterStoreError);
+    await expect(runtimeReader.readByRef({ kind: 'trusted-javascript', adapterId: 'other-adapter', version: '1.0.0', digest: digestAdapterSource(source()) })).rejects.toThrow(AdapterStoreError);
     expect((await store.list()).map((item) => item.manifest.id)).toEqual(['fixture-adapter']);
     expect(await readFile(join(root, 'fixture-adapter', 'manifest.json'), 'utf8')).toContain('fixture-adapter');
   });
 
   it('rejects administrators being disabled, bad hashes and duplicate installs without final partial state', async () => {
     const root = await newRoot();
+    const denied = new AdapterStore(root, { adminEnabled: false, assertAdmin() {} });
+    await expect(denied.install({ manifest: manifest(), source: source() })).rejects.toThrow(AdapterAuthorizationError);
+    await expect(denied.install({ manifest: manifest(), source: source(), adminEnabled: true } as never)).rejects.toThrow(AdapterAuthorizationError);
+    await expect(denied.list()).rejects.toThrow(AdapterAuthorizationError);
+    await expect(denied.get('fixture-adapter')).rejects.toThrow(AdapterAuthorizationError);
+    await expect(denied.remove('fixture-adapter')).rejects.toThrow(AdapterAuthorizationError);
     const store = new AdapterStore(root, adminAuthorization());
-    await expect(store.install({ manifest: manifest(), source: source(), adminEnabled: false })).rejects.toThrow(AdapterAuthorizationError);
-    await expect(store.install({ manifest: manifest(source(), { sha256: '0'.repeat(64) }), source: source(), adminEnabled: true })).rejects.toThrow(AdapterStoreError);
+    await expect(store.install({ manifest: manifest(source(), { sha256: '0'.repeat(64) }), source: source() })).rejects.toThrow(AdapterStoreError);
     await expect(readdir(join(root, '.staging'))).resolves.toEqual([]);
-    await store.install({ manifest: manifest(), source: source(), adminEnabled: true });
-    await expect(store.install({ manifest: manifest(), source: source(), adminEnabled: true })).rejects.toThrow(AdapterAlreadyInstalledError);
+    await store.install({ manifest: manifest(), source: source() });
+    await expect(store.install({ manifest: manifest(), source: source() })).rejects.toThrow(AdapterAlreadyInstalledError);
   });
 
   it('allows only trusted regular files and detects symlink replacement', async () => {
     const root = await newRoot();
     const store = new AdapterStore(root, adminAuthorization());
-    await store.install({ manifest: manifest(), source: source(), adminEnabled: true });
+    await store.install({ manifest: manifest(), source: source() });
     const outside = join(root, '..', 'outside-adapter-test');
     await mkdir(outside, { recursive: true });
     await symlink(join(outside, 'adapter.mjs'), join(root, 'fixture-adapter', 'adapter-link')).catch(() => undefined);
@@ -183,11 +194,11 @@ describe('AdapterStore', () => {
   it('does not follow a symlink at the adapter target', async () => {
     const root = await newRoot();
     const store = new AdapterStore(root, adminAuthorization());
-    await store.install({ manifest: manifest(), source: source(), adminEnabled: true });
+    await store.install({ manifest: manifest(), source: source() });
     await rm(join(root, 'fixture-adapter'), { recursive: true, force: true });
     await symlink(root, join(root, 'fixture-adapter'));
     await expect(store.get('fixture-adapter')).rejects.toThrow(AdapterStoreError);
-    await expect(store.remove('fixture-adapter', true)).rejects.toThrow(AdapterStoreError);
+    await expect(store.remove('fixture-adapter')).rejects.toThrow(AdapterStoreError);
   });
 
   it('uses the owner authorization port for all management operations', async () => {
@@ -197,16 +208,16 @@ describe('AdapterStore', () => {
       adminEnabled: true,
       assertAdmin(action) { calls.push(action); },
     });
-    await store.install({ manifest: manifest(), source: source(), adminEnabled: true });
+    await store.install({ manifest: manifest(), source: source() });
     await store.get('fixture-adapter');
-    await store.remove('fixture-adapter', true);
+    await store.remove('fixture-adapter');
     expect(calls).toEqual(['install', 'read', 'remove']);
   });
 
   it('rejects insecure file modes after tampering', async () => {
     const root = await newRoot();
     const store = new AdapterStore(root, adminAuthorization());
-    await store.install({ manifest: manifest(), source: source(), adminEnabled: true });
+    await store.install({ manifest: manifest(), source: source() });
     await chmod(join(root, 'fixture-adapter', 'adapter.mjs'), 0o644);
     await expect(store.get('fixture-adapter')).rejects.toThrow(AdapterStoreError);
   });

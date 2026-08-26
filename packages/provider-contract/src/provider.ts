@@ -35,6 +35,50 @@ export interface ProviderModel {
   capabilities: ModelCapabilities;
 }
 
+export type ProviderHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+/**
+ * The only HTTP port exposed to provider adapters. The server owns URL
+ * policy, DNS pinning, redirects, limits, and response disposal; adapters
+ * receive no raw socket or stream handles.
+ *
+ * `bodyBytes` is the preferred binary field. `body` remains a text-compatible
+ * transport field for existing JSON adapters and is encoded by the server.
+ */
+export interface ProviderHttpRequest {
+  readonly method: ProviderHttpMethod;
+  /** Absolute URL. The server validates it before invoking the executor. */
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body?: string;
+  readonly bodyBytes?: Uint8Array;
+  /** Maximum response bytes, enforced before parsing and during streaming. */
+  readonly maxResponseBodyBytes?: number;
+  readonly headersTimeoutMs?: number;
+  readonly bodyTimeoutMs?: number;
+  readonly connectTimeoutMs?: number;
+  readonly signal?: AbortSignal;
+}
+
+export type ProviderHttpHeaderValue = string | readonly string[] | undefined;
+export type ProviderHttpHeaders = Readonly<Record<string, ProviderHttpHeaderValue>>;
+/** A fully consumed, bounded provider response. No readable stream is exposed. */
+export interface ProviderHttpResponse {
+  readonly status: number;
+  readonly statusCode: number;
+  readonly headers: ProviderHttpHeaders;
+  readonly body?: Uint8Array;
+  readonly json?: unknown;
+  readonly text?: string;
+  /** Idempotent cleanup hook for callers that own the response lifecycle. */
+  readonly dispose: () => Promise<void>;
+}
+
+export interface ProviderHttpClientPort {
+  request(request: ProviderHttpRequest): Promise<ProviderHttpResponse>;
+}
+export type ProviderHttpPort = ProviderHttpClientPort;
+
 export interface ProviderCapabilities {
   providerType: string;
   models: readonly ProviderModel[];
@@ -65,6 +109,8 @@ export interface ProviderContext {
   baseUrl?: string;
   config?: Readonly<Record<string, unknown>>;
   inputs?: readonly ProviderInput[];
+  /** Injected server-owned, policy-checked HTTP port. */
+  http?: ProviderHttpClientPort;
   secrets: Readonly<Record<string, string>>;
 }
 

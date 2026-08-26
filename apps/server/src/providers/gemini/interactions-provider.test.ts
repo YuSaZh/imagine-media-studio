@@ -44,7 +44,7 @@ function request(overrides: Partial<GenerationRequest> = {}): GenerationRequest 
 }
 
 function context(
-  transport: NonNullable<GeminiProviderContext['http']>,
+  transport: NonNullable<GeminiProviderContext['transport']>,
   overrides: Partial<GeminiProviderContext> = {},
 ): GeminiProviderContext {
   return {
@@ -57,7 +57,7 @@ function context(
       { assetId: 'ref-1', role: 'reference', mimeType: 'image/png', bytes },
       { assetId: 'ref-2', role: 'reference', mimeType: 'image/jpeg', bytes },
     ],
-    http: transport,
+    transport,
     ...overrides,
   } as GeminiProviderContext;
 }

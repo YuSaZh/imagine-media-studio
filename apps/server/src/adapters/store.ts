@@ -3,6 +3,8 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
+import { CustomAdapterRefSchema, type CustomAdapterRef } from '@imagine/shared';
+
 import {
   ADAPTER_MANIFEST_VERSION,
   AdapterSourcePolicyError,
@@ -28,11 +30,21 @@ export interface AdapterAdminAuthorization {
 export interface AdapterInstallRequest {
   readonly manifest: unknown;
   readonly source: string | Uint8Array;
-  readonly adminEnabled: boolean;
 }
 
 export interface AdapterRecord {
   readonly manifest: AdapterManifest;
+}
+
+export type AdapterRuntimeReference = Omit<CustomAdapterRef, 'kind'> & { readonly kind: 'trusted-javascript' };
+
+export interface AdapterRuntimeRecord extends AdapterRecord {
+  /** Source is only returned over this internal runtime port. */
+  readonly source: Uint8Array;
+}
+
+export interface AdapterRuntimeReader {
+  readByRef(reference: AdapterRuntimeReference): Promise<AdapterRuntimeRecord>;
 }
 
 export class AdapterStoreError extends Error {
@@ -99,7 +111,7 @@ export class AdapterStore {
   }
 
   public async install(request: AdapterInstallRequest): Promise<AdapterRecord> {
-    await this.requireAdmin(request.adminEnabled, 'install');
+    await this.requireAdmin('install');
     await this.ensureRoot();
 
     const manifest = parseAdapterManifest(request.manifest);
@@ -144,37 +156,25 @@ export class AdapterStore {
   }
 
   public async list(): Promise<readonly AdapterRecord[]> {
-    await this.requireAdmin(true, 'read');
+    await this.requireAdmin('read');
     await this.ensureRoot();
     const entries = await readdir(this.root, { withFileTypes: true });
     const records: AdapterRecord[] = [];
     for (const entry of entries) {
       if (entry.name === STAGING_DIRECTORY) continue;
       if (!entry.isDirectory()) throw new AdapterStoreError('Adapter root contains an unexpected entry.');
-      records.push(await this.get(entry.name));
+      records.push({ manifest: (await this.readInstalled(entry.name)).manifest });
     }
     return records.sort((left, right) => left.manifest.id.localeCompare(right.manifest.id));
   }
 
   public async get(id: string): Promise<AdapterRecord> {
-    await this.requireAdmin(true, 'read');
-    this.assertId(id);
-    await this.ensureRoot();
-    const directory = join(this.root, id);
-    await this.assertAdapterDirectory(directory, id);
-    const manifest = parseBoundedManifestJson(await this.readRegularFile(join(directory, MANIFEST_FILENAME), MAX_MANIFEST_BYTES));
-    if (manifest.schemaVersion !== ADAPTER_MANIFEST_VERSION || manifest.id !== id) {
-      throw new AdapterStoreError('Adapter manifest identity does not match its directory.');
-    }
-    const source = await this.readRegularFile(join(directory, SOURCE_FILENAME), MAX_ADAPTER_SOURCE_BYTES);
-    const sourceText = validateAdapterSource(source);
-    validateAdapterExports(sourceText, manifest);
-    if (sha256(source) !== manifest.sha256) throw new AdapterStoreError('Installed adapter source digest is invalid.');
-    return { manifest };
+    await this.requireAdmin('read');
+    return { manifest: (await this.readInstalled(id)).manifest };
   }
 
-  public async remove(id: string, adminEnabled: boolean): Promise<void> {
-    await this.requireAdmin(adminEnabled, 'remove');
+  public async remove(id: string): Promise<void> {
+    await this.requireAdmin('remove');
     this.assertId(id);
     await this.ensureRoot();
     const directory = join(this.root, id);
@@ -188,24 +188,55 @@ export class AdapterStore {
     }
   }
 
-  /** Internal worker-only source access. It never appears in AdapterRecord. */
-  public async readSource(id: string): Promise<Uint8Array> {
-    this.assertId(id);
-    const record = await this.get(id);
-    const source = await this.readRegularFile(join(this.root, id, SOURCE_FILENAME), MAX_ADAPTER_SOURCE_BYTES);
-    if (sha256(source) !== record.manifest.sha256) throw new AdapterStoreError('Installed adapter source digest is invalid.');
-    return source;
+  /** Internal runtime port; management authorization is deliberately not used here. */
+  public runtimeReader(): AdapterRuntimeReader {
+    return { readByRef: (reference) => this.readByRef(reference) };
   }
 
   public async close(): Promise<void> {
     // The store has no long-lived handles; this method makes lifecycle ownership explicit.
   }
 
-  private async requireAdmin(adminEnabled: boolean, action: 'install' | 'remove' | 'read'): Promise<void> {
-    if (!adminEnabled || !this.authorization.adminEnabled) {
+  private async requireAdmin(action: 'install' | 'remove' | 'read'): Promise<void> {
+    if (!this.authorization.adminEnabled) {
       throw new AdapterAuthorizationError('Administrator authorization is required for adapter management.');
     }
     await this.authorization.assertAdmin(action);
+  }
+
+  private async readByRef(reference: AdapterRuntimeReference): Promise<AdapterRuntimeRecord> {
+    const parsedReference = CustomAdapterRefSchema.safeParse(reference);
+    if (!parsedReference.success || parsedReference.data.kind !== 'trusted-javascript') {
+      throw new AdapterStoreError('Adapter runtime reference is invalid.');
+    }
+    const loaded = await this.readInstalled(parsedReference.data.adapterId);
+    if (
+      loaded.manifest.version !== parsedReference.data.version ||
+      loaded.manifest.sha256 !== parsedReference.data.digest
+    ) {
+      throw new AdapterStoreError('Adapter runtime reference does not match the installed manifest.');
+    }
+    return loaded;
+  }
+
+  private async readInstalled(id: string): Promise<AdapterRuntimeRecord> {
+    this.assertId(id);
+    await this.ensureRoot();
+    const directory = join(this.root, id);
+    await this.assertAdapterDirectory(directory, id);
+    const manifest = parseBoundedManifestJson(
+      await this.readRegularFile(join(directory, MANIFEST_FILENAME), MAX_MANIFEST_BYTES),
+    );
+    if (manifest.schemaVersion !== ADAPTER_MANIFEST_VERSION || manifest.id !== id) {
+      throw new AdapterStoreError('Adapter manifest identity does not match its directory.');
+    }
+    const source = await this.readRegularFile(join(directory, SOURCE_FILENAME), MAX_ADAPTER_SOURCE_BYTES);
+    const sourceText = validateAdapterSource(source);
+    validateAdapterExports(sourceText, manifest);
+    if (sha256(source) !== manifest.sha256) {
+      throw new AdapterStoreError('Installed adapter source digest is invalid.');
+    }
+    return { manifest, source };
   }
 
   private assertId(id: string): void {

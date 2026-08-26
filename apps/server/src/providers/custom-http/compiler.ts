@@ -35,6 +35,7 @@ import {
   type DeclarativeTemplateContext,
   type TemplateMode,
 } from './template.js';
+import { projectDeclarativeModel } from './capabilities.js';
 
 export class DeclarativeCompileError extends Error {
   public override readonly name = 'DeclarativeCompileError';
@@ -404,8 +405,8 @@ function assertEndpointShape(endpoint: DeclarativeEndpoint): void {
   if (endpoint.body?.type === 'multipart' && endpoint.body.files.length > MAX_FILES) fail('invalid_body', 'Multipart contains too many files.');
 }
 
-function allowedExtraFields(model: DeclarativeHttpSpec['models'][number]): ReadonlySet<string> {
-  const properties = model.requestSchema?.properties;
+function allowedExtraFields(requestSchema: RestrictedRequestSchema | undefined): ReadonlySet<string> {
+  const properties = requestSchema?.properties;
   return new Set(properties === undefined ? [] : Object.keys(properties));
 }
 
@@ -481,6 +482,8 @@ export function validateDeclarativeRequest(
   if (!spec.operations.includes(request.operation)) fail('invalid_request', `Operation '${request.operation}' is not declared by this adapter.`);
   const model = spec.models.find((candidate) => candidate.id === request.modelId);
   if (model === undefined) fail('invalid_request', `Model '${request.modelId}' is not declared by this adapter.`);
+  const projection = projectDeclarativeModel(model);
+  const requestSchema = projection.requestSchema;
   const capabilities = ModelCapabilitiesSchema.parse(model.capabilities);
   if (request.operation === 'video.edit' || request.operation === 'video.extend') fail('invalid_request', `Operation '${request.operation}' is not reachable by the current input runtime.`);
   if (!capabilities.operations.includes(request.operation)) fail('invalid_request', `Model '${request.modelId}' does not support '${request.operation}'.`);
@@ -493,10 +496,10 @@ export function validateDeclarativeRequest(
   if (request.seed !== undefined && capabilities.supportsSeed !== true) fail('invalid_request', 'This model does not support seeds.');
   if (request.audio !== undefined && capabilities.supportsAudio !== true) fail('invalid_request', 'This model does not support audio.');
   if (request.extra !== undefined && !isRecord(request.extra)) fail('invalid_request', 'Request extra parameters must be an object.');
-  if (model.requestSchema !== undefined) assertRestrictedSchemaShape(model.requestSchema);
+  if (requestSchema !== undefined) assertRestrictedSchemaShape(requestSchema);
   if (request.extra !== undefined) {
-    if (model.requestSchema === undefined) fail('invalid_request', 'This model does not declare extra request parameters.');
-    validateRestrictedSchema(model.requestSchema, request.extra);
+    if (requestSchema === undefined) fail('invalid_request', 'This model does not declare extra request parameters.');
+    validateRestrictedSchema(requestSchema, request.extra);
   }
   if (request.inputs.length > MAX_FILES) fail('invalid_input', 'Request contains too many input assets.');
   validateOperationInputs(capabilities, request, undefined);
@@ -546,7 +549,8 @@ export function compileDeclarativeRequest(
 ): CompiledRequest {
   const model = validateDeclarativeRequest(spec, request);
   if (request.inputs.length > 0 && context.inputs === undefined) fail('invalid_input', 'This request requires loaded provider inputs.');
-  const allowed = allowedExtraFields(model);
+  const projection = projectDeclarativeModel(model);
+  const allowed = allowedExtraFields(projection.requestSchema);
   const endpointContext = asTemplateContext(request, context);
   validateOperationInputs(ModelCapabilitiesSchema.parse(model.capabilities), request, context.inputs);
   const compiled = compileEndpoint(endpoint, request, endpointContext, { ...options, allowedExtraFields: allowed });

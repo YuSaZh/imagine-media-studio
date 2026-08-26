@@ -72,6 +72,7 @@ function jobRecord(overrides: Partial<JobRecord> = {}): JobRecord {
     cancelRequestedAt: overrides.cancelRequestedAt ?? null,
     requestSha256: overrides.requestSha256 ?? 'hash',
     deletedAt: overrides.deletedAt ?? null,
+    adapterRef: overrides.adapterRef ?? null,
   };
 }
 

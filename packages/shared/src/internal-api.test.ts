@@ -14,6 +14,7 @@ import {
   ProviderDtoSchema,
   SettingsPatchSchema,
   ProviderTypeSchema,
+  CustomAdapterRefSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
@@ -21,6 +22,22 @@ describe('internal API schemas', () => {
     expect(ProviderTypeSchema.parse('xai-imagine-video-v1')).toBe('xai-imagine-video-v1');
     expect(ProviderTypeSchema.parse('gemini-veo-operation-v1')).toBe('gemini-veo-operation-v1');
     expect(ProviderTypeSchema.parse('gemini-omni-interactions-video-v1')).toBe('gemini-omni-interactions-video-v1');
+  });
+
+  it('validates bounded custom adapter references', () => {
+    const ref = {
+      kind: 'declarative-http',
+      adapterId: 'custom-video',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    } as const;
+    expect(CustomAdapterRefSchema.parse(ref)).toEqual(ref);
+    expect(CustomAdapterRefSchema.safeParse({ ...ref, adapterId: '../escape' }).success).toBe(false);
+    expect(CustomAdapterRefSchema.safeParse({ ...ref, adapterId: 'adapter/id' }).success).toBe(false);
+    expect(CustomAdapterRefSchema.safeParse({ ...ref, digest: 'not-a-digest' }).success).toBe(false);
+    expect(CustomAdapterRefSchema.safeParse({ kind: ref.kind, adapterId: ref.adapterId }).success).toBe(false);
+    expect(ProviderTypeSchema.parse('custom-http-v1')).toBe('custom-http-v1');
+    expect(ProviderTypeSchema.parse('custom-js-v1')).toBe('custom-js-v1');
   });
 
   it('keeps authentication status and login payloads strict', () => {

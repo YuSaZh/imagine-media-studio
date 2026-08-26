@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import type { ProviderContext, ProviderHttpClientPort } from '@imagine/provider-contract';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -34,10 +35,11 @@ const baseRequest = (overrides: Partial<ProviderHttpRequest> = {}): ProviderHttp
 });
 
 function assertAdapterPortCompatibility(client: ProviderHttpClient): void {
+  const shared: ProviderHttpClientPort = client;
   const openAi: OpenAiHttpTransport = client;
   const gemini: GeminiHttpTransport = client;
   const xai: XaiImagineHttpClient = client;
-  void [openAi, gemini, xai];
+  void [shared, openAi, gemini, xai];
 }
 
 function rawResponse(
@@ -72,6 +74,15 @@ afterEach(() => {
 describe('ProviderHttpClient', () => {
   it('is assignable to all three provider HTTP ports', () => {
     assertAdapterPortCompatibility(new ProviderHttpClient({ resolver: PUBLIC_RESOLVER }));
+  });
+
+  it('keeps legacy callable fixture transports out of the shared ProviderContext', () => {
+    const client: NonNullable<ProviderContext['http']> = new ProviderHttpClient({ resolver: PUBLIC_RESOLVER });
+    expect(typeof client).toBe('object');
+    expect(typeof client.request).toBe('function');
+    // @ts-expect-error ProviderContext only accepts the server-owned object port.
+    const legacy: ProviderContext['http'] = async () => undefined;
+    void legacy;
   });
 
   it('validates metadata/private targets before invoking the executor', async () => {
@@ -164,6 +175,99 @@ describe('ProviderHttpClient', () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
+  it('supports every declared method, including empty non-GET requests', async () => {
+    const requests: ProviderHttpRequest[] = [];
+    const client = new ProviderHttpClient({
+      executor: async (_target, request) => {
+        requests.push(request);
+        return jsonResponse({ ok: true });
+      },
+      resolver: PUBLIC_RESOLVER,
+    });
+
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE'] as const) {
+      await expect(client.request({
+        headers: {},
+        method,
+        url: 'https://public.example/v1/resource',
+      })).resolves.toMatchObject({ status: 200 });
+    }
+
+    expect(requests.map((request) => request.method)).toEqual(['POST', 'PUT', 'PATCH', 'DELETE']);
+    expect(requests.every((request) => request.body === undefined && request.bodyBytes === undefined)).toBe(true);
+  });
+
+  it('forwards optional per-request timeout overrides to the injected executor', async () => {
+    let received: { bodyTimeoutMs: number; connectTimeoutMs: number; headersTimeoutMs: number } | undefined;
+    const client = new ProviderHttpClient({
+      executor: async (_target, _request, options) => {
+        received = options;
+        return jsonResponse({ ok: true });
+      },
+      resolver: PUBLIC_RESOLVER,
+    });
+
+    await client.request(baseRequest({
+      bodyTimeoutMs: 17,
+      connectTimeoutMs: 19,
+      headersTimeoutMs: 23,
+    }));
+    expect(received).toEqual({ bodyTimeoutMs: 17, connectTimeoutMs: 19, headersTimeoutMs: 23, signal: expect.any(AbortSignal) });
+  });
+
+  it('rejects per-request limits above the client hard limits', async () => {
+    const executor = vi.fn<ProviderHttpExecutor>().mockResolvedValue(jsonResponse({ ok: true }));
+    const client = new ProviderHttpClient({
+      bodyTimeoutMs: 10,
+      connectTimeoutMs: 10,
+      executor,
+      headersTimeoutMs: 10,
+      maxResponseBodyBytes: 64,
+      resolver: PUBLIC_RESOLVER,
+    });
+
+    await expect(client.request(baseRequest({ maxResponseBodyBytes: 65 }))).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(client.request(baseRequest({ headersTimeoutMs: 11 }))).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(client.request(baseRequest({ bodyTimeoutMs: 11 }))).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(client.request(baseRequest({ connectTimeoutMs: 11 }))).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('enforces a smaller per-request response limit before parsing JSON or consuming chunks', async () => {
+    const contentLengthResponse = rawResponse(
+      200,
+      { 'content-length': '16', 'content-type': 'application/json' },
+      JSON.stringify({ oversized: true }),
+    );
+    const client = new ProviderHttpClient({
+      executor: async () => contentLengthResponse,
+      maxResponseBodyBytes: 64,
+      resolver: PUBLIC_RESOLVER,
+    });
+
+    await expect(client.request(baseRequest({ maxResponseBodyBytes: 4 }))).rejects.toMatchObject({
+      code: 'response_body_too_large',
+    });
+    expect(contentLengthResponse.disposed()).toBe(true);
+
+    let yielded = false;
+    const chunkedResponse = rawResponse(200, { 'content-type': 'application/json' }, (async function* () {
+      yielded = true;
+      yield '{"oversized":';
+      yield 'true}';
+    })());
+    const chunkedClient = new ProviderHttpClient({
+      executor: async () => chunkedResponse,
+      maxResponseBodyBytes: 64,
+      resolver: PUBLIC_RESOLVER,
+    });
+    await expect(chunkedClient.request(baseRequest({ maxResponseBodyBytes: 8 }))).rejects.toMatchObject({
+      code: 'response_body_too_large',
+    });
+    expect(yielded).toBe(true);
+    expect(chunkedResponse.disposed()).toBe(true);
+  });
+
   it('uses bodyBytes as the binary request source and enforces request limits', async () => {
     let capturedRequest: ProviderHttpRequest | undefined;
     const executor: ProviderHttpExecutor = async (_target, request) => {
@@ -253,7 +357,24 @@ describe('ProviderHttpClient', () => {
         resolver: PUBLIC_RESOLVER,
       }).request(baseRequest());
       testCase.assert(response);
+      expect(Object.getPrototypeOf(response.headers)).toBeNull();
+      expect(response.dispose).toEqual(expect.any(Function));
     }
+  });
+
+  it('allows ordinary query parameters but rejects credential-like query names', async () => {
+    const executor = vi.fn<ProviderHttpExecutor>().mockResolvedValue(jsonResponse({ ok: true }));
+    const client = new ProviderHttpClient({ executor, resolver: PUBLIC_RESOLVER });
+
+    for (const name of ['variant', 'format', 'tokenizer', 'authenticity', 'keynote', 'signatured', 'client_secretary']) {
+      await expect(client.request(baseRequest({ url: `https://public.example/v1/content?${name}=value` })))
+        .resolves.toMatchObject({ status: 200 });
+    }
+    for (const name of ['token', 'api_key', 'api-key', 'apikey', 'APIKEY', 'access_token', 'access-token', 'access.key', 'authorization', 'credential_id', 'signature', 'signature.id', 'client_secret', 'client-secret', 'x-api-key', 'x_api_key', 'x-amz-signature', 'x_goog_credential', 'x-ms-token', 'oauth_token', 'oauth']) {
+      await expect(client.request(baseRequest({ url: `https://public.example/v1/content?${name}=secret` })))
+        .rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    expect(executor).toHaveBeenCalledTimes(7);
   });
 
   it('rejects redirects and always disposes the redirect response', async () => {
@@ -352,6 +473,40 @@ describe('ProviderHttpClient', () => {
       headers: { Authorization: 'Bearer secret\r\nX-Leak: yes' },
     }))).rejects.toMatchObject({ code: 'invalid_request' });
     expect(executor).not.toHaveBeenCalled();
+
+    const oversizedHeaders = Object.fromEntries(
+      Array.from({ length: 129 }, (_, index) => [`X-Test-${index}`, 'value']),
+    );
+    await expect(client.request(baseRequest({ headers: oversizedHeaders }))).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('rejects dangerous response header names and still disposes the response', async () => {
+    const headers = Object.create(null) as Record<string, string>;
+    headers.__proto__ = 'not-a-prototype';
+    const response = rawResponse(200, headers);
+    const client = new ProviderHttpClient({
+      executor: async () => response,
+      resolver: PUBLIC_RESOLVER,
+    });
+
+    await expect(client.request(baseRequest())).rejects.toMatchObject({ code: 'response_invalid' });
+    expect(response.disposed()).toBe(true);
+  });
+
+  it('maps malformed async body chunks to response_invalid and disposes the response', async () => {
+    const response = rawResponse(200, { 'content-type': 'application/json' }, (async function* () {
+      yield 42 as unknown as string;
+    })() as unknown as AsyncIterable<Uint8Array | string>);
+    const client = new ProviderHttpClient({
+      executor: async () => response,
+      resolver: PUBLIC_RESOLVER,
+    });
+
+    await expect(client.request(baseRequest())).rejects.toMatchObject({ code: 'response_invalid' });
+    expect(response.disposed()).toBe(true);
   });
 });
 

@@ -95,7 +95,6 @@ export interface XaiImagineVideoProviderContext extends ProviderContext {
   readonly baseUrl?: string;
   readonly config?: Readonly<Record<string, unknown>>;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly http?: VideoHttpClient;
   readonly inputs?: readonly XaiImagineVideoInput[];
   readonly transport?: VideoHttpClient;
 }

@@ -48,7 +48,6 @@ export type GeminiHttpRequestExecutor = (
 
 export type GeminiProviderContext = ProviderContext & {
   headers?: Readonly<Record<string, string>>;
-  http?: GeminiHttpTransport | GeminiHttpRequestExecutor;
   transport?: GeminiHttpTransport | GeminiHttpRequestExecutor;
 };
 

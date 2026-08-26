@@ -30,6 +30,7 @@ describe('SQLite initialization', () => {
       { version: '0001_pr2_core.sql' },
       { version: '0002_pr4_runtime_safety.sql' },
       { version: '0003_pr5_video_runtime.sql' },
+      { version: '0004_pr6_custom_adapters.sql' },
     ]);
     expect(first.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
     expect(first.sqlite.pragma('journal_mode', { simple: true })).toBe('wal');
@@ -40,7 +41,7 @@ describe('SQLite initialization', () => {
     const second = createDatabase(databasePath, migrationsDirectory);
     expect(
       second.sqlite.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get(),
-    ).toEqual({ count: 4 });
+    ).toEqual({ count: 5 });
     second.sqlite.close();
   });
 
@@ -106,6 +107,7 @@ describe('SQLite initialization', () => {
       { version: '0001_pr2_core.sql' },
       { version: '0002_pr4_runtime_safety.sql' },
       { version: '0003_pr5_video_runtime.sql' },
+      { version: '0004_pr6_custom_adapters.sql' },
     ]);
     expect(
       upgraded.sqlite

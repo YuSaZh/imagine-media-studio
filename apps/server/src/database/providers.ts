@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, or, type SQL } from 'drizzle-orm';
 
 import type { AppDatabase } from './client.js';
 import { toChangeEventValues } from './events.js';
@@ -10,7 +10,7 @@ import {
   type CursorPage,
   type PageRequest,
 } from './pagination.js';
-import { changeEvents, providers } from './schema.js';
+import { changeEvents, jobs, providers } from './schema.js';
 
 export interface ProviderStorageRecord {
   readonly id: string;
@@ -52,6 +52,34 @@ export interface UpdateProviderInput {
 export interface ProviderPageRequest extends PageRequest {
   readonly enabled?: boolean;
   readonly type?: string;
+}
+
+export class ProviderRepositoryError extends Error {
+  public override readonly name = 'ProviderRepositoryError';
+
+  public constructor(
+    public readonly code: 'adapter_references_in_use',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function hasRetainedAdapterJobs(database: AppDatabase, providerId: string): boolean {
+  return database
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(
+      eq(jobs.providerId, providerId),
+      isNull(jobs.deletedAt),
+      or(
+        isNotNull(jobs.adapterKind),
+        isNotNull(jobs.adapterId),
+        isNotNull(jobs.adapterVersion),
+        isNotNull(jobs.adapterDigest),
+      ),
+    ))
+    .get() !== undefined;
 }
 
 function parseObject(value: string, label: string): Readonly<Record<string, unknown>> {
@@ -159,6 +187,12 @@ export class ProviderRepository {
     return this.database.transaction((transaction) => {
       const current = transaction.select().from(providers).where(eq(providers.id, id)).get();
       if (!current) return null;
+      if (input.type !== undefined && input.type !== current.type && hasRetainedAdapterJobs(transaction, id)) {
+        throw new ProviderRepositoryError(
+          'adapter_references_in_use',
+          'Provider type cannot change while retained jobs reference an adapter revision.',
+        );
+      }
       const now = new Date();
       if (input.isDefault === true) {
         transaction
@@ -202,6 +236,12 @@ export class ProviderRepository {
 
   public delete(id: string): boolean {
     return this.database.transaction((transaction) => {
+      if (hasRetainedAdapterJobs(transaction, id)) {
+        throw new ProviderRepositoryError(
+          'adapter_references_in_use',
+          'Provider cannot be deleted while retained jobs reference an adapter revision.',
+        );
+      }
       const deleted = transaction.delete(providers).where(eq(providers.id, id)).run();
       if (deleted.changes === 0) return false;
       transaction

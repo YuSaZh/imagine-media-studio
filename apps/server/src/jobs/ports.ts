@@ -2,10 +2,11 @@ import type {
   ProviderAdapter,
   ProviderInput,
   ProviderError,
+  ProviderHttpClientPort,
   ProviderResultTarget,
   SubmittedAsset,
 } from '@imagine/provider-contract';
-import type { GenerationRequest, JobStatus } from '@imagine/shared';
+import type { CustomAdapterRef, GenerationRequest, JobStatus } from '@imagine/shared';
 
 import type { StageRetryCounts } from './retry-budget.js';
 export type { RetriableWorkKind, StageRetryCounts } from './retry-budget.js';
@@ -30,6 +31,8 @@ export interface RunnerJob {
   materializedAssets: readonly MaterializedAsset[];
   error: ProviderError | null;
   stageRetryCounts: StageRetryCounts;
+  /** Immutable provider adapter definition snapshot captured at job creation. */
+  adapterRef?: CustomAdapterRef | null;
 }
 
 export interface MaterializedAsset {
@@ -118,8 +121,8 @@ export interface ProviderRegistration {
   baseUrl?: string;
   /** Persisted non-secret provider settings. Never contains decrypted credentials. */
   config?: Readonly<Record<string, unknown>>;
-  /** Application-owned safe HTTP client. Concrete providers narrow this at runtime. */
-  http?: object;
+  /** Application-owned policy-checked HTTP port injected into the adapter context. */
+  http?: ProviderHttpClientPort;
   /** True only when repeating submit with the same idempotency key is supported. */
   submitReplaySafe: boolean;
 }

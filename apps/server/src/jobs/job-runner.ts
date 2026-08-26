@@ -1184,7 +1184,7 @@ export class JobRunner {
       ...(inputs === undefined ? {} : { inputs }),
       secrets: registration.secrets,
     };
-    return context as ProviderContext;
+    return context;
   }
 
   private async isOperationActive(

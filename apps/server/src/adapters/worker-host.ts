@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 
-import type { AdapterStore, AdapterRecord } from './store.js';
+import type { AdapterRecord, AdapterRuntimeReader, AdapterRuntimeReference } from './store.js';
 import type { AdapterOperation } from './manifest.js';
 import {
   AdapterHttpRequestError,
@@ -259,42 +259,43 @@ export class AdapterWorkerHost {
   private readonly workerFactory: AdapterWorkerFactory;
 
   public constructor(
-    private readonly store: AdapterStore,
+    private readonly runtimeReader: AdapterRuntimeReader,
     private readonly http: SafeHttpPort,
     workerFactory: AdapterWorkerFactory = defaultWorkerFactory,
   ) {
     this.workerFactory = workerFactory;
   }
 
-  public capabilities(adapterId: string, context: AdapterProviderContext, signal?: AbortSignal): Promise<unknown> {
-    return this.call(adapterId, 'capabilities', context, {}, signal);
+  public capabilities(reference: AdapterRuntimeReference, context: AdapterProviderContext, signal?: AbortSignal): Promise<unknown> {
+    return this.call(reference, 'capabilities', context, {}, signal);
   }
 
-  public submit(adapterId: string, context: AdapterProviderContext, invocation: AdapterInvocation, signal?: AbortSignal): Promise<unknown> {
-    return this.call(adapterId, 'submit', context, invocation, signal);
+  public submit(reference: AdapterRuntimeReference, context: AdapterProviderContext, invocation: AdapterInvocation, signal?: AbortSignal): Promise<unknown> {
+    return this.call(reference, 'submit', context, invocation, signal);
   }
 
-  public poll(adapterId: string, context: AdapterProviderContext, remoteJobId: string, signal?: AbortSignal): Promise<unknown> {
-    return this.call(adapterId, 'poll', context, { remoteJobId }, signal);
+  public poll(reference: AdapterRuntimeReference, context: AdapterProviderContext, remoteJobId: string, signal?: AbortSignal): Promise<unknown> {
+    return this.call(reference, 'poll', context, { remoteJobId }, signal);
   }
 
-  public cancel(adapterId: string, context: AdapterProviderContext, remoteJobId: string, signal?: AbortSignal): Promise<unknown> {
-    return this.call(adapterId, 'cancel', context, { remoteJobId }, signal);
+  public cancel(reference: AdapterRuntimeReference, context: AdapterProviderContext, remoteJobId: string, signal?: AbortSignal): Promise<unknown> {
+    return this.call(reference, 'cancel', context, { remoteJobId }, signal);
   }
 
-  public normalizeError(adapterId: string, context: AdapterProviderContext, error: AdapterErrorView, signal?: AbortSignal): Promise<unknown> {
-    return this.call(adapterId, 'normalizeError', context, { error }, signal);
+  public normalizeError(reference: AdapterRuntimeReference, context: AdapterProviderContext, error: AdapterErrorView, signal?: AbortSignal): Promise<unknown> {
+    return this.call(reference, 'normalizeError', context, { error }, signal);
   }
 
   public async call(
-    adapterId: string,
+    reference: AdapterRuntimeReference,
     call: AdapterCall,
     context: AdapterProviderContext,
     invocation: AdapterInvocation = {},
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const record = await this.store.get(adapterId);
-    const source = await this.store.readSource(adapterId);
+    const runtime = await this.runtimeReader.readByRef(reference);
+    const record: AdapterRecord = runtime;
+    const source = runtime.source;
     const secrets = Object.values(context.secrets);
     const provider = call === 'capabilities' || call === 'normalizeError' ? undefined : providerView(record, context);
     const request = call === 'submit' && invocation.request !== undefined ? sanitizeRequest(invocation.request, secrets) : undefined;

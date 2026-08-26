@@ -9,6 +9,7 @@ import type {
   ProviderCapabilities,
   ProviderContext,
   ProviderError,
+  ProviderHttpClientPort,
   SubmittedAsset,
   SubmitResult,
 } from '@imagine/provider-contract';
@@ -579,7 +580,7 @@ function createMemoryRunner(
     submitReplaySafe: boolean;
     baseUrl?: string;
     config?: Readonly<Record<string, unknown>>;
-    http?: object;
+    http?: ProviderHttpClientPort;
   },
   events: RunnerEvent[] = [],
   inputLoader: JobRunnerOptions['inputLoader'] = undefined,
@@ -682,7 +683,14 @@ describe('JobRunner asynchronous state machine', () => {
         submitReplaySafe: true,
         baseUrl: 'https://provider.example.test/v1',
         config: { modelFamily: 'fixture' },
-        http: {},
+        http: {
+          request: async () => ({
+            headers: {},
+            status: 204,
+            statusCode: 204,
+            dispose: async () => undefined,
+          }),
+        },
       }),
       [],
       {
@@ -708,6 +716,7 @@ describe('JobRunner asynchronous state machine', () => {
       inputs: [{ assetId: 'asset-1', mimeType: 'image/png', role: 'source' }],
       modelId: 'mock-image-v1',
     });
+    expect(provider.submitContext?.http).toBeDefined();
     expect(provider.submitContext?.secrets).toEqual({});
     expect(jobs.records.get('input-context')?.status).toBe('completed');
     await runner.stop();

@@ -9,6 +9,7 @@ import type {
   JobRecord,
   UpdateJobStatusFields,
 } from '../database/jobs.js';
+import { JobRepositoryError } from '../database/jobs.js';
 import type { AssetMediaService } from '../media/asset-media-service.js';
 import type { ProviderOutputMediaRecord } from '../media/types.js';
 import type {
@@ -65,6 +66,10 @@ export interface SqliteJobRepositoryPort {
     expectedRevision: number,
   ): JobRecord | null | Promise<JobRecord | null>;
   quarantineInvalidManifest?(
+    jobId: string,
+    expectedRevision: number,
+  ): JobRecord | null | Promise<JobRecord | null>;
+  quarantineInvalidAdapterRef?(
     jobId: string,
     expectedRevision: number,
   ): JobRecord | null | Promise<JobRecord | null>;
@@ -279,6 +284,7 @@ export function toRunnerJob(record: JobRecord): RunnerJob {
     materializedAssets: manifest.materializedAssets ?? [],
     error: errorFor(record),
     stageRetryCounts: record.stageRetryCounts,
+    adapterRef: record.adapterRef,
   };
 }
 
@@ -373,8 +379,18 @@ export class SqliteRunnerJobPort implements RunnerJobPort {
       try {
         recovered.push(toRunnerJob(record));
       } catch (error) {
-        if (!(error instanceof SubmittedAssetValidationError)) throw error;
-        await this.jobs.quarantineInvalidManifest?.(record.id, record.revision);
+        if (error instanceof SubmittedAssetValidationError) {
+          await this.jobs.quarantineInvalidManifest?.(record.id, record.revision);
+          continue;
+        }
+        if (
+          error instanceof JobRepositoryError &&
+          (error.code === 'adapter_ref_corrupt' || error.code === 'persisted_data_corrupt')
+        ) {
+          await this.jobs.quarantineInvalidAdapterRef?.(record.id, record.revision);
+          continue;
+        }
+        throw error;
       }
     }
     return recovered;
