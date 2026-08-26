@@ -1,0 +1,6 @@
+{
+  "state": "completed",
+  "assets": [
+    { "type": "video", "mimeType": "video/mp4", "source": "url", "url": "https://media.example/video.mp4", "resultId": "job-1" }
+  ]
+}

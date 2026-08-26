@@ -1,0 +1,6 @@
+{
+  "state": "completed",
+  "assets": [
+    { "type": "image", "mimeType": "image/png", "source": "url", "url": "https://media.example/edited.png" }
+  ]
+}

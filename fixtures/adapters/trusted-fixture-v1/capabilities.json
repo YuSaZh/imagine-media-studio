@@ -1,0 +1,10 @@
+{
+  "providerType": "trusted-fixture-v1",
+  "models": [
+    {
+      "id": "trusted-fixture-model",
+      "displayName": "Trusted fixture model",
+      "capabilities": { "operations": ["image.generate", "video.generate"], "supportsCancel": true }
+    }
+  ]
+}

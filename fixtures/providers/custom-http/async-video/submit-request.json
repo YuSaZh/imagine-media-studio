@@ -1,0 +1,7 @@
+{
+  "operation": "video.generate",
+  "providerId": "custom",
+  "modelId": "video-model",
+  "prompt": "A paper plane",
+  "inputs": []
+}

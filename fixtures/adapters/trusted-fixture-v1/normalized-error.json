@@ -1,0 +1,6 @@
+{
+  "code": "adapter_error",
+  "kind": "unknown",
+  "message": "Adapter failed.",
+  "retryable": false
+}

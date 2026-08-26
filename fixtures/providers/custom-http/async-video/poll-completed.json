@@ -1,0 +1,5 @@
+{
+  "id": "job-1",
+  "status": "completed",
+  "video": { "url": "https://media.example/video.mp4" }
+}

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "trusted-fixture-v1",
+  "version": "1.0.0",
+  "displayName": "Trusted fixture adapter",
+  "sha256": "71f27d281997431cee62781dedee9b88066cce78e41852e7065316ca486211b5",
+  "operations": ["image.generate", "video.generate"],
+  "capabilities": {
+    "providerType": "trusted-fixture-v1",
+    "models": [
+      {
+        "id": "trusted-fixture-model",
+        "displayName": "Trusted fixture model",
+        "capabilities": { "operations": ["image.generate", "video.generate"], "supportsCancel": true }
+      }
+    ]
+  },
+  "allowedHosts": ["api.example.com"],
+  "requiredSecrets": ["apiKey"],
+  "resourceLimits": {
+    "timeoutMs": 5000,
+    "maxMessageBytes": 1048576,
+    "maxOutputBytes": 1048576,
+    "maxLogBytes": 65536,
+    "maxOldGenerationSizeMb": 64,
+    "maxYoungGenerationSizeMb": 16,
+    "stackSizeMb": 4
+  }
+}

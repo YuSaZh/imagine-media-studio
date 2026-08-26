@@ -1,0 +1,8 @@
+{
+  "operation": "image.generate",
+  "providerId": "custom",
+  "modelId": "image-model",
+  "prompt": "A red kite",
+  "extra": { "style": "editorial" },
+  "inputs": []
+}

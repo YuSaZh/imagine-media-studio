@@ -1,0 +1,10 @@
+{
+  "operation": "image.edit",
+  "providerId": "custom",
+  "modelId": "edit-model",
+  "prompt": "Remove the background",
+  "inputs": [
+    { "assetId": "source-1", "role": "source" },
+    { "assetId": "mask-1", "role": "mask" }
+  ]
+}
