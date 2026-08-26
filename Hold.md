@@ -14,13 +14,13 @@ This file records non-blocking work that cannot currently be proven or completed
 
 - **Affects:** PR 4 real image Providers and PR 5 real video Providers.
 - **Status:** No production API credentials or user-approved live endpoints are available in the repository or environment, and secrets must not be requested in source files or logs.
-- **Current handling:** Implement adapters against official protocols with deterministic contract fixtures and local mock HTTP servers. Record live credentialed smoke tests as pending unless a safe external test endpoint is explicitly provided.
+- **Current handling:** PR 4/PR 5 protocol fixtures, injected transports, deterministic Mock workflows, and the remote single-container smoke are accepted without live credentials. Record live credentialed smoke tests as pending unless a safe external test endpoint is explicitly provided.
 
 ### Production bundle advisory
 
 - **Affects:** PR 7 performance polish.
-- **Status:** The production entry chunk remains above Vite's 500 kB advisory threshold (564.46 kB in the final PR 4 build); the PR 3 editor route is already split.
-- **Current handling:** Defer broader route/vendor splitting to PR 7 and keep the warning non-blocking for PR 4.
+- **Status:** The production entry chunk remains above Vite's 500 kB advisory threshold (571.55 kB in the final PR 5 remote quality build); the PR 3 editor route is already split.
+- **Current handling:** Defer broader route/vendor splitting to PR 7 and keep the warning non-blocking for PR 5.
 
 ### Provider terminal cleanup compensation
 
