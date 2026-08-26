@@ -90,6 +90,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Prepare isolated runtime directory
         run: |
           runtime_dir=$(mktemp -d "$RUNNER_TEMP/imagine-media.XXXXXXXX")
