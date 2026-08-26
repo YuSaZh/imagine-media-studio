@@ -635,49 +635,55 @@ const insert = (status) => {
     .digest('hex')
     .slice(0, 32);
   const remoteJobId = `mock-video-success-${createdAt.toString(36)}-${digest}`;
+  const jobColumns = [
+    'id', 'operation', 'provider_id', 'model_id', 'prompt', 'request_json',
+    'provider_request_redacted_json', 'status', 'stage', 'progress', 'remote_job_id',
+    'remote_deadline_at', 'result_expires_at', 'idempotency_key', 'error_code',
+    'error_message', 'retry_count', 'submit_attempt', 'stage_retry_counts_json',
+    'poll_after_at', 'created_at', 'updated_at', 'completed_at', 'revision',
+    'result_manifest_json', 'retry_of_job_id', 'root_job_id', 'cancel_requested_at',
+    'request_sha256', 'deleted_at',
+  ];
+  const jobValues = [
+    id,
+    request.operation,
+    request.providerId,
+    request.modelId,
+    request.prompt,
+    requestJson,
+    '{}',
+    status,
+    status,
+    status === 'remote_running' ? 50 : 0,
+    remoteJobId,
+    now + 600_000,
+    null,
+    idempotencyKey,
+    null,
+    null,
+    0,
+    1,
+    '{}',
+    now,
+    createdAt,
+    now,
+    null,
+    1,
+    '[]',
+    null,
+    id,
+    null,
+    createHash('sha256').update(requestJson).digest('hex'),
+    null,
+  ];
+  if (jobColumns.length !== jobValues.length || jobColumns.length !== 30) {
+    throw new Error(`Mock video jobs fixture column/value drift: ${jobColumns.length}/${jobValues.length}`);
+  }
   database
     .prepare(
-      `INSERT INTO jobs (
-        id, operation, provider_id, model_id, prompt, request_json, provider_request_redacted_json,
-        status, stage, progress, remote_job_id, remote_deadline_at, result_expires_at,
-        idempotency_key, error_code, error_message, retry_count, submit_attempt,
-        stage_retry_counts_json, poll_after_at, created_at, updated_at, completed_at,
-        revision, result_manifest_json, retry_of_job_id, root_job_id, cancel_requested_at,
-        request_sha256, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO jobs (${jobColumns.join(', ')}) VALUES (${jobColumns.map(() => '?').join(', ')})`,
     )
-    .run(
-      id,
-      request.operation,
-      request.providerId,
-      request.modelId,
-      request.prompt,
-      requestJson,
-      '{}',
-      status,
-      status,
-      status === 'remote_running' ? 50 : 0,
-      remoteJobId,
-      now + 600_000,
-      null,
-      idempotencyKey,
-      null,
-      null,
-      0,
-      1,
-      '{}',
-      now,
-      createdAt,
-      now,
-      null,
-      1,
-      '[]',
-      null,
-      id,
-      null,
-      createHash('sha256').update(requestJson).digest('hex'),
-      null,
-    );
+    .run(...jobValues);
   database
     .prepare('INSERT INTO job_outputs (job_id, slot, asset_id, created_at, updated_at) VALUES (?, 0, NULL, ?, ?)')
     .run(id, now, now);

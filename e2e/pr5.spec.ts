@@ -160,6 +160,17 @@ async function clickCardAction(
   await page.keyboard.press('Escape');
 }
 
+async function revealGalleryItem(page: Page, itemId: string): Promise<void> {
+  const item = page.locator(`[data-item-id="${itemId}"]`);
+  if (await item.count() === 0) {
+    await page.locator('.page-scroll').evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event('scroll'));
+    });
+  }
+  await expect(item).toBeAttached();
+}
+
 test('lists all PR5 video profiles and the compatible OpenAI warning', async ({ page }) => {
   await page.goto('/settings/providers');
   await dismissPwaNotice(page);
@@ -209,6 +220,7 @@ test('keeps the PR5 video fixture transitions safe at every viewport', async ({ 
   await expect(expired).toBeVisible();
   await clickCardAction(page, expired, 'Retry');
   await page.locator('.gallery-filter').getByRole('button', { name: 'All', exact: true }).click();
+  await revealGalleryItem(page, 'image-28');
   await expect(expired).toHaveClass(/status-queued/);
   await expect(expired).toContainText('Waiting in queue');
 
@@ -241,7 +253,10 @@ test('generates Mock text, image, and reference videos with durable media delive
     [{ assetId: firstFrame.id, role: 'first_frame' }],
   );
   const imageDetail = await waitForCompletedJob(request, imageJobId);
-  expect(imageDetail.inputs).toEqual([{ assetId: firstFrame.id, role: 'first_frame' }]);
+  expect(imageDetail.inputs).toHaveLength(1);
+  expect(imageDetail.inputs.map(({ assetId, role }) => ({ assetId, role }))).toEqual([
+    { assetId: firstFrame.id, role: 'first_frame' },
+  ]);
   expect(imageDetail.assets).toHaveLength(1);
 
   const referenceA = await uploadImage(request, 'reference', `pr5-reference-a-${runId}.png`);
@@ -256,7 +271,11 @@ test('generates Mock text, image, and reference videos with durable media delive
     ],
   );
   const referenceDetail = await waitForCompletedJob(request, referenceJobId);
-  expect(referenceDetail.inputs.map((input) => input.role)).toEqual(['reference', 'reference']);
+  expect(referenceDetail.inputs).toHaveLength(2);
+  expect(referenceDetail.inputs.map(({ assetId, role }) => ({ assetId, role }))).toEqual([
+    { assetId: referenceA.id, role: 'reference' },
+    { assetId: referenceB.id, role: 'reference' },
+  ]);
   expect(referenceDetail.assets).toHaveLength(1);
 
   const output = textDetail.assets[0]!;
