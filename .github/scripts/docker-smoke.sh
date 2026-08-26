@@ -239,12 +239,112 @@ test -s "$DATA_HOST_DIR/app.db"
 test -n "$(find "$DATA_HOST_DIR/media/originals" -maxdepth 1 -type f -print -quit)"
 test "$(find "$DATA_HOST_DIR/media/masks" -maxdepth 1 -type f | wc -l | tr -d ' ')" = "1"
 
+IFS=$'\t' read -r video_job_id video_asset_id < <(
+  BASE_URL="$base_url" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+
+const baseUrl = process.env.BASE_URL;
+
+async function request(path, options = {}, expectedStatus = 200) {
+  const response = await fetch(baseUrl + path, {
+    ...options,
+    signal: options.signal ?? AbortSignal.timeout(10_000),
+  });
+  if (response.status !== expectedStatus) {
+    await response.arrayBuffer();
+    throw new Error(`${options.method ?? 'GET'} ${path}: expected ${expectedStatus}, received ${response.status}`);
+  }
+  return response;
+}
+
+async function json(path, options = {}, expectedStatus = 200) {
+  return request(path, options, expectedStatus).then((response) => response.json());
+}
+
+async function waitForJob(jobId) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const detail = await json(`/internal/jobs/${encodeURIComponent(jobId)}`);
+    if (detail.job?.status === 'completed') return detail;
+    if (['failed', 'cancelled', 'rejected', 'expired'].includes(detail.job?.status)) {
+      throw new Error(`Mock video Job reached terminal status ${detail.job.status}.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Mock video Job did not complete before the smoke timeout.');
+}
+
+const accepted = await json(
+  '/internal/jobs',
+  {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'video.generate',
+      providerId: 'mock',
+      modelId: 'mock-video-v1',
+      prompt: 'Docker PR 5 video smoke fixture',
+      inputs: [],
+      count: 1,
+      durationSeconds: 1,
+      aspectRatio: '16:9',
+      resolution: '720p',
+    }),
+  },
+  202,
+);
+const jobId = accepted.job.id;
+const detail = await waitForJob(jobId);
+assert.equal(detail.assets.length, 1);
+const asset = detail.assets[0];
+assert.equal(asset.type, 'video');
+assert.equal(asset.mimeType, 'video/mp4');
+assert.ok(asset.posterUrl);
+assert.ok(asset.fileSize > 8);
+
+const head = await request(asset.contentUrl, { method: 'HEAD' });
+assert.equal(head.headers.get('content-type'), 'video/mp4');
+assert.equal(Number(head.headers.get('content-length')), asset.fileSize);
+assert.equal(head.headers.get('accept-ranges'), 'bytes');
+assert.equal((await head.arrayBuffer()).byteLength, 0);
+
+const range = await request(asset.contentUrl, { headers: { range: 'bytes=0-7' } }, 206);
+assert.equal(range.headers.get('content-range'), `bytes 0-7/${asset.fileSize}`);
+assert.equal((await range.arrayBuffer()).byteLength, 8);
+
+const staleIfRange = await request(
+  asset.contentUrl,
+  { headers: { range: 'bytes=0-7', 'if-range': '"stale-etag"' } },
+);
+assert.equal(staleIfRange.status, 200);
+assert.equal((await staleIfRange.arrayBuffer()).byteLength, asset.fileSize);
+
+const unsatisfiable = await request(
+  asset.contentUrl,
+  { headers: { range: `bytes=${asset.fileSize}-` } },
+  416,
+);
+assert.equal(unsatisfiable.headers.get('content-range'), `bytes */${asset.fileSize}`);
+await unsatisfiable.arrayBuffer();
+
+const poster = await request(asset.posterUrl);
+assert.equal(poster.headers.get('content-type'), 'image/jpeg');
+assert.ok((await poster.arrayBuffer()).byteLength > 0);
+
+process.stdout.write(`${jobId}\t${asset.id}\n`);
+NODE
+)
+
+test -n "$video_job_id"
+test -n "$video_asset_id"
+test -n "$(find "$DATA_HOST_DIR/media/posters" -maxdepth 1 -type f -print -quit)"
+
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
 SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
-EDIT_ASSET_ID="$edit_asset_id" \
+EDIT_ASSET_ID="$edit_asset_id" VIDEO_JOB_ID="$video_job_id" VIDEO_ASSET_ID="$video_asset_id" \
   compose exec --no-TTY \
   -e JOB_ID -e ASSET_ID -e COLLECTION_ID -e SOURCE_ID -e MASK_ID -e EDIT_JOB_ID \
-  -e EDIT_ASSET_ID imagine-media node --input-type=module <<'NODE'
+  -e EDIT_ASSET_ID -e VIDEO_JOB_ID -e VIDEO_ASSET_ID imagine-media node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -288,6 +388,14 @@ const masks = database
 const editAsset = database
   .prepare('SELECT id, job_id AS jobId, parent_asset_id AS parentAssetId, role FROM assets WHERE id = ?')
   .get(process.env.EDIT_ASSET_ID);
+const videoJob = database
+  .prepare('SELECT status, submit_attempt AS submitAttempt FROM jobs WHERE id = ?')
+  .get(process.env.VIDEO_JOB_ID);
+const videoAsset = database
+  .prepare(
+    'SELECT type, mime_type AS mimeType, file_path AS filePath, poster_path AS posterPath, file_size AS fileSize FROM assets WHERE id = ?',
+  )
+  .get(process.env.VIDEO_ASSET_ID);
 database.close();
 
 if (!migrations.includes('0000_pr0.sql') || !migrations.includes('0001_pr2_core.sql')) {
@@ -339,6 +447,28 @@ if (
   editAsset.role !== 'output'
 ) {
   throw new Error('The image.edit output did not persist its source parent relationship.');
+}
+if (videoJob?.status !== 'completed' || videoJob.submitAttempt !== 1) {
+  throw new Error('Mock video Job state or submit attempt was not persisted correctly.');
+}
+if (
+  videoAsset?.type !== 'video' ||
+  videoAsset.mimeType !== 'video/mp4' ||
+  videoAsset.fileSize <= 8 ||
+  typeof videoAsset.posterPath !== 'string' ||
+  videoAsset.posterPath.length === 0
+) {
+  throw new Error('Mock video metadata was not persisted correctly.');
+}
+const videoPath = resolve('/data', videoAsset.filePath);
+const posterPath = resolve('/data', videoAsset.posterPath);
+if (!videoPath.startsWith('/data/media/originals/') || !posterPath.startsWith('/data/media/posters/')) {
+  throw new Error('Mock video or poster path escaped the expected /data media directories.');
+}
+const videoBytes = await readFile(videoPath);
+const posterBytes = await readFile(posterPath);
+if (videoBytes.length !== videoAsset.fileSize || videoBytes.length <= 8 || posterBytes.length === 0) {
+  throw new Error('Mock video or poster file size did not match persisted metadata.');
 }
 
 const absolutePath = resolve('/data', asset.filePath);
@@ -475,21 +605,165 @@ process.stdout.write(id);
 NODE
 )
 
+# Seed valid durable remote states so restart recovery is asserted without timing races.
+IFS=$'\t' read -r async_pending_job_id async_running_job_id < <(
+  compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+import { createHash, randomUUID } from 'node:crypto';
+
+import Database from 'better-sqlite3';
+
+const now = Date.now();
+const request = {
+  operation: 'video.generate',
+  providerId: 'mock',
+  modelId: 'mock-video-v1',
+  prompt: 'Durable Mock video restart recovery fixture',
+  inputs: [],
+  count: 1,
+  durationSeconds: 1,
+  aspectRatio: '16:9',
+  resolution: '720p',
+};
+const requestJson = JSON.stringify(request);
+const database = new Database('/data/app.db');
+const insert = (status) => {
+  const id = randomUUID();
+  const idempotencyKey = randomUUID();
+  const createdAt = now - 1_000;
+  const digest = createHash('sha256')
+    .update('mock-video-v1\\0' + idempotencyKey)
+    .digest('hex')
+    .slice(0, 32);
+  const remoteJobId = `mock-video-success-${createdAt.toString(36)}-${digest}`;
+  database
+    .prepare(
+      `INSERT INTO jobs (
+        id, operation, provider_id, model_id, prompt, request_json, provider_request_redacted_json,
+        status, stage, progress, remote_job_id, remote_deadline_at, result_expires_at,
+        idempotency_key, error_code, error_message, retry_count, submit_attempt,
+        stage_retry_counts_json, poll_after_at, created_at, updated_at, completed_at,
+        revision, result_manifest_json, retry_of_job_id, root_job_id, cancel_requested_at,
+        request_sha256, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      request.operation,
+      request.providerId,
+      request.modelId,
+      request.prompt,
+      requestJson,
+      '{}',
+      status,
+      status,
+      status === 'remote_running' ? 50 : 0,
+      remoteJobId,
+      now + 600_000,
+      null,
+      idempotencyKey,
+      null,
+      null,
+      0,
+      1,
+      '{}',
+      now,
+      createdAt,
+      now,
+      null,
+      1,
+      '[]',
+      null,
+      id,
+      null,
+      createHash('sha256').update(requestJson).digest('hex'),
+      null,
+    );
+  database
+    .prepare('INSERT INTO job_outputs (job_id, slot, asset_id, created_at, updated_at) VALUES (?, 0, NULL, ?, ?)')
+    .run(id, now, now);
+  return id;
+};
+const pendingId = insert('remote_pending');
+const runningId = insert('remote_running');
+database.close();
+process.stdout.write(`${pendingId}\t${runningId}\n`);
+NODE
+)
+
+test -n "$async_pending_job_id"
+test -n "$async_running_job_id"
+
+ASYNC_PENDING_JOB_ID="$async_pending_job_id" ASYNC_RUNNING_JOB_ID="$async_running_job_id" BASE_URL="$base_url" \
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+
+const baseUrl = process.env.BASE_URL;
+for (const [name, expectedStatus] of [
+  ['ASYNC_PENDING_JOB_ID', 'remote_pending'],
+  ['ASYNC_RUNNING_JOB_ID', 'remote_running'],
+]) {
+  const response = await fetch(baseUrl + `/internal/jobs/${encodeURIComponent(process.env[name])}`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(response.status, 200);
+  const detail = await response.json();
+  assert.equal(detail.job.status, expectedStatus);
+  assert.equal(detail.job.operation, 'video.generate');
+  assert.equal(detail.job.modelId, 'mock-video-v1');
+}
+NODE
+
 compose restart imagine-media
 compose up --detach --wait --wait-timeout 120
 
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
 SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
-EDIT_ASSET_ID="$edit_asset_id" QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" \
+EDIT_ASSET_ID="$edit_asset_id" VIDEO_JOB_ID="$video_job_id" VIDEO_ASSET_ID="$video_asset_id" \
+ASYNC_PENDING_JOB_ID="$async_pending_job_id" ASYNC_RUNNING_JOB_ID="$async_running_job_id" \
+QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" \
   node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
+const MOCK_VIDEO_SHA256 = '4d240737eeba324e5b3efcdc82738ba9555386f6d383d9fa233c6fae1db47361';
 
 async function json(path) {
   const response = await fetch(baseUrl + path, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`GET ${path} failed with ${response.status}`);
   return response.json();
+}
+
+async function waitForCompletedVideo(jobId) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const detail = await json(`/internal/jobs/${encodeURIComponent(jobId)}`);
+    if (detail.job?.status === 'completed') return detail;
+    if (['failed', 'cancelled', 'rejected', 'expired'].includes(detail.job?.status)) {
+      throw new Error(`Recovered video Job reached ${detail.job.status}.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Recovered video Job did not complete before the smoke timeout.');
+}
+
+async function assertVideoOutput(detail) {
+  assert.equal(detail.job.status, 'completed');
+  assert.equal(detail.assets.length, 1);
+  const asset = detail.assets[0];
+  assert.equal(typeof asset.id, 'string');
+  assert.ok(asset.id.length > 0);
+  assert.equal(asset.type, 'video');
+  assert.equal(asset.mimeType, 'video/mp4');
+  assert.equal(asset.sha256, MOCK_VIDEO_SHA256);
+  assert.equal(typeof asset.posterUrl, 'string');
+  const content = await fetch(baseUrl + asset.contentUrl, { signal: AbortSignal.timeout(10_000) });
+  assert.equal(content.status, 200);
+  const bytes = Buffer.from(await content.arrayBuffer());
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), MOCK_VIDEO_SHA256);
+  const poster = await fetch(baseUrl + asset.posterUrl, { signal: AbortSignal.timeout(10_000) });
+  assert.equal(poster.status, 200);
+  assert.equal(poster.headers.get('content-type'), 'image/jpeg');
+  assert.ok((await poster.arrayBuffer()).byteLength > 0);
 }
 
 const deadline = Date.now() + 30_000;
@@ -507,6 +781,28 @@ assert.equal(recovered?.status, 'completed', 'Queued Job was not recovered after
 const completed = await json(`/internal/jobs/${process.env.JOB_ID}`);
 assert.equal(completed.job.status, 'completed');
 assert.equal(completed.assets[0]?.id, process.env.ASSET_ID);
+const completedVideo = await json(`/internal/jobs/${process.env.VIDEO_JOB_ID}`);
+assert.equal(completedVideo.job.status, 'completed');
+assert.equal(completedVideo.assets[0]?.id, process.env.VIDEO_ASSET_ID);
+const videoOutput = completedVideo.assets[0];
+assert.equal(videoOutput.type, 'video');
+assert.equal(videoOutput.mimeType, 'video/mp4');
+const videoRange = await fetch(baseUrl + videoOutput.contentUrl, {
+  headers: { range: 'bytes=0-7' },
+  signal: AbortSignal.timeout(10_000),
+});
+assert.equal(videoRange.status, 206);
+assert.equal((await videoRange.arrayBuffer()).byteLength, 8);
+const videoPoster = await fetch(baseUrl + videoOutput.posterUrl, {
+  signal: AbortSignal.timeout(10_000),
+});
+assert.equal(videoPoster.status, 200);
+assert.equal(videoPoster.headers.get('content-type'), 'image/jpeg');
+assert.ok((await videoPoster.arrayBuffer()).byteLength > 0);
+const recoveredPendingVideo = await waitForCompletedVideo(process.env.ASYNC_PENDING_JOB_ID);
+const recoveredRunningVideo = await waitForCompletedVideo(process.env.ASYNC_RUNNING_JOB_ID);
+await assertVideoOutput(recoveredPendingVideo);
+await assertVideoOutput(recoveredRunningVideo);
 const asset = (await json(`/internal/assets/${process.env.ASSET_ID}`)).asset;
 assert.equal(asset.favorite, true);
 assert.ok(asset.collectionIds.includes(process.env.COLLECTION_ID));

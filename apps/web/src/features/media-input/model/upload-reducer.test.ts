@@ -29,6 +29,24 @@ describe('mediaInputReducer', () => {
     expect(state.entries[0]).toMatchObject({ assetId: 'asset-1', status: 'ready' });
   });
 
+  it('persists the selected first-frame role on local upload entries', () => {
+    const firstFrameAcquired = {
+      ...acquired,
+      clientId: 'client-first-frame',
+    };
+    const state = mediaInputReducer(initialMediaInputState, {
+      acquired: [firstFrameAcquired],
+      previewUrls: { [firstFrameAcquired.clientId]: 'blob:first-frame' },
+      role: 'first_frame',
+      type: 'add',
+    });
+
+    expect(state.entries[0]).toMatchObject({
+      clientId: 'client-first-frame',
+      role: 'first_frame',
+    });
+  });
+
   it('reports acquisition rejection and removes entries immutably', () => {
     const added = mediaInputReducer(initialMediaInputState, {
       acquired: [acquired],

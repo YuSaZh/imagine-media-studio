@@ -17,7 +17,7 @@ import {
   type MediaInputAction,
 } from '../model/upload-reducer.js';
 import { UploadController } from '../model/upload-controller.js';
-import type { AcquisitionRejection } from '../model/types.js';
+import type { AcquisitionRejection, ReferenceUploadRole } from '../model/types.js';
 
 export interface AddReferenceFilesOptions {
   existingCount: number;
@@ -28,8 +28,9 @@ export interface AddReferenceFilesOptions {
 
 export interface ReferenceUploadCallbacks {
   fixtureMode: boolean;
-  onReady: (clientId: string, assetId: string) => void;
-  onRemoveReady: (assetId: string) => void;
+  role: ReferenceUploadRole;
+  onReady: (clientId: string, assetId: string, role: ReferenceUploadRole) => void;
+  onRemoveReady: (assetId: string, role: ReferenceUploadRole) => void;
   preprocessPolicy: ImageInputPolicy;
   preserveReadyOnDispose?: boolean;
 }
@@ -40,7 +41,8 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
   const callbacksRef = useRef(callbacks);
   const previewsRef = useRef<PreviewUrlRegistry | null>(null);
   const controllerRef = useRef<UploadController | null>(null);
-  const readyAssetsRef = useRef(new Map<string, string>());
+  const readyAssetsRef = useRef(new Map<string, { assetId: string; role: ReferenceUploadRole }>());
+  const uploadRolesRef = useRef(new Map<string, ReferenceUploadRole>());
   stateRef.current = state;
   callbacksRef.current = callbacks;
   previewsRef.current ??= new PreviewUrlRegistry();
@@ -48,8 +50,9 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
   useEffect(() => {
     const transition = (action: MediaInputAction) => {
       if (action.type === 'ready') {
-        readyAssetsRef.current.set(action.clientId, action.assetId);
-        callbacksRef.current.onReady(action.clientId, action.assetId);
+        const role = uploadRolesRef.current.get(action.clientId) ?? callbacksRef.current.role;
+        readyAssetsRef.current.set(action.clientId, { assetId: action.assetId, role });
+        callbacksRef.current.onReady(action.clientId, action.assetId, role);
       }
       dispatch(action);
     };
@@ -59,13 +62,16 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
       prepare: (file, signal) => prepareBrowserImage(file, signal, {
         policy: callbacksRef.current.preprocessPolicy,
       }),
-      upload: (file, signal, inputDescriptor) =>
-        uploadReferenceImage(
+      upload: (file, signal, inputDescriptor, clientId) => {
+        const role = uploadRolesRef.current.get(clientId) ?? callbacksRef.current.role;
+        return uploadReferenceImage(
           file,
           signal,
           callbacksRef.current.fixtureMode,
           inputDescriptor,
-        ),
+          role,
+        );
+      },
     });
     controllerRef.current = controller;
     return () => {
@@ -73,15 +79,17 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
       controllerRef.current = null;
       previewsRef.current?.dispose();
       if (callbacksRef.current.preserveReadyOnDispose === false) {
-        for (const assetId of readyAssetsRef.current.values()) {
-          callbacksRef.current.onRemoveReady(assetId);
+        for (const { assetId, role } of readyAssetsRef.current.values()) {
+          callbacksRef.current.onRemoveReady(assetId, role);
         }
       }
       readyAssetsRef.current.clear();
+      uploadRolesRef.current.clear();
     };
   }, []);
 
   const addFiles = useCallback((files: readonly File[], options: AddReferenceFilesOptions) => {
+    const role = callbacksRef.current.role;
     const existingFingerprints = new Set(stateRef.current.entries.map((entry) => entry.fingerprint));
     const acquisitionOptions: AcquisitionOptions = {
       allowDuplicateFingerprints: callbacksRef.current.fixtureMode,
@@ -117,15 +125,17 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
       return;
     }
     const rejections = [...(options.preliminaryRejections ?? []), ...result.rejected];
-    dispatch({ acquired: result.accepted, previewUrls, type: 'add' });
+    for (const input of result.accepted) uploadRolesRef.current.set(input.clientId, role);
+    dispatch({ acquired: result.accepted, previewUrls, role, type: 'add' });
     dispatch({ rejections, type: 'reject' });
     controllerRef.current?.enqueue(result.accepted);
   }, []);
 
   const remove = useCallback((clientId: string) => {
     const entry = stateRef.current.entries.find((candidate) => candidate.clientId === clientId);
-    if (entry?.assetId) callbacksRef.current.onRemoveReady(entry.assetId);
+    if (entry?.assetId) callbacksRef.current.onRemoveReady(entry.assetId, entry.role);
     readyAssetsRef.current.delete(clientId);
+    uploadRolesRef.current.delete(clientId);
     previewsRef.current?.release(clientId);
     controllerRef.current?.remove(clientId);
   }, []);

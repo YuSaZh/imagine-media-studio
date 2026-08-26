@@ -407,6 +407,19 @@ class CompletedTestProvider implements ProviderAdapter {
   }
 }
 
+class InvalidPollOutputProvider extends CompletedTestProvider {
+  public constructor(assets: readonly SubmittedAsset[]) {
+    super(assets);
+  }
+
+  public override async submit(
+    _request: GenerationRequest,
+    _context: ProviderContext,
+  ): Promise<SubmitResult> {
+    return { state: 'pending', remoteJobId: 'invalid-output-remote', pollAfterMs: 0 };
+  }
+}
+
 class ExpiredSubmitProvider extends CompletedTestProvider {
   public pollCount = 0;
 
@@ -1078,6 +1091,48 @@ describe('JobRunner asynchronous state machine', () => {
     await runner.stop();
   });
 
+  it('rejects invalid provider output manifests at submit and poll without retrying', async () => {
+    const invalid = {
+      type: 'image',
+      mimeType: 'image/png',
+      source: 'base64',
+      base64: 'not-canonical',
+    } as unknown as SubmittedAsset;
+    const submitCase = createMemoryRunner(
+      [createRunnerJob('invalid-submit-output')],
+      () => ({ adapter: new CompletedTestProvider([invalid]), submitReplaySafe: true }),
+      [],
+      undefined,
+      undefined,
+      { maxAttempts: 3 },
+    );
+    await submitCase.runner.start();
+    await waitForPhase(submitCase.runner.waitForIdle(), 'invalid submit output rejection');
+    expect(submitCase.jobs.records.get('invalid-submit-output')).toMatchObject({
+      status: 'rejected',
+      resultAssets: [],
+      error: { code: 'provider_output_rejected', retryable: false },
+    });
+    await submitCase.runner.stop();
+
+    const pollCase = createMemoryRunner(
+      [createRunnerJob('invalid-poll-output')],
+      () => ({ adapter: new InvalidPollOutputProvider([invalid]), submitReplaySafe: true }),
+      [],
+      undefined,
+      undefined,
+      { maxAttempts: 3 },
+    );
+    await pollCase.runner.start();
+    await waitForPhase(pollCase.runner.waitForIdle(), 'invalid poll output rejection');
+    expect(pollCase.jobs.records.get('invalid-poll-output')).toMatchObject({
+      status: 'rejected',
+      resultAssets: [],
+      error: { code: 'provider_output_rejected', retryable: false },
+    });
+    await pollCase.runner.stop();
+  });
+
   it('clears durable outputs on deterministic remote failure while preserving the remote id', async () => {
     let materializeCalls = 0;
     const { runner, jobs, discardedJobIds } = createMemoryRunner(
@@ -1306,11 +1361,13 @@ describe('JobRunner asynchronous state machine', () => {
         type: 'image',
         mimeType: 'image/png',
         source: 'url',
-        url: 'https://provider.invalid/result.png?token=temporary-secret',
+        url: 'https://provider.invalid/result.png?variant=preview',
       },
     ]);
     const { runner, jobs, materializedSources } = createMemoryRunner(
-      [createRunnerJob('sources')],
+      [createRunnerJob('sources', {
+        request: createMockGenerationRequest({ count: 2 }),
+      })],
       () => ({ adapter: provider, submitReplaySafe: true }),
     );
 

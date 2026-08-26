@@ -1258,6 +1258,26 @@ img {
   user-select: none;
 }
 
+video.viewer-media {
+  width: min(100%, 1120px);
+  min-height: 180px;
+  border-radius: var(--radius-card);
+  background: #050605;
+}
+
+.viewer-media-state {
+  display: grid;
+  width: min(100%, 520px);
+  min-height: 180px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-card);
+  background: rgba(18, 19, 18, 0.72);
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.84);
+  text-align: center;
+}
+
 .viewer-zoom-controls {
   position: absolute;
   right: 16px;
@@ -2279,6 +2299,16 @@ img {
   color: var(--color-danger);
 }
 
+.provider-form-warning {
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-surface-subtle);
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
 .provider-loading,
 .provider-empty {
   display: grid;
@@ -2845,7 +2875,20 @@ img {
   }
 
   .composer-toolbar {
+    flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .composer-video-input-mode {
+    flex: 1 0 100%;
+    justify-content: space-between;
+    order: 5;
+  }
+
+  .composer-video-input-mode button {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
   }
 
   .composer .icon-button {
@@ -2930,6 +2973,16 @@ img {
 
   .viewer-media {
     max-height: 64dvh;
+  }
+
+  video.viewer-media {
+    width: 100%;
+    min-height: 150px;
+  }
+
+  .viewer-media-state {
+    width: 100%;
+    min-height: 150px;
   }
 
   .viewer-details {

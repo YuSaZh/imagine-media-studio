@@ -818,7 +818,7 @@ describe('OpenAI provider profiles', () => {
     ).partials[0]).toMatchObject({ mimeType: 'image/webp' });
   });
 
-  it('bounds output counts, result IDs, metadata, and URL credentials while preserving signed URL queries', async () => {
+  it('bounds output counts, result IDs, metadata, and rejects credential-bearing URLs', async () => {
     const twoImages = {
       data: [
         { id: 'image-0', b64_json: IMAGE_BASE64 },
@@ -864,12 +864,12 @@ describe('OpenAI provider profiles', () => {
     expect(() => normalizeImageResponse({
       data: [{ url: 'https://user:pass@cdn.example.invalid/result.png?token=secret' }],
     })).toThrow('credentials');
-    expect(normalizeImageResponse({
+    expect(() => normalizeImageResponse({
       data: [{ url: 'https://cdn.example.invalid/result.png?token=signed-secret&expires=1' }],
-    })[0]).toMatchObject({
-      source: 'url',
-      url: 'https://cdn.example.invalid/result.png?token=signed-secret&expires=1',
-    });
+    })).toThrow('credential-like query');
+    expect(() => normalizeImageResponse({
+      data: [{ url: `https://cdn.example.invalid/${'x'.repeat(4_100)}` }],
+    })).toThrow('oversized image URL');
   });
 
   it('keeps image payload validation model-aware and limits compression to encoded formats', async () => {

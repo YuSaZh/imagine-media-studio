@@ -27,10 +27,12 @@ import type {
   FixtureGalleryItem,
   FixtureJobStatus,
   FixtureMediaOperation,
+  FixtureDurationRange,
   FixtureModel,
   FixtureProvider,
 } from '../model/types.js';
 import { mapInternalGallery } from '../model/api-mapper.js';
+import { dimensionsForAspectRatio, parseAspectRatio } from '../model/aspect-ratio.js';
 
 export { isVisualFixtureMode } from '../../../visual-fixture.js';
 
@@ -87,7 +89,6 @@ function withCursor(cursor: string | undefined): { cursor?: string; limit: numbe
   return cursor === undefined ? { limit: 100 } : { cursor, limit: 100 };
 }
 
-const knownAspectRatios = new Set<FixtureAspectRatio>(['2:3', '3:2', '1:1', '9:16', '16:9']);
 const knownOperations = new Set<FixtureMediaOperation>([
   'image.generate',
   'image.edit',
@@ -100,20 +101,48 @@ function isObject(value: JsonValue | undefined): value is JsonObject {
   return value !== null && value !== undefined && !Array.isArray(value) && typeof value === 'object';
 }
 
-function stringArray(value: JsonValue | undefined): readonly string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+function stringArray(value: JsonValue | undefined, maximumLength = 64): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== 'string') return [];
+    const normalized = item.trim();
+    return normalized.length > 0 && normalized.length <= maximumLength &&
+      ![...normalized].some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      })
+      ? [normalized]
+      : [];
+  });
+}
+
+function aspectRatioArray(value: JsonValue | undefined): readonly FixtureAspectRatio[] {
+  return [...new Set(stringArray(value, 32).flatMap((item) => {
+    const ratio = parseAspectRatio(item);
+    return ratio ? [ratio] : [];
+  }))];
 }
 
 function numberArray(value: JsonValue | undefined): readonly number[] {
   if (Array.isArray(value)) {
-    return value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
-  }
-  if (isObject(value)) {
-    return [value.min, value.max].filter(
-      (item): item is number => typeof item === 'number' && Number.isFinite(item),
+    return value.filter(
+      (item): item is number => typeof item === 'number' && Number.isSafeInteger(item) && item > 0,
     );
   }
   return [];
+}
+
+function durationRange(value: JsonValue | undefined): FixtureDurationRange | undefined {
+  if (!isObject(value)) return undefined;
+  const min = value.min;
+  const max = value.max;
+  const step = value.step ?? 1;
+  if (
+    typeof min !== 'number' || !Number.isSafeInteger(min) || min <= 0 ||
+    typeof max !== 'number' || !Number.isSafeInteger(max) || max < min ||
+    typeof step !== 'number' || !Number.isSafeInteger(step) || step <= 0
+  ) return undefined;
+  return { min, max, step };
 }
 
 function positiveInteger(value: JsonValue | undefined, fallback: number): number {
@@ -134,7 +163,7 @@ function mapImageInputPolicy(capabilities: JsonObject, maxReferenceImages: numbe
     : DEFAULT_IMAGE_INPUT_POLICY.allowedMimeTypes.filter((mime) => declaredMimeTypes.includes(mime));
   return {
     allowedMimeTypes,
-    maxCount: Math.max(1, Math.min(DEFAULT_IMAGE_INPUT_POLICY.maxCount, maxReferenceImages)),
+    maxCount: Math.min(DEFAULT_IMAGE_INPUT_POLICY.maxCount, maxReferenceImages),
     maxFileBytes: boundedImageLimit(constraints.maxBytes, DEFAULT_IMAGE_INPUT_POLICY.maxFileBytes),
     maxTotalBytes: DEFAULT_IMAGE_INPUT_POLICY.maxTotalBytes,
     maxPixels: boundedImageLimit(constraints.maxPixels, DEFAULT_IMAGE_INPUT_POLICY.maxPixels),
@@ -143,7 +172,7 @@ function mapImageInputPolicy(capabilities: JsonObject, maxReferenceImages: numbe
   };
 }
 
-function mapInternalModel(model: ModelDto): GalleryModel {
+export function mapInternalModel(model: ModelDto): GalleryModel {
   const capabilities = model.capabilities;
   const operations = stringArray(capabilities.operations).filter(
     (operation): operation is FixtureMediaOperation => knownOperations.has(operation as FixtureMediaOperation),
@@ -151,9 +180,9 @@ function mapInternalModel(model: ModelDto): GalleryModel {
   const mediaKind = operations.some((operation) => operation.startsWith('video.'))
     ? 'video'
     : 'image';
-  const aspectRatios = stringArray(capabilities.aspectRatios).filter(
-    (ratio): ratio is FixtureAspectRatio => knownAspectRatios.has(ratio as FixtureAspectRatio),
-  );
+  const aspectRatios = aspectRatioArray(capabilities.aspectRatios);
+  const durations = numberArray(capabilities.durations);
+  const range = durationRange(capabilities.durations);
   const supportsBatchCount = capabilities.supportsBatchCount === true;
   const maxReferenceImages = positiveInteger(capabilities.maxReferenceImages, 0);
   return {
@@ -165,7 +194,8 @@ function mapInternalModel(model: ModelDto): GalleryModel {
       operations,
       aspectRatios: aspectRatios.length > 0 ? aspectRatios : ['1:1'],
       resolutions: stringArray(capabilities.resolutions),
-      durations: numberArray(capabilities.durations),
+      durations,
+      ...(range ? { durationRange: range } : {}),
       maxReferenceImages,
       supportsMask: capabilities.supportsMask === true,
       supportsProgress: capabilities.supportsProgress === true,
@@ -528,6 +558,7 @@ export interface MockSubmission {
   readonly providerId?: string;
   readonly count: number;
   readonly aspectRatio: FixtureAspectRatio;
+  readonly resolution?: string | null;
   readonly durationSeconds: number | null;
   readonly referenceCount: number;
   readonly inputAssets?: readonly AssetInput[];
@@ -536,6 +567,24 @@ export interface MockSubmission {
 function normalizedInteger(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
   return Math.min(maximum, Math.max(minimum, Math.trunc(value)));
+}
+
+function durationForModel(value: number | null, model: GalleryModel): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Duration for model ${model.id} must be a positive whole number.`);
+  }
+  if (model.capabilities.durationRange) {
+    const { min, max, step } = model.capabilities.durationRange;
+    if (value < min || value > max || (value - min) % step !== 0) {
+      throw new Error(`Duration for model ${model.id} must be between ${min} and ${max} seconds.`);
+    }
+    return value;
+  }
+  if (!model.capabilities.durations.includes(value)) {
+    throw new Error(`Duration ${value} is not supported by model ${model.id}.`);
+  }
+  return value;
 }
 
 function optimisticTimestamp(sequence: number): string {
@@ -599,8 +648,12 @@ export function createMockSubmissionItems(
       folderIds: [],
       providerId: PR1_MOCK_PROVIDER.id,
       modelId: input.modelId,
-      width: source.width,
-      height: source.height,
+      width: source.aspectRatio === input.aspectRatio
+        ? source.width
+        : dimensionsForAspectRatio(input.aspectRatio).width,
+      height: source.aspectRatio === input.aspectRatio
+        ? source.height
+        : dimensionsForAspectRatio(input.aspectRatio).height,
       aspectRatio: input.aspectRatio,
       referenceCount,
       batchCount: outputCount,
@@ -622,7 +675,7 @@ export function createMockSubmissionItems(
           kind: 'video',
           sourcePath: null,
           posterPath: source.previewPath,
-          durationSeconds: normalizedInteger(input.durationSeconds ?? 5, 1, 60),
+          durationSeconds: input.durationSeconds ?? 5,
         };
   });
 }
@@ -716,6 +769,14 @@ export function createGenerationRequest(
   if (!model || model.mediaKind !== input.mode) {
     throw new Error(`Model ${input.modelId} is not available for ${input.mode} generation.`);
   }
+  if (!model.capabilities.aspectRatios.includes(input.aspectRatio)) {
+    throw new Error(`Aspect ratio ${input.aspectRatio} is not supported by model ${model.id}.`);
+  }
+  if (input.resolution !== null && input.resolution !== undefined) {
+    if (!model.capabilities.resolutions.includes(input.resolution)) {
+      throw new Error(`Resolution ${input.resolution} is not supported by model ${model.id}.`);
+    }
+  }
   const inputAssets = input.inputAssets ?? [];
   const uniqueInputs = new Set(inputAssets.map((item) => `${item.role}\0${item.assetId}`));
   if (uniqueInputs.size !== inputAssets.length) {
@@ -728,9 +789,17 @@ export function createGenerationRequest(
     prompt: input.prompt,
     inputs: [...inputAssets],
     aspectRatio: input.aspectRatio,
-    count: input.mode === 'video' ? 1 : normalizedInteger(input.count, 1, 4),
+    count: input.mode === 'video'
+      ? 1
+      : model.capabilities.supportsBatchCount
+        ? normalizedInteger(input.count, 1, model.capabilities.maxBatchCount)
+        : 1,
+    ...(input.resolution ? { resolution: input.resolution } : {}),
     ...(input.mode === 'video'
-      ? { durationSeconds: normalizedInteger(input.durationSeconds ?? 5, 1, 60) }
+      ? (() => {
+          const duration = durationForModel(input.durationSeconds, model);
+          return duration === undefined ? {} : { durationSeconds: duration };
+        })()
       : {}),
   };
 }

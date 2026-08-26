@@ -25,13 +25,20 @@ export type FixtureMediaOperation =
   | 'video.image_to_video'
   | 'video.reference_to_video';
 
-export type FixtureAspectRatio = '2:3' | '3:2' | '1:1' | '9:16' | '16:9';
+export type FixtureAspectRatio = string;
+
+export interface FixtureDurationRange {
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+}
 
 export interface FixtureCapabilities {
   readonly operations: readonly FixtureMediaOperation[];
   readonly aspectRatios: readonly FixtureAspectRatio[];
   readonly resolutions: readonly string[];
   readonly durations: readonly number[];
+  readonly durationRange?: FixtureDurationRange;
   readonly maxReferenceImages: number;
   readonly supportsMask: boolean;
   readonly supportsProgress: boolean;
@@ -96,7 +103,7 @@ export interface FixtureImageItem extends FixtureGalleryItemBase {
 
 export interface FixtureVideoItem extends FixtureGalleryItemBase {
   readonly kind: 'video';
-  readonly sourcePath: null;
+  readonly sourcePath: string | null;
   readonly posterPath: string;
   readonly durationSeconds: number;
 }

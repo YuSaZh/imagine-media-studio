@@ -248,6 +248,7 @@ describe('SQLite stage retry budget recovery', () => {
       providerId: provider.type,
       modelId: 'sqlite-expiry-video-v1',
       operation: 'video.generate',
+      count: 3,
     }));
     const claimed = firstJobs.claimQueued(created.id, created.revision);
     if (!claimed) throw new Error('Expected the SQLite expiry fixture Job to be claimed.');

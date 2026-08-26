@@ -174,11 +174,24 @@ describe('ProviderService', () => {
     const listed = service.listModels({ providerId: MOCK_PROVIDER_ID });
     const connection = await service.testConnection(MOCK_PROVIDER_ID);
 
-    expect(refreshed).toHaveLength(1);
-    expect(refreshed[0]).toMatchObject({
+    expect(refreshed).toHaveLength(2);
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
       modelId: 'mock-image-v1',
       capabilitySource: 'mock',
-    });
+      }),
+    ]));
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        modelId: 'mock-video-v1',
+        capabilitySource: 'mock',
+        capabilities: expect.objectContaining({
+          operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
+          supportsProgress: true,
+          supportsCancel: true,
+        }),
+      }),
+    ]));
     expect(listed.items.map((model) => model.id)).toEqual(refreshed.map((model) => model.id));
     expect(connection).toEqual({
       ok: true,

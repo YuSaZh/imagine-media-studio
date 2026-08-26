@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Bookmark,
@@ -8,9 +8,7 @@ import {
   Copy,
   Download,
   ImagePlus,
-  Pause,
   Pencil,
-  Play,
   RotateCcw,
   Trash2,
   X,
@@ -23,11 +21,58 @@ import { IconButton } from '../../../components/icon-button';
 import { useUiStore } from '../../../stores/ui-store';
 import { isVisualFixtureMode } from '../../../visual-fixture';
 import { useGalleryActions } from '../../gallery/api/gallery-query';
+import { VIDEO_PLACEHOLDER_PATH } from '../../gallery/model/api-mapper';
 import type { FixtureGalleryItem } from '../../gallery/model/types';
 import { canContinueWithImageInput } from '../../gallery/model/input-eligibility';
 
 interface MediaViewerProps {
   items: readonly FixtureGalleryItem[];
+}
+
+export function VideoPreview({
+  alt,
+  errorMessage,
+  messageRole = 'alert',
+  onError,
+  posterPath,
+  sourcePath,
+  style,
+}: {
+  alt: string;
+  errorMessage: string | null;
+  messageRole?: 'alert' | 'status';
+  onError: () => void;
+  posterPath: string;
+  sourcePath: string;
+  style?: CSSProperties;
+}) {
+  if (errorMessage) {
+    return <p aria-live="polite" className="viewer-media-state" role={messageRole}>{errorMessage}</p>;
+  }
+  return (
+    <video
+      aria-label={`Video preview: ${alt}`}
+      className="viewer-media"
+      controls
+      onError={onError}
+      playsInline
+      poster={posterPath || VIDEO_PLACEHOLDER_PATH}
+      preload="metadata"
+      src={sourcePath}
+      style={style}
+    />
+  );
+}
+
+export function isNativeMediaInteractionTarget(target: EventTarget | null): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const candidate = target as EventTarget & {
+    closest?: (selectors: string) => Element | null;
+    tagName?: unknown;
+  };
+  if (candidate.tagName === 'VIDEO' || candidate.tagName === 'AUDIO') return true;
+  return typeof candidate.closest === 'function' &&
+    candidate.closest('video, audio, input[type="range"], [role="slider"]') !== null;
 }
 
 export function MediaViewer({ items }: MediaViewerProps) {
@@ -46,7 +91,7 @@ export function MediaViewer({ items }: MediaViewerProps) {
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [playing, setPlaying] = useState(false);
+  const [videoPlaybackError, setVideoPlaybackError] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const currentIndex =
     viewerAssetId === null ? -1 : items.findIndex((item) => item.id === viewerAssetId);
@@ -67,7 +112,7 @@ export function MediaViewer({ items }: MediaViewerProps) {
   useEffect(() => {
     setScale(1);
     setPosition({ x: 0, y: 0 });
-    setPlaying(false);
+    setVideoPlaybackError(false);
     setCopyStatus('');
   }, [item?.id]);
 
@@ -108,6 +153,19 @@ export function MediaViewer({ items }: MediaViewerProps) {
 
   if (!item) return null;
   const canContinue = canContinueWithImageInput(item);
+  const videoStatusMessage = item.kind !== 'video'
+    ? null
+    : item.status === 'expired'
+      ? 'This video result has expired and is no longer available.'
+      : item.status === 'cancelled'
+        ? 'This video generation was cancelled.'
+        : item.status === 'failed' || item.status === 'rejected'
+          ? item.error?.message ?? 'This video generation did not complete.'
+          : item.sourcePath === null
+            ? 'This video is still being prepared.'
+            : videoPlaybackError
+              ? 'The video could not be loaded.'
+              : null;
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && closeViewer()}>
@@ -120,6 +178,7 @@ export function MediaViewer({ items }: MediaViewerProps) {
             contentRef.current?.focus();
           }}
           onKeyDown={(event) => {
+            if (isNativeMediaInteractionTarget(event.target)) return;
             if (event.key === 'ArrowLeft') move(-1);
             if (event.key === 'ArrowRight') move(1);
           }}
@@ -157,10 +216,13 @@ export function MediaViewer({ items }: MediaViewerProps) {
                 onClick={() => actions.toggleSaved(item.id)}
               />
               <a
-                aria-label={item.kind === 'video' ? 'Download poster' : 'Download image'}
+                aria-label={item.kind === 'video' ? 'Download video' : 'Download image'}
                 className="viewer-link-button"
-                download={`${item.id}-${item.kind === 'video' ? 'poster' : 'image'}.png`}
-                href={item.previewPath}
+                download={`${item.id}-${item.kind === 'video' ? 'video.mp4' : 'image.png'}`}
+                href={item.kind === 'video' ? (item.sourcePath ?? undefined) : item.previewPath}
+                onClick={(event) => {
+                  if (item.kind === 'video' && item.sourcePath === null) event.preventDefault();
+                }}
               >
                 <Download size={18} />
               </a>
@@ -197,21 +259,33 @@ export function MediaViewer({ items }: MediaViewerProps) {
             }}
             onPointerUp={() => { dragOffset.current = null; }}
           >
-            <img
-              alt={item.alt}
-              className="viewer-media"
-              src={item.previewPath}
-              style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` }}
-            />
-            {item.kind === 'video' && (
-              <button
-                aria-label={playing ? 'Pause mock video preview' : 'Play mock video preview'}
-                className="viewer-play"
-                onClick={() => setPlaying((value) => !value)}
-                type="button"
-              >
-                {playing ? <Pause fill="currentColor" size={28} /> : <Play fill="currentColor" size={28} />}
-              </button>
+            {item.kind === 'video' ? (
+              videoStatusMessage ? (
+                <VideoPreview
+                  alt={item.alt}
+                  errorMessage={videoStatusMessage}
+                  messageRole={item.status === 'failed' || item.status === 'rejected' || videoPlaybackError ? 'alert' : 'status'}
+                  onError={() => setVideoPlaybackError(true)}
+                  posterPath={item.posterPath}
+                  sourcePath={item.sourcePath ?? ''}
+                />
+              ) : (
+                <VideoPreview
+                  alt={item.alt}
+                  errorMessage={null}
+                  onError={() => setVideoPlaybackError(true)}
+                  posterPath={item.posterPath}
+                  sourcePath={item.sourcePath ?? ''}
+                  style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` }}
+                />
+              )
+            ) : (
+              <img
+                alt={item.alt}
+                className="viewer-media"
+                src={item.previewPath}
+                style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` }}
+              />
             )}
             {item.kind === 'image' && (
               <div className="viewer-zoom-controls">
@@ -255,7 +329,7 @@ export function MediaViewer({ items }: MediaViewerProps) {
               <div><dt>Size</dt><dd>{item.width} x {item.height}</dd></div>
               <div><dt>Aspect</dt><dd>{item.aspectRatio}</dd></div>
               <div><dt>References</dt><dd>{item.referenceCount}</dd></div>
-              <div><dt>Status</dt><dd>{item.stage}</dd></div>
+              <div><dt>Status</dt><dd>{videoStatusMessage ?? item.stage}</dd></div>
               <div><dt>Created</dt><dd>{item.createdAt.slice(0, 10)}</dd></div>
             </dl>
             <div className="viewer-create-actions">

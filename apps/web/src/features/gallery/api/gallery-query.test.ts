@@ -18,6 +18,7 @@ import {
   loadGalleryData,
   loadInputAssetInventoryData,
   loadProviderData,
+  mapInternalModel,
   reduceGalleryItems,
   rollbackOptimisticSubmission,
   type GalleryModel,
@@ -58,6 +59,16 @@ describe('PR 1 gallery query model', () => {
     expect(items.every((item) => item.width === 900 && item.height === 1600)).toBe(true);
     expect(items.every((item) => item.referenceCount === 3 && item.batchCount === 4)).toBe(true);
     expect(items[0]?.createdAt).toBe('2026-08-25T01:01:00.000Z');
+  });
+
+  it('uses a dynamic ratio for optimistic card dimensions when no fixture matches', () => {
+    const [item] = createMockSubmissionItems({
+      ...imageSubmission,
+      aspectRatio: '4:3',
+      count: 1,
+    }, 63);
+
+    expect(item).toMatchObject({ aspectRatio: '4:3', width: 1024, height: 768 });
   });
 
   it('forces video batches to one output while preserving duration and references', () => {
@@ -401,6 +412,103 @@ describe('PR 2 gallery API integration', () => {
         })],
       }),
     );
+  });
+
+  it('preserves provider duration ranges, aspect ratios, and zero reference limits', () => {
+    const mapped = mapInternalModel({
+      id: 'model-video-api',
+      providerId: 'provider-api',
+      modelId: 'video-api-v1',
+      displayName: 'Video API',
+      capabilities: {
+        operations: ['video.generate', 'video.image_to_video'],
+        aspectRatios: ['4:3', '3:4'],
+        resolutions: ['720p'],
+        durations: { min: 1, max: 15 },
+        maxReferenceImages: 0,
+      },
+      capabilitySource: 'provider',
+      enabled: true,
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-25T00:00:00.000Z',
+    });
+
+    expect(mapped.capabilities).toMatchObject({
+      aspectRatios: ['4:3', '3:4'],
+      durationRange: { min: 1, max: 15, step: 1 },
+      durations: [],
+      inputImagePolicy: { maxCount: 0 },
+      maxReferenceImages: 0,
+      resolutions: ['720p'],
+    });
+  });
+
+  it('maps xAI dynamic aspect ratios while rejecting unsafe provider values', () => {
+    const mapped = mapInternalModel({
+      id: 'model-xai-ratio',
+      providerId: 'provider-api',
+      modelId: 'xai-imagine-video-v1',
+      displayName: 'xAI Imagine Video',
+      capabilities: {
+        operations: ['video.generate'],
+        aspectRatios: ['4:3', '3:4', '3:2', '2:3', 'NaN:1', '100000:1', '0:1', '1.5:1', '1:1001'],
+        maxReferenceImages: 0,
+      },
+      capabilitySource: 'provider',
+      enabled: true,
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-25T00:00:00.000Z',
+    });
+
+    expect(mapped.capabilities.aspectRatios).toEqual(['4:3', '3:4', '3:2', '2:3']);
+  });
+
+  it('emits capability-bound video fields and rejects unsupported values', () => {
+    const model: GalleryModel = {
+      id: 'video-range-v1',
+      providerId: 'provider-api',
+      displayName: 'Video range',
+      mediaKind: 'video',
+      capabilities: {
+        operations: ['video.generate'],
+        aspectRatios: ['4:3'],
+        resolutions: ['720p'],
+        durations: [],
+        durationRange: { min: 1, max: 15, step: 1 },
+        maxReferenceImages: 0,
+        supportsMask: false,
+        supportsProgress: true,
+        supportsCancel: false,
+        supportsBatchCount: false,
+        maxBatchCount: 1,
+      },
+    };
+    expect(createGenerationRequest({
+      mode: 'video',
+      prompt: 'A bounded scene',
+      modelId: model.id,
+      providerId: model.providerId,
+      count: 4,
+      aspectRatio: '4:3',
+      resolution: '720p',
+      durationSeconds: 7,
+      referenceCount: 0,
+    }, [model])).toMatchObject({
+      aspectRatio: '4:3',
+      count: 1,
+      durationSeconds: 7,
+      resolution: '720p',
+    });
+    expect(() => createGenerationRequest({
+      mode: 'video',
+      prompt: 'Out of range',
+      modelId: model.id,
+      providerId: model.providerId,
+      count: 1,
+      aspectRatio: '4:3',
+      durationSeconds: 16,
+      referenceCount: 0,
+    }, [model])).toThrow('between 1 and 15');
   });
 
   it('creates requests with only durable reference asset IDs', () => {

@@ -1,0 +1,8 @@
+{
+  "state": "failed",
+  "error": {
+    "code": "mock_video_failed",
+    "kind": "rejected",
+    "retryable": false
+  }
+}

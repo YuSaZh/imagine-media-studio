@@ -5,34 +5,23 @@ import type {
   FixtureGalleryItem,
   FixtureJobStatus,
 } from './types.js';
-
-const KNOWN_ASPECT_RATIOS: readonly FixtureAspectRatio[] = ['2:3', '3:2', '1:1', '9:16', '16:9'];
+import { dimensionsForAspectRatio, nearestAspectRatio, parseAspectRatio } from './aspect-ratio.js';
 const PLACEHOLDER_PATH = '/icons/app-icon-512.png';
+export const VIDEO_PLACEHOLDER_PATH = PLACEHOLDER_PATH;
 
 function aspectRatioFor(
   declared: string | undefined,
   width: number,
   height: number,
 ): FixtureAspectRatio {
-  if (KNOWN_ASPECT_RATIOS.includes(declared as FixtureAspectRatio)) {
-    return declared as FixtureAspectRatio;
-  }
-  const ratio = width / height;
-  return [...KNOWN_ASPECT_RATIOS]
-    .map((candidate) => {
-      const [left, right] = candidate.split(':').map(Number);
-      return { candidate, difference: Math.abs(ratio - (left ?? 1) / (right ?? 1)) };
-    })
-    .sort((left, right) => left.difference - right.difference)[0]?.candidate ?? '1:1';
+  return parseAspectRatio(declared) ?? nearestAspectRatio(width, height);
 }
 
 function dimensionsForJob(job: JobDto): { width: number; height: number } {
   if (job.request.width && job.request.height) {
     return { width: job.request.width, height: job.request.height };
   }
-  const aspectRatio = aspectRatioFor(job.request.aspectRatio, 1, 1);
-  const [left, right] = aspectRatio.split(':').map(Number);
-  return { width: (left ?? 1) * 512, height: (right ?? 1) * 512 };
+  return dimensionsForAspectRatio(aspectRatioFor(job.request.aspectRatio, 1, 1), 2_048);
 }
 
 function errorForJob(job: JobDto) {
@@ -67,7 +56,9 @@ function mapAsset(asset: AssetDto, job: JobDto | undefined): FixtureGalleryItem 
     aspectRatio: aspectRatioFor(job?.request.aspectRatio, width, height),
     referenceCount: job?.request.inputs.length ?? 0,
     batchCount: Math.max(1, job?.outputCount ?? 1),
-    previewPath: asset.thumbnailUrl ?? asset.posterUrl ?? asset.contentUrl,
+    previewPath: asset.type === 'video'
+      ? asset.thumbnailUrl ?? asset.posterUrl ?? PLACEHOLDER_PATH
+      : asset.thumbnailUrl ?? asset.posterUrl ?? asset.contentUrl,
     inputDescriptor: asset.type === 'image' && asset.width !== null && asset.height !== null
       ? {
           fileSize: asset.fileSize,
@@ -89,8 +80,8 @@ function mapAsset(asset: AssetDto, job: JobDto | undefined): FixtureGalleryItem 
     : {
         ...common,
         kind: 'video',
-        sourcePath: null,
-        posterPath: asset.posterUrl ?? asset.contentUrl,
+        sourcePath: asset.contentUrl,
+        posterPath: asset.posterUrl ?? asset.thumbnailUrl ?? PLACEHOLDER_PATH,
         durationSeconds: Math.max(0, Math.round((asset.durationMs ?? 0) / 1000)),
       };
 }

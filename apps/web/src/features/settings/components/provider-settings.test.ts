@@ -97,6 +97,18 @@ describe('Provider editor mapping', () => {
       ...providerToForm({ ...storedProvider, type: 'custom-http' }),
       name: 'Legacy custom',
     })).toThrow('no longer supported');
+    expect(PROVIDER_PROFILE_OPTIONS.map((option) => option.value)).toEqual(expect.arrayContaining([
+      'openai-videos-v1-compatible',
+      'gemini-veo-operation-v1',
+      'gemini-omni-interactions-video-v1',
+      'xai-imagine-video-v1',
+    ]));
+    expect(() => buildProviderWriteInput({
+      ...providerToForm(null),
+      name: 'OpenAI video relay',
+      profile: 'openai-videos-v1-compatible',
+      type: 'openai-videos-v1-compatible',
+    })).toThrow('requires a Base URL');
   });
 
   it('validates manual model capabilities before writing', () => {

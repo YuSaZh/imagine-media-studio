@@ -53,7 +53,7 @@ const RESPONSE_FORMATS = ['url', 'b64_json'] as const;
 const MAX_INLINE_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 96 * 1024 * 1024;
 const MAX_OUTPUT_IMAGES = 10;
-const MAX_OUTPUT_URL_CHARS = 8_192;
+const MAX_OUTPUT_URL_CHARS = 4_096;
 const MAX_RESULT_ID_CHARS = 256;
 const MAX_REVISED_PROMPT_CHARS = 32_000;
 const MAX_MIME_TYPE_CHARS = 128;
@@ -72,6 +72,22 @@ const RESERVED_HEADER_NAMES = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+]);
+const CREDENTIAL_QUERY_NAMES = new Set([
+  'access_token',
+  'api_key',
+  'apikey',
+  'auth',
+  'authorization',
+  'bearer',
+  'credential',
+  'credentials',
+  'key',
+  'password',
+  'secret',
+  'sig',
+  'signature',
+  'token',
 ]);
 
 type JsonRecord = Record<string, unknown>;
@@ -261,6 +277,18 @@ function safeUrl(rawUrl: string, label: string): string {
   }
   if (parsed.username || parsed.password) {
     throw new XaiImagineValidationError('xai_invalid_image_url', `${label} cannot contain credentials.`);
+  }
+  for (const [name] of parsed.searchParams) {
+    const normalized = name.trim().toLowerCase();
+    if (
+      CREDENTIAL_QUERY_NAMES.has(normalized) ||
+      normalized.startsWith('x-amz-') ||
+      normalized.startsWith('x-goog-') ||
+      normalized.startsWith('x-ms-') ||
+      normalized.startsWith('oauth_')
+    ) {
+      throw new XaiImagineValidationError('xai_invalid_image_url', `${label} contains credential-like query data.`);
+    }
   }
   return parsed.toString();
 }

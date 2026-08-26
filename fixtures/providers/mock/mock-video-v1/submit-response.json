@@ -1,0 +1,5 @@
+{
+  "state": "pending",
+  "remoteJobId": "mock-video-success-<created-at-base36>-<seed-sha256-prefix>",
+  "pollAfterMs": 50
+}

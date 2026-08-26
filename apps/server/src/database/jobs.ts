@@ -1,6 +1,8 @@
+import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
+  MAX_GENERATION_COUNT,
   GenerationRequestSchema,
   type GenerationRequest,
   type JobStatus,
@@ -33,6 +35,11 @@ import {
 } from './pagination.js';
 import { assets, changeEvents, jobInputs, jobOutputs, jobs } from './schema.js';
 import { parseStageRetryCounts, type StageRetryCounts } from '../jobs/retry-budget.js';
+import {
+  MAX_SUBMITTED_MANIFEST_BYTES,
+  SubmittedAssetValidationError,
+  assertDurableResultManifest,
+} from '../jobs/submitted-asset-validator.js';
 
 export { AssetRepository } from './assets.js';
 
@@ -52,6 +59,7 @@ const ACTIVE_STATUSES: readonly JobStatus[] = [
   'downloading',
   'processing',
 ];
+const MAX_PERSISTED_REQUEST_BYTES = 1 * 1024 * 1024;
 
 const COMPATIBLE_PREVIOUS_STATUSES: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
   queued: ['queued', 'submitting'],
@@ -171,8 +179,19 @@ export class JobRepositoryError extends Error {
   }
 }
 
+function parseJsonDocument(value: string, label: string, maxBytes: number): unknown {
+  if (Buffer.byteLength(value, 'utf8') > maxBytes) {
+    throw new Error(`${label} exceeds the persistence safety limit.`);
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new Error(`${label} is not valid JSON.`);
+  }
+}
+
 function parseJsonObject(value: string, label: string): Readonly<Record<string, unknown>> {
-  const parsed: unknown = JSON.parse(value);
+  const parsed = parseJsonDocument(value, label, MAX_PERSISTED_REQUEST_BYTES);
   if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
     throw new Error(`${label} must contain a JSON object.`);
   }
@@ -180,15 +199,29 @@ function parseJsonObject(value: string, label: string): Readonly<Record<string, 
 }
 
 function parseJsonArray(value: string, label: string): readonly unknown[] {
-  const parsed: unknown = JSON.parse(value);
-  if (!Array.isArray(parsed)) throw new Error(`${label} must contain a JSON array.`);
+  if (Buffer.byteLength(value, 'utf8') > MAX_SUBMITTED_MANIFEST_BYTES) {
+    throw new SubmittedAssetValidationError(`${label} exceeds the persistence safety limit.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new SubmittedAssetValidationError(`${label} is not valid JSON.`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new SubmittedAssetValidationError(`${label} must contain a JSON array.`);
+  }
   return parsed;
+}
+
+function requestFromJson(value: string, label: string): GenerationRequest {
+  return GenerationRequestSchema.parse(parseJsonDocument(value, label, MAX_PERSISTED_REQUEST_BYTES));
 }
 
 function mapJob(row: typeof jobs.$inferSelect): JobRecord {
   return {
     id: row.id,
-    request: GenerationRequestSchema.parse(JSON.parse(row.requestJson)),
+    request: requestFromJson(row.requestJson, `Job ${row.id} request`),
     providerRequestRedacted: parseJsonObject(
       row.providerRequestRedactedJson,
       `Job ${row.id} provider request`,
@@ -240,6 +273,7 @@ function statusUpdateValues(
   stage: string,
   fields: UpdateJobStatusFields,
   now: Date,
+  maxAssets = MAX_GENERATION_COUNT,
 ): JobUpdateSet {
   const changes: JobUpdateSet = {
     status,
@@ -256,6 +290,7 @@ function statusUpdateValues(
   if ('resultExpiresAt' in fields) changes.resultExpiresAt = fields.resultExpiresAt ?? null;
   if ('completedAt' in fields) changes.completedAt = fields.completedAt ?? null;
   if (fields.resultManifest !== undefined) {
+    assertDurableResultManifest(fields.resultManifest, maxAssets);
     changes.resultManifestJson = JSON.stringify(fields.resultManifest);
   }
   if (fields.stageRetryCounts !== undefined) {
@@ -411,7 +446,7 @@ export class JobRepository {
   }
 
   public listRecoverable(): readonly JobRecord[] {
-    const candidates = this.database
+    const rows = this.database
       .select()
       .from(jobs)
       .where(
@@ -421,12 +456,66 @@ export class JobRepository {
         ),
       )
       .orderBy(jobs.createdAt, jobs.id)
-      .all()
-      .map(mapJob);
+      .all();
+    const candidates: JobRecord[] = [];
+    for (const row of rows) {
+      try {
+        candidates.push(mapJob(row));
+      } catch (error) {
+        if (!(error instanceof SubmittedAssetValidationError)) throw error;
+        this.quarantineInvalidManifest(row.id, row.revision);
+      }
+    }
     return candidates.filter((job) => {
       if (job.status !== 'completed') return true;
       const outputs = this.listOutputs(job.id);
       return outputs.length === 0 || outputs.some((output) => output.assetId === null);
+    });
+  }
+
+  /** Isolate a corrupt durable output manifest so other jobs can recover. */
+  public quarantineInvalidManifest(id: string, expectedRevision: number): JobRecord | null {
+    return this.database.transaction((transaction) => {
+      const now = new Date();
+      const changed = transaction
+        .update(jobs)
+        .set({
+          status: 'rejected',
+          stage: 'rejected',
+          progress: null,
+          pollAfterAt: null,
+          resultManifestJson: '[]',
+          remoteDeadlineAt: null,
+          resultExpiresAt: null,
+          completedAt: null,
+          errorCode: 'provider_output_rejected',
+          errorMessage: 'The persisted provider output manifest was rejected.',
+          stageRetryCountsJson: '{}',
+          updatedAt: now,
+          revision: expectedRevision + 1,
+        })
+        .where(and(
+          eq(jobs.id, id),
+          eq(jobs.revision, expectedRevision),
+          inArray(jobs.status, [...ACTIVE_STATUSES, 'completed']),
+          isNull(jobs.deletedAt),
+        ))
+        .run();
+      if (changed.changes !== 1) return null;
+      transaction
+        .insert(changeEvents)
+        .values(
+          toChangeEventValues({
+            aggregateType: 'job',
+            aggregateId: id,
+            eventType: 'job.updated',
+            payload: { id, status: 'rejected', revision: expectedRevision + 1 },
+            createdAt: now,
+          }),
+        )
+        .run();
+      const row = transaction.select().from(jobs).where(eq(jobs.id, id)).get();
+      return row ? mapJob(row) : null;
     });
   }
 
@@ -555,6 +644,14 @@ export class JobRepository {
     if (expectedStatuses.length === 0) return null;
     return this.database.transaction((transaction) => {
       const now = new Date();
+      const current = transaction
+        .select({ requestJson: jobs.requestJson })
+        .from(jobs)
+        .where(eq(jobs.id, id))
+        .get();
+      const maxAssets = current === undefined
+        ? MAX_GENERATION_COUNT
+        : (requestFromJson(current.requestJson, `Job ${id} request`).count ?? 1);
       const conditions: SQL[] = [
         eq(jobs.id, id),
         eq(jobs.revision, expectedRevision),
@@ -566,7 +663,7 @@ export class JobRepository {
       }
       const changed = transaction
         .update(jobs)
-        .set(statusUpdateValues(status, stage, fields, now))
+        .set(statusUpdateValues(status, stage, fields, now, maxAssets))
         .where(and(...conditions))
         .run();
       if (changed.changes !== 1) return null;
@@ -725,7 +822,7 @@ export class JobRepository {
         .where(and(eq(jobs.id, id), inArray(jobs.status, TERMINAL_STATUSES), isNull(jobs.deletedAt)))
         .get();
       if (!source) return null;
-      const request = GenerationRequestSchema.parse(JSON.parse(source.requestJson));
+      const request = requestFromJson(source.requestJson, `Job ${source.id} request`);
       const retryId = randomUUID();
       const now = new Date();
       const inputs = transaction.select().from(jobInputs).where(eq(jobInputs.jobId, source.id)).all();
@@ -820,6 +917,7 @@ export class JobRepository {
         .where(eq(jobOutputs.jobId, jobId))
         .orderBy(jobOutputs.slot)
         .all();
+      assertDurableResultManifest(manifest);
       transaction
         .update(jobs)
         .set({
@@ -875,7 +973,7 @@ export class JobRepository {
         .get();
       if (!current) return null;
 
-      const request = GenerationRequestSchema.parse(JSON.parse(current.requestJson));
+      const request = requestFromJson(current.requestJson, `Job ${current.id} request`);
       const parentAssetId =
         request.operation === 'image.edit'
           ? (request.inputs.find((input) => input.role === 'source')?.assetId ?? null)
@@ -884,6 +982,14 @@ export class JobRepository {
         throw new JobRepositoryError(
           'source_input_required',
           'An image.edit output requires a source Asset parent.',
+        );
+      }
+
+      if (materializedAssets.length > MAX_GENERATION_COUNT ||
+        materializedAssets.length > (request.count ?? 1)) {
+        throw new JobRepositoryError(
+          'output_slot_mismatch',
+          `Job ${jobId} received more outputs than its request allows.`,
         );
       }
 
@@ -1004,6 +1110,7 @@ export class JobRepository {
       }
 
       const manifest = assetIds.map((assetId, slot) => ({ slot, assetId }));
+      assertDurableResultManifest(manifest);
       const completed = transaction
         .update(jobs)
         .set({

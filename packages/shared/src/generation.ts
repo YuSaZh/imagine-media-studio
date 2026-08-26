@@ -10,6 +10,9 @@ export const MediaOperationSchema = z.enum([
   'video.extend',
 ]);
 
+/** Central batch bound shared by HTTP validation, persistence, and runners. */
+export const MAX_GENERATION_COUNT = 32;
+
 export type MediaOperation = z.infer<typeof MediaOperationSchema>;
 
 export const AssetInputSchema = z.object({
@@ -30,7 +33,7 @@ export const GenerationRequestSchema = z.object({
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   resolution: z.string().optional(),
-  count: z.number().int().min(1).optional(),
+  count: z.number().int().min(1).max(MAX_GENERATION_COUNT).optional(),
   durationSeconds: z.number().positive().optional(),
   fps: z.number().positive().optional(),
   quality: z.string().optional(),

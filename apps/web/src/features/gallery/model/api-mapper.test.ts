@@ -1,7 +1,7 @@
 import type { AssetDto, JobDto } from '@imagine/shared';
 import { describe, expect, it } from 'vitest';
 
-import { mapInternalGallery } from './api-mapper.js';
+import { mapInternalGallery, VIDEO_PLACEHOLDER_PATH } from './api-mapper.js';
 import { storedInputAvailability } from '../../media-input/model/input-compatibility.js';
 import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
 
@@ -104,6 +104,26 @@ describe('mapInternalGallery', () => {
     });
   });
 
+  it('keeps valid dynamic ratios for persisted dimensions and rejects invalid declarations', () => {
+    const [dynamic] = mapInternalGallery([], [{
+      ...job,
+      id: 'job-dynamic-ratio',
+      request: { ...job.request, aspectRatio: '4:3' },
+      status: 'queued',
+      outputCount: 1,
+    }]);
+    expect(dynamic).toMatchObject({ aspectRatio: '4:3', width: 2048, height: 1536 });
+
+    const [inferred] = mapInternalGallery([], [{
+      ...job,
+      id: 'job-invalid-ratio',
+      request: { ...job.request, aspectRatio: 'NaN:1', height: 900, width: 1600 },
+      status: 'queued',
+      outputCount: 1,
+    }]);
+    expect(inferred).toMatchObject({ aspectRatio: '16:9', width: 1600, height: 900 });
+  });
+
   it('maps standalone uploads without inventing a Provider job', () => {
     const [item] = mapInternalGallery([], []).concat(
       mapInternalGallery([{ ...asset, id: 'upload-1', jobId: null, role: 'upload' }], []),
@@ -114,6 +134,27 @@ describe('mapInternalGallery', () => {
       jobId: 'upload-upload-1',
       providerId: 'local',
       status: 'completed',
+    });
+  });
+
+  it('keeps video content separate from poster fallback', () => {
+    const [item] = mapInternalGallery([{
+      ...asset,
+      contentUrl: '/internal/assets/video-1/content',
+      durationMs: 12_500,
+      id: 'video-1',
+      mimeType: 'video/mp4',
+      posterUrl: null,
+      thumbnailUrl: null,
+      type: 'video',
+    }], []);
+
+    expect(item).toMatchObject({
+      kind: 'video',
+      previewPath: VIDEO_PLACEHOLDER_PATH,
+      posterPath: VIDEO_PLACEHOLDER_PATH,
+      sourcePath: '/internal/assets/video-1/content',
+      durationSeconds: 13,
     });
   });
 

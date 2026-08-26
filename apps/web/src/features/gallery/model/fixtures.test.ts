@@ -62,7 +62,7 @@ describe('PR 1 gallery fixture', () => {
     }
 
     for (const video of PR1_MOCK_VIDEO_ITEMS) {
-      expect(video.sourcePath).toBeNull();
+      expect(video.sourcePath).toBe('/mock-media/study-motion.mp4');
       expect(video.posterPath).toBe(video.previewPath);
       expect([5, 10, 15]).toContain(video.durationSeconds);
     }

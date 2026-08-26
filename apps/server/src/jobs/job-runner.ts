@@ -41,6 +41,11 @@ import {
   nextStageRetryCounts,
   type StageRetryCounts,
 } from './retry-budget.js';
+import {
+  MAX_SUBMITTED_ASSETS,
+  SubmittedAssetValidationError,
+  validateSubmittedAssets,
+} from './submitted-asset-validator.js';
 
 type WorkKind = 'submit' | 'poll' | 'download' | 'process';
 type RetriableWorkKind = Exclude<WorkKind, 'submit'>;
@@ -100,6 +105,9 @@ function deterministicOutputError(error: unknown): ProviderError | null {
   }
   if (error instanceof ProviderResultInvalidError) {
     return runnerError('provider_result_invalid', error.message, 'rejected');
+  }
+  if (error instanceof SubmittedAssetValidationError) {
+    return runnerError('provider_output_rejected', error.message, 'rejected');
   }
   if (error instanceof RemoteHttpError) {
     if (
@@ -625,12 +633,15 @@ export class JobRunner {
         );
         return;
       }
+      const assets = validateSubmittedAssets(result.assets, {
+        maxAssets: Math.min(claimed.job.request.count ?? 1, MAX_SUBMITTED_ASSETS),
+      });
       const committed = await this.commitTransition(claimed.job, {
         expectedStatuses: ['submitting'],
         expectedRevision: claimed.job.revision,
         status: 'downloading',
         stage: 'materializing_results',
-        resultAssets: result.assets,
+        resultAssets: assets,
         ...(result.resultExpiresAt === undefined ? {} : { resultExpiresAt: result.resultExpiresAt }),
         pollAfterAt: null,
         error: null,
@@ -642,7 +653,7 @@ export class JobRunner {
       if (registration && await this.isOperationActive(jobId, ['submitting'], controller)) {
         const normalized = error instanceof ProviderInputLoaderError
           ? inputLoaderError(error)
-          : registration.adapter.normalizeError(error);
+          : deterministicOutputError(error) ?? registration.adapter.normalizeError(error);
         await this.handleSubmitError(claimed.job, registration, normalized);
       }
     } finally {
@@ -724,12 +735,15 @@ export class JobRunner {
           );
           return;
         }
+        const assets = validateSubmittedAssets(result.assets, {
+          maxAssets: Math.min(job.request.count ?? 1, MAX_SUBMITTED_ASSETS),
+        });
         const committed = await this.commitTransition(job, {
           expectedStatuses: ['remote_pending', 'remote_running'],
           expectedRevision: job.revision,
           status: 'downloading',
           stage: 'materializing_results',
-          resultAssets: result.assets,
+          resultAssets: assets,
           ...(resultExpiresAt === undefined ? {} : { resultExpiresAt }),
           pollAfterAt: null,
           error: null,
@@ -788,7 +802,10 @@ export class JobRunner {
         throw error;
       }
       if (await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
-        await this.handlePollError(job, registration.adapter.normalizeError(error));
+        await this.handlePollError(
+          job,
+          deterministicOutputError(error) ?? registration.adapter.normalizeError(error),
+        );
       }
     } finally {
       this.endOperation(jobId, controller);

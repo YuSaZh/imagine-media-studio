@@ -2,11 +2,17 @@ import type {
   AcquiredImage,
   AcquisitionRejection,
   MediaInputState,
+  ReferenceUploadRole,
   UploadEntry,
 } from './types.js';
 
 export type MediaInputAction =
-  | { acquired: readonly AcquiredImage[]; previewUrls: Readonly<Record<string, string>>; type: 'add' }
+  | {
+      acquired: readonly AcquiredImage[];
+      previewUrls: Readonly<Record<string, string>>;
+      role?: ReferenceUploadRole;
+      type: 'add';
+    }
   | {
       assetId: string;
       clientId: string;
@@ -44,7 +50,7 @@ export function mediaInputReducer(
             error: null,
             inputDescriptor: null,
             previewUrl: action.previewUrls[item.clientId] ?? '',
-            role: 'reference',
+            role: action.role ?? 'reference',
             status: 'queued',
           })),
         ],

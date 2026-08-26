@@ -12,6 +12,7 @@ export interface UploadControllerDependencies {
     file: File,
     signal: AbortSignal,
     inputDescriptor: ImageAssetInputDescriptor | null,
+    clientId: string,
   ) => Promise<{ assetId: string; inputDescriptor?: ImageAssetInputDescriptor | null }>;
 }
 
@@ -120,6 +121,7 @@ export class UploadController {
         prepared.file,
         signal,
         prepared.inputDescriptor,
+        clientId,
       );
       signal.throwIfAborted();
       task.status = 'ready';

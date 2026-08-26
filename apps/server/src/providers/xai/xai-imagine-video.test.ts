@@ -422,6 +422,7 @@ describe('XaiImagineVideoProvider', () => {
       [{ request_id: 'req_fixture_001', status: 'pending', progress: 101 }, 'invalid progress'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://user:pass@vidgen.x.ai/a.mp4', duration: 4, respect_moderation: true } }, 'unsafe result URL'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://vidgen.x.ai/a.mp4?signature=secret', duration: 4, respect_moderation: true } }, 'credential-like query'],
+      [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: `https://vidgen.x.ai/${'x'.repeat(4_100)}.mp4`, duration: 4, respect_moderation: true } }, 'invalid result URL'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'http://vidgen.x.ai/a.mp4', duration: 4, respect_moderation: true } }, 'unsafe result URL'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://vidgen.x.ai/a.mp4', duration: 16, respect_moderation: true } }, 'invalid video duration'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://vidgen.x.ai/a.mp4', duration: 4, respect_moderation: false } }, 'successful moderation'],

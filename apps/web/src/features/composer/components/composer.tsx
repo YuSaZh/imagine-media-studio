@@ -10,7 +10,7 @@ import {
 import * as Popover from '@radix-ui/react-popover';
 import { useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
-import { ArrowUp, Image as ImageIcon, Plus, Settings2, Video } from 'lucide-react';
+import { ArrowUp, Image as ImageIcon, Images, Plus, Settings2, Video } from 'lucide-react';
 
 import { IconButton } from '../../../components/icon-button';
 import { internalQueryKeys } from '../../../api/query-keys';
@@ -22,7 +22,7 @@ import {
   filesFromClipboard,
   filesFromDataTransfer,
 } from '../../media-input/model/acquisition';
-import type { AcquisitionRejection } from '../../media-input/model/types';
+import type { AcquisitionRejection, ReferenceUploadRole } from '../../media-input/model/types';
 import {
   hasExclusiveVideoInputConflict,
   descriptorsExceedingTotalBytes,
@@ -34,10 +34,36 @@ import {
   useInputAssetInventoryQuery,
   useModelsQuery,
 } from '../../gallery/api/gallery-query';
-import type { FixtureAspectRatio } from '../../gallery/model/types';
+import type { FixtureAspectRatio, FixtureModel } from '../../gallery/model/types';
 
 interface ComposerProps {
   isOnline: boolean;
+}
+
+type VideoInputMode = 'text' | 'first_frame' | 'references';
+
+const VIDEO_INPUT_MODE_LABELS: Readonly<Record<VideoInputMode, string>> = {
+  text: 'Text',
+  first_frame: 'First frame',
+  references: 'References',
+};
+
+export function uploadRoleForMode(
+  composerMode: 'image' | 'video',
+  videoInputMode: VideoInputMode,
+): ReferenceUploadRole {
+  return composerMode === 'video' && videoInputMode === 'first_frame'
+    ? 'first_frame'
+    : 'reference';
+}
+
+export function supportedVideoInputModes(model: FixtureModel | undefined): readonly VideoInputMode[] {
+  if (!model || model.mediaKind !== 'video') return [];
+  const modes: VideoInputMode[] = [];
+  if (model.capabilities.operations.includes('video.generate')) modes.push('text');
+  if (model.capabilities.operations.includes('video.image_to_video')) modes.push('first_frame');
+  if (model.capabilities.operations.includes('video.reference_to_video')) modes.push('references');
+  return modes;
 }
 
 export function Composer({ isOnline }: ComposerProps) {
@@ -45,7 +71,9 @@ export function Composer({ isOnline }: ComposerProps) {
   const [count, setCount] = useState(1);
   const [aspectRatio, setAspectRatio] = useState<FixtureAspectRatio>('2:3');
   const [duration, setDuration] = useState(5);
+  const [resolution, setResolution] = useState('');
   const [modelId, setModelId] = useState('studio-image-v1');
+  const [videoInputMode, setVideoInputMode] = useState<VideoInputMode>('text');
   const [dragActive, setDragActive] = useState(false);
   const dragDepthRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -68,12 +96,15 @@ export function Composer({ isOnline }: ComposerProps) {
   const selectedModel =
     models.find((model) => model.id === modelId && model.mediaKind === composerMode) ??
     models.find((model) => model.mediaKind === composerMode);
+  const videoInputModes = supportedVideoInputModes(selectedModel);
+  const uploadRole = uploadRoleForMode(composerMode, videoInputMode);
   const selectedInputPolicy =
     selectedModel?.capabilities.inputImagePolicy ?? DEFAULT_IMAGE_INPUT_POLICY;
   const uploads = useReferenceUploads({
     fixtureMode: visualFixtures,
-    onReady: (_clientId, assetId) => {
-      addComposerInput({ assetId, role: 'reference' });
+    role: uploadRole,
+    onReady: (_clientId, assetId, role) => {
+      addComposerInput({ assetId, role });
       if (!visualFixtures) {
         void Promise.all([
           queryClient.invalidateQueries({ queryKey: internalQueryKeys.assets }),
@@ -81,7 +112,9 @@ export function Composer({ isOnline }: ComposerProps) {
         ]);
       }
     },
-    onRemoveReady: (assetId) => removeComposerInput({ assetId, role: 'reference' }),
+    onRemoveReady: (assetId, role) => {
+      removeComposerInput({ assetId, role });
+    },
     preprocessPolicy: selectedInputPolicy,
     preserveReadyOnDispose: !visualFixtures,
   });
@@ -91,19 +124,22 @@ export function Composer({ isOnline }: ComposerProps) {
   );
   const aspectOptions = selectedModel?.capabilities.aspectRatios ?? ['2:3'];
   const durationOptions = selectedModel?.capabilities.durations ?? [];
+  const durationRange = selectedModel?.capabilities.durationRange;
+  const resolutionOptions = selectedModel?.capabilities.resolutions ?? [];
   const maxReferenceImages = selectedModel?.capabilities.maxReferenceImages ?? 0;
   const readyLocalAssetIds = new Set(
     uploads.state.entries.flatMap((entry) => entry.assetId === null ? [] : [entry.assetId]),
   );
-  const referenceOrder = [
+  const inputOrder = [
     ...composerInputs
-      .filter((input) => input.role === 'reference')
+      .filter((input) => input.role === uploadRole)
       .map((input) => `asset:${input.assetId}`),
     ...uploads.state.entries
       .filter((entry) => entry.assetId === null)
       .map((entry) => `client:${entry.clientId}`),
   ];
-  const incompatibleReferenceKeys = new Set(referenceOrder.slice(maxReferenceImages));
+  const maxUploadCount = uploadRole === 'first_frame' ? 1 : maxReferenceImages;
+  const incompatibleInputKeys = new Set(inputOrder.slice(maxUploadCount));
   const hasSource = composerInputs.some((input) => input.role === 'source');
   const hasVideoInputConflict = hasExclusiveVideoInputConflict(
     composerMode,
@@ -112,12 +148,14 @@ export function Composer({ isOnline }: ComposerProps) {
   );
   const operationSupportsReferences = composerMode === 'image'
     ? selectedModel?.capabilities.operations.includes(hasSource ? 'image.edit' : 'image.generate') === true
-    : selectedModel?.capabilities.operations.includes('video.reference_to_video') === true;
+    : uploadRole === 'first_frame'
+      ? selectedModel?.capabilities.operations.includes('video.image_to_video') === true
+      : selectedModel?.capabilities.operations.includes('video.reference_to_video') === true;
   const inputRoleIsIncompatible = (assetId: string, role: typeof composerInputs[number]['role']) => {
     if (role === 'reference') {
       return hasVideoInputConflict ||
         !operationSupportsReferences ||
-        incompatibleReferenceKeys.has(`asset:${assetId}`);
+        incompatibleInputKeys.has(`asset:${assetId}`);
     }
     if (role === 'source') {
       return composerMode !== 'image' || selectedModel?.capabilities.operations.includes('image.edit') !== true;
@@ -174,9 +212,10 @@ export function Composer({ isOnline }: ComposerProps) {
   );
   const incompatibleLocalEntries = uploads.state.entries.filter((entry) =>
     entry.assetId === null && (
-      incompatibleReferenceKeys.has(`client:${entry.clientId}`) ||
+      incompatibleInputKeys.has(`client:${entry.clientId}`) ||
       !operationSupportsReferences ||
-      hasVideoInputConflict
+      hasVideoInputConflict ||
+      (composerMode === 'video' && videoInputMode === 'text')
     ),
   );
   const unresolvedUploads = uploads.state.entries.filter((entry) => entry.status !== 'ready');
@@ -230,15 +269,16 @@ export function Composer({ isOnline }: ComposerProps) {
     preliminaryRejections: readonly AcquisitionRejection[] = [],
   ) => {
     uploads.addFiles(files, {
-      existingCount: referenceOrder.length,
+      existingCount: inputOrder.length,
       existingTotalBytes: initialStoredInputChecks.reduce(
         (total, check) => readyLocalAssetIds.has(check.input.assetId)
           ? total
           : total + (check.inputDescriptor?.fileSize ?? 0),
         0,
       ),
-      maxItems: operationSupportsReferences && !hasVideoInputConflict
-        ? maxReferenceImages
+      maxItems: operationSupportsReferences && !hasVideoInputConflict &&
+        !(composerMode === 'video' && videoInputMode === 'text')
+        ? maxUploadCount
         : 0,
       preliminaryRejections,
     });
@@ -249,28 +289,66 @@ export function Composer({ isOnline }: ComposerProps) {
     event.target.value = '';
   };
 
+  const clearVideoInputs = () => {
+    for (const input of composerInputs) {
+      if (input.role === 'reference' || input.role === 'first_frame') {
+        removeComposerInput(input);
+      }
+    }
+    for (const entry of uploads.state.entries) uploads.remove(entry.clientId);
+  };
+
+  const selectVideoInputMode = (nextMode: VideoInputMode) => {
+    if (nextMode === videoInputMode) return;
+    clearVideoInputs();
+    setVideoInputMode(nextMode);
+  };
+
   const selectModel = useCallback((nextModelId: string) => {
     const nextModel = models.find((model) => model.id === nextModelId);
     if (!nextModel) return;
-    const supportedDurations: readonly number[] = nextModel.capabilities.durations;
     setModelId(nextModel.id);
-    setCount((current) => Math.min(current, nextModel.capabilities.maxBatchCount));
+    setCount((current) => nextModel.capabilities.supportsBatchCount
+      ? Math.min(current, nextModel.capabilities.maxBatchCount)
+      : 1);
     setAspectRatio((current) =>
       nextModel.capabilities.aspectRatios.includes(current)
         ? current
         : (nextModel.capabilities.aspectRatios[0] ?? '2:3'),
     );
-    setDuration((current) =>
-      supportedDurations.includes(current)
+    setResolution((current) => nextModel.capabilities.resolutions.includes(current)
+      ? current
+      : (nextModel.capabilities.resolutions[0] ?? ''));
+    setDuration((current) => {
+      if (nextModel.capabilities.durationRange) {
+        const { min, max, step } = nextModel.capabilities.durationRange;
+        const snapped = min + Math.round((current - min) / step) * step;
+        return Math.min(max, Math.max(min, snapped));
+      }
+      return nextModel.capabilities.durations.includes(current)
         ? current
-        : (supportedDurations[0] ?? 5),
-    );
+        : (nextModel.capabilities.durations[0] ?? current);
+    });
+    const nextModes = supportedVideoInputModes(nextModel);
+    setVideoInputMode((current) => nextModes.includes(current) ? current : (nextModes[0] ?? 'text'));
   }, [models]);
 
   useEffect(() => {
     const modeModel = models.find((model) => model.mediaKind === composerMode);
     if (modeModel && modeModel.id !== modelId) selectModel(modeModel.id);
   }, [composerMode, modelId, models, selectModel]);
+
+  useEffect(() => {
+    if (composerMode !== 'video') return;
+    const inferred: VideoInputMode = composerInputs.some((input) => input.role === 'first_frame')
+      ? 'first_frame'
+      : composerInputs.some((input) => input.role === 'reference')
+        ? 'references'
+        : videoInputMode;
+    setVideoInputMode((current) =>
+      videoInputModes.includes(inferred) ? inferred : (videoInputModes[0] ?? current),
+    );
+  }, [composerInputs, composerMode, videoInputModes, videoInputMode]);
 
   useEffect(() => {
     uploads.clearRejections();
@@ -281,6 +359,7 @@ export function Composer({ isOnline }: ComposerProps) {
     const nextModel = models.find((model) => model.mediaKind === mode);
     if (nextModel) selectModel(nextModel.id);
     if (mode === 'video') setCount(1);
+    if (mode === 'image') setVideoInputMode('text');
   };
 
   const submit = () => {
@@ -293,7 +372,10 @@ export function Composer({ isOnline }: ComposerProps) {
         providerId: selectedModel.providerId,
         count,
         aspectRatio,
-        durationSeconds: composerMode === 'video' ? duration : null,
+        resolution: resolution || null,
+        durationSeconds: composerMode === 'video' && (durationOptions.length > 0 || durationRange)
+          ? duration
+          : null,
         referenceCount: totalReferenceCount,
         inputAssets: composerInputs,
       },
@@ -355,8 +437,9 @@ export function Composer({ isOnline }: ComposerProps) {
         ? storedCheck.availability !== 'ready'
         : hasVideoInputConflict ||
           !operationSupportsReferences ||
-          incompatibleReferenceKeys.has(`client:${entry.clientId}`),
-      role: 'reference',
+          incompatibleInputKeys.has(`client:${entry.clientId}`) ||
+          (composerMode === 'video' && videoInputMode === 'text'),
+      role: entry.role,
       src: entry.previewUrl,
       status: entry.status,
     };
@@ -417,15 +500,15 @@ export function Composer({ isOnline }: ComposerProps) {
       onDrop={handleDrop}
       ref={composerRef}
     >
-      {dragActive && <div className="drop-overlay">Drop images to add references</div>}
+      {dragActive && <div className="drop-overlay">Drop images to add inputs</div>}
       <ReferenceStrip items={stripItems} onRemove={removeStripItem} onRetry={retryStripItem} />
       {(rejectionMessage || submissionError || unresolvedUploads.length > 0 || invalidStoredInputs.length > 0 || incompatibleLocalEntries.length > 0) && (
         <p className="composer-input-status" role={rejectionMessage || submissionError ? 'alert' : 'status'}>
           {rejectionMessage ?? submissionError ??
             (unresolvedUploads.some((entry) => entry.status === 'error')
-              ? 'Remove or retry failed reference uploads before submitting.'
+              ? 'Remove or retry failed image inputs before submitting.'
               : unresolvedUploads.length > 0
-                ? 'Reference images are being prepared and uploaded.'
+                ? 'Image inputs are being prepared and uploaded.'
                 : invalidStoredInputs.some((check) => check.availability === 'checking')
                   ? 'Checking saved image inputs.'
                   : invalidStoredInputs.some((check) => check.availability === 'missing')
@@ -452,7 +535,7 @@ export function Composer({ isOnline }: ComposerProps) {
       <div className="composer-toolbar">
         <input
           accept="image/*"
-          aria-label="Reference image files"
+          aria-label={uploadRole === 'first_frame' ? 'First frame image file' : 'Reference image files'}
           className="sr-only"
           multiple
           onChange={handleFileChange}
@@ -462,12 +545,13 @@ export function Composer({ isOnline }: ComposerProps) {
         />
         <IconButton
           disabled={
-            referenceOrder.length >= maxReferenceImages ||
+            inputOrder.length >= maxUploadCount ||
             !operationSupportsReferences ||
-            hasVideoInputConflict
+            hasVideoInputConflict ||
+            (composerMode === 'video' && videoInputMode === 'text')
           }
           icon={<Plus size={20} />}
-          label="Add reference image"
+          label={uploadRole === 'first_frame' ? 'Add first frame' : 'Add reference image'}
           onClick={() => fileInputRef.current?.click()}
         />
         <div className="segmented-control" aria-label="Generation mode" role="group">
@@ -486,6 +570,21 @@ export function Composer({ isOnline }: ComposerProps) {
             <Video size={15} />Video
           </button>
         </div>
+        {composerMode === 'video' && videoInputModes.length > 1 && (
+          <div className="segmented-control composer-video-input-mode" aria-label="Video input mode" role="group">
+            {videoInputModes.map((mode) => (
+              <button
+                aria-pressed={videoInputMode === mode}
+                key={mode}
+                onClick={() => selectVideoInputMode(mode)}
+                type="button"
+              >
+                {mode === 'text' ? <Video aria-hidden="true" size={15} /> : mode === 'first_frame' ? <ImageIcon aria-hidden="true" size={15} /> : <Images aria-hidden="true" size={15} />}
+                {VIDEO_INPUT_MODE_LABELS[mode]}
+              </button>
+            ))}
+          </div>
+        )}
         <select
           aria-label="Result count"
           className="composer-select"
@@ -546,14 +645,40 @@ export function Composer({ isOnline }: ComposerProps) {
                   {aspectOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
-              {composerMode === 'video' && (
+              {resolutionOptions.length > 0 && (
                 <label>
-                  <span>Duration</span>
-                  <select onChange={(event) => setDuration(Number(event.target.value))} value={duration}>
-                    {durationOptions.map((option) => (
-                      <option key={option} value={option}>{option} seconds</option>
+                  <span>Resolution</span>
+                  <select
+                    aria-label="Resolution"
+                    onChange={(event) => setResolution(event.target.value)}
+                    value={resolution}
+                  >
+                    {resolutionOptions.map((option) => (
+                      <option key={option} value={option}>{option}</option>
                     ))}
                   </select>
+                </label>
+              )}
+              {composerMode === 'video' && (durationOptions.length > 0 || durationRange) && (
+                <label>
+                  <span>Duration</span>
+                  {durationOptions.length > 0 ? (
+                    <select aria-label="Duration" onChange={(event) => setDuration(Number(event.target.value))} value={duration}>
+                      {durationOptions.map((option) => (
+                        <option key={option} value={option}>{option} seconds</option>
+                      ))}
+                    </select>
+                  ) : durationRange ? (
+                    <input
+                      aria-label="Duration"
+                      max={durationRange.max}
+                      min={durationRange.min}
+                      onChange={(event) => setDuration(Number(event.target.value))}
+                      step={durationRange.step}
+                      type="number"
+                      value={duration}
+                    />
+                  ) : null}
                 </label>
               )}
               <Popover.Arrow className="popover-arrow" />

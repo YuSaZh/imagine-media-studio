@@ -1,22 +1,23 @@
 import { internalClient } from '../../../api/internal-client.js';
-import type { ImageAssetInputDescriptor } from '../model/types.js';
+import type { ImageAssetInputDescriptor, ReferenceUploadRole } from '../model/types.js';
 
 export async function uploadReferenceImage(
   file: File,
   signal: AbortSignal,
   fixtureMode: boolean,
   preparedDescriptor: ImageAssetInputDescriptor | null = null,
+  role: ReferenceUploadRole = 'reference',
 ): Promise<{ assetId: string; inputDescriptor: ImageAssetInputDescriptor | null }> {
   signal.throwIfAborted();
   if (fixtureMode) {
     await Promise.resolve();
     signal.throwIfAborted();
     return {
-      assetId: `fixture-reference-${globalThis.crypto.randomUUID()}`,
+      assetId: `fixture-${role}-${globalThis.crypto.randomUUID()}`,
       inputDescriptor: preparedDescriptor,
     };
   }
-  const response = await internalClient.uploadAsset(file, { role: 'reference' }, { signal });
+  const response = await internalClient.uploadAsset(file, { role }, { signal });
   return {
     assetId: response.asset.id,
     inputDescriptor: response.asset.type === 'image' &&

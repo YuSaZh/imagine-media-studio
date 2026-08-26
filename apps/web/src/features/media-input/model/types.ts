@@ -1,6 +1,7 @@
 import type { AssetInput } from '@imagine/shared';
 
 export type ComposerInputRole = AssetInput['role'];
+export type ReferenceUploadRole = Extract<AssetInput['role'], 'reference' | 'first_frame'>;
 export type UploadStatus = 'error' | 'preprocessing' | 'queued' | 'ready' | 'uploading';
 
 export interface AcquiredImage {
@@ -38,7 +39,7 @@ export interface UploadEntry extends AcquiredImage {
   error: string | null;
   inputDescriptor: ImageAssetInputDescriptor | null;
   previewUrl: string;
-  role: 'reference';
+  role: ReferenceUploadRole;
   status: UploadStatus;
 }
 

@@ -45,4 +45,14 @@ describe('GenerationRequestSchema', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects a generation count above the central persistence cap', () => {
+    expect(() => GenerationRequestSchema.parse({
+      operation: 'image.generate',
+      providerId: 'mock',
+      modelId: 'mock-image-v1',
+      prompt: 'Too many outputs',
+      count: 33,
+    })).toThrow();
+  });
 });

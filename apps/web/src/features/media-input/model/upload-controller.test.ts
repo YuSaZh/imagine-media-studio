@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { fileFingerprint } from './acquisition.js';
 import { UploadController } from './upload-controller.js';
-import type { AcquiredImage } from './types.js';
+import type { AcquiredImage, ImageAssetInputDescriptor } from './types.js';
 
 function input(index: number): AcquiredImage {
   const file = new File([`image-${index}`], `${index}.png`, { type: 'image/png' });
@@ -15,7 +15,14 @@ describe('UploadController', () => {
     let maximum = 0;
     const releases: Array<() => void> = [];
     const transitions: string[] = [];
-    const upload = vi.fn(async () => {
+    const uploadedClientIds: string[] = [];
+    const upload = vi.fn(async (
+      _file: File,
+      _signal: AbortSignal,
+      _inputDescriptor: ImageAssetInputDescriptor | null,
+      clientId: string,
+    ) => {
+      uploadedClientIds.push(clientId);
       active += 1;
       maximum = Math.max(maximum, active);
       await new Promise<void>((resolve) => releases.push(resolve));
@@ -34,6 +41,7 @@ describe('UploadController', () => {
     releases.splice(0).forEach((release) => release());
     await vi.waitFor(() => expect(transitions.filter((item) => item === 'ready')).toHaveLength(3));
     expect(maximum).toBe(2);
+    expect(uploadedClientIds).toEqual(['client-1', 'client-2', 'client-3']);
   });
 
   it('aborts removal and supports retry after an error', async () => {

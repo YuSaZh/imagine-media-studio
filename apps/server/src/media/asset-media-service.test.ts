@@ -21,7 +21,12 @@ import type {
   NewAssetMediaRecord,
 } from './types.js';
 import { VideoProcessor } from './video-processor.js';
+import type { CommandRunner } from './video-processor.js';
 import { stageBuffer } from '../storage/atomic-file.js';
+import {
+  MOCK_VIDEO_MP4_BASE64,
+  MOCK_VIDEO_MP4_SHA256,
+} from '../providers/mock-provider.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -445,6 +450,77 @@ describe('AssetMediaService', () => {
     expect(first.filePath).toMatch(/^media\/originals\/job-[a-f0-9]{64}-slot-0000\.png$/);
     expect(repository.records).toEqual([]);
     expect(await resumed.validateProviderOutputs('recoverable-job', [first])).toBe(true);
+  });
+
+  it('materializes the fixed Mock MP4 with metadata, poster, and a reusable manifest', async () => {
+    const { paths, repository } = await fixture();
+    const posterBytes = await sharp({
+      create: { background: '#000000', channels: 3, height: 1, width: 1 },
+    }).jpeg().toBuffer();
+    const runner: CommandRunner = {
+      run: async (command, args) => {
+        if (command === 'fixture-ffprobe') {
+          return {
+            stderr: '',
+            stdout: JSON.stringify({
+              format: { duration: '1', format_name: 'mov,mp4' },
+              streams: [{ codec_name: 'h264', codec_type: 'video', height: 90, width: 160 }],
+            }),
+          };
+        }
+        const outputPath = args.at(-1);
+        if (outputPath === undefined) throw new Error('Missing poster output path.');
+        await writeFile(outputPath, posterBytes);
+        return { stderr: '', stdout: '' };
+      },
+    };
+    const service = new AssetMediaService({
+      imageProcessor: new SharpImageProcessor({ thumbnailSize: 32 }),
+      maxBytes: 1024 * 1024,
+      paths,
+      repository,
+      videoProcessor: new VideoProcessor({
+        ffmpegCommand: 'fixture-ffmpeg',
+        ffprobeCommand: 'fixture-ffprobe',
+        runner,
+      }),
+    });
+
+    const record = await service.materializeProviderBase64({
+      base64: MOCK_VIDEO_MP4_BASE64,
+      claimedMimeType: 'video/mp4',
+      expectedKind: 'video',
+      jobId: 'mock-video-materialize',
+      outputSlot: 0,
+      resultId: 'mock-video-success-test',
+    });
+
+    expect(record).toMatchObject({
+      durationMs: 1_000,
+      fileSize: 1_525,
+      height: 90,
+      mimeType: 'video/mp4',
+      posterPath: expect.stringMatching(/^media\/posters\/job-[a-f0-9]{64}-slot-0000\.jpg$/),
+      sha256: MOCK_VIDEO_MP4_SHA256,
+      type: 'video',
+      width: 160,
+    });
+    expect(await readFile(join(paths.root, record.filePath))).toEqual(
+      Buffer.from(MOCK_VIDEO_MP4_BASE64, 'base64'),
+    );
+    expect((await stat(join(paths.root, record.posterPath!))).size).toBeGreaterThan(0);
+    expect(repository.records).toEqual([]);
+    await expect(service.validateProviderOutputs('mock-video-materialize', [record])).resolves.toBe(true);
+    const manifestDirectory = join(
+      paths.temporary,
+      'provider-results',
+      createHash('sha256').update('imagine-provider-output-v1\0mock-video-materialize').digest('hex'),
+    );
+    const manifest = await readFile(join(manifestDirectory, 'slot-0000.json'), 'utf8');
+    expect(manifest).toContain('video/mp4');
+    expect(manifest).not.toContain('provider.invalid');
+    expect(manifest).not.toContain('Bearer');
+    expect(manifest).not.toContain('secret');
   });
 
   it('repairs a hash-mismatched Provider output and removes provisional files on discard', async () => {

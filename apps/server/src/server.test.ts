@@ -5,9 +5,14 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockGenerationRequest } from '@imagine/testkit';
+import sharp from 'sharp';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AppConfig } from './config.js';
+import {
+  MOCK_VIDEO_MP4_BASE64,
+  MOCK_VIDEO_MP4_SHA256,
+} from './providers/mock-provider.js';
 import { MOCK_PROVIDER_ID } from './providers/provider-registry.js';
 import type { ProviderHttpExecutor } from './providers/provider-http-client.js';
 import { createServer, type ImagineServer } from './server.js';
@@ -345,6 +350,75 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(partial.rawPayload).toEqual(VALID_PNG.subarray(0, 8));
     expect(partial.headers['content-range']).toBe(`bytes 0-7/${VALID_PNG.byteLength}`);
 
+    const videoBytes = Buffer.from(MOCK_VIDEO_MP4_BASE64, 'base64');
+    const video = server.assets.create({
+      durationMs: 1_000,
+      filePath: 'media/originals/mock-video.mp4',
+      fileSize: videoBytes.byteLength,
+      height: 90,
+      mimeType: 'video/mp4',
+      posterPath: 'media/posters/mock-video.jpg',
+      role: 'output',
+      sha256: MOCK_VIDEO_MP4_SHA256,
+      type: 'video',
+      width: 160,
+    });
+    const dataDir = temporaryDirectories.at(-1)!;
+    await mkdir(resolve(dataDir, 'media/originals'), { recursive: true });
+    await mkdir(resolve(dataDir, 'media/posters'), { recursive: true });
+    const posterBytes = await sharp({
+      create: { background: '#000000', channels: 3, height: 1, width: 1 },
+    }).jpeg().toBuffer();
+    await writeFile(resolve(dataDir, video.filePath), videoBytes);
+    await writeFile(resolve(dataDir, video.posterPath!), posterBytes);
+
+    const videoDto = await server.app.inject({
+      method: 'GET',
+      url: '/internal/assets/' + video.id,
+    });
+    expect(videoDto.json<{ asset: { type: string; posterUrl: string | null } }>().asset).toMatchObject({
+      type: 'video',
+      posterUrl: '/internal/assets/' + video.id + '/poster',
+    });
+    const videoContentUrl = '/internal/assets/' + video.id + '/content';
+    const videoHead = await server.app.inject({ method: 'HEAD', url: videoContentUrl });
+    expect(videoHead.statusCode).toBe(200);
+    expect(videoHead.headers['content-type']).toContain('video/mp4');
+    expect(videoHead.headers['content-length']).toBe(String(videoBytes.byteLength));
+    expect(videoHead.body).toBe('');
+    const videoFull = await server.app.inject({ method: 'GET', url: videoContentUrl });
+    expect(videoFull.statusCode).toBe(200);
+    expect(videoFull.rawPayload).toEqual(videoBytes);
+    const videoPartial = await server.app.inject({
+      method: 'GET',
+      url: videoContentUrl,
+      headers: { range: 'bytes=0-7', 'if-range': videoHead.headers.etag },
+    });
+    expect(videoPartial.statusCode).toBe(206);
+    expect(videoPartial.rawPayload).toEqual(videoBytes.subarray(0, 8));
+    expect(videoPartial.headers['content-range']).toBe('bytes 0-7/' + videoBytes.byteLength);
+    const staleRange = await server.app.inject({
+      method: 'GET',
+      url: videoContentUrl,
+      headers: { range: 'bytes=0-7', 'if-range': '"stale"' },
+    });
+    expect(staleRange.statusCode).toBe(200);
+    expect(staleRange.rawPayload).toEqual(videoBytes);
+    const unsatisfiable = await server.app.inject({
+      method: 'GET',
+      url: videoContentUrl,
+      headers: { range: 'bytes=' + videoBytes.byteLength + '-' },
+    });
+    expect(unsatisfiable.statusCode).toBe(416);
+    expect(unsatisfiable.headers['content-range']).toBe('bytes */' + videoBytes.byteLength);
+    const poster = await server.app.inject({
+      method: 'GET',
+      url: '/internal/assets/' + video.id + '/poster',
+    });
+    expect(poster.statusCode).toBe(200);
+    expect(poster.headers['content-type']).toContain('image/jpeg');
+    expect(poster.rawPayload).toEqual(posterBytes);
+
     const favorite = await server.app.inject({
       method: 'PATCH',
       url: `/internal/assets/${asset.id}`,
@@ -447,9 +521,12 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(mock).toMatchObject({ id: 'mock', type: 'mock', hasApiKey: false });
     expect(JSON.stringify(mock)).not.toContain('Ciphertext');
     const models = await server.app.inject({ method: 'GET', url: '/internal/models' });
-    expect(models.json<{ items: Array<{ modelId: string }> }>().items).toEqual([
-      expect.objectContaining({ modelId: 'mock-image-v1' }),
-    ]);
+    expect(models.json<{ items: Array<{ modelId: string }> }>().items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelId: 'mock-image-v1' }),
+        expect.objectContaining({ modelId: 'mock-video-v1' }),
+      ]),
+    );
     const connection = await server.app.inject({
       method: 'POST',
       url: '/internal/providers/mock/test',

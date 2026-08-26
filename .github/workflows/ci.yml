@@ -32,7 +32,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: Playwright PR 1, PR 3 and PR 4 settings
+    name: Playwright PR 1, PR 3, PR 4 settings and PR 5 video/PWA
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -59,6 +59,12 @@ jobs:
           name: pr3-ui-screenshots
           path: artifacts/visual/pr3
           retention-days: 7
+      - if: always() && hashFiles('artifacts/visual/pr5/*.png') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr5-video-pwa-screenshots
+          path: artifacts/visual/pr5
+          retention-days: 7
       - if: failure() && hashFiles('playwright-report/**') != ''
         uses: actions/upload-artifact@v6
         with:
@@ -67,11 +73,14 @@ jobs:
           retention-days: 7
 
   docker-smoke:
-    name: Single-container PR 3 API and persistence smoke
+    name: Single-container PR 3 and PR 5 API, video and persistence smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
       - name: Prepare isolated runtime directory
         run: |
           runtime_dir=$(mktemp -d "$RUNNER_TEMP/imagine-media.XXXXXXXX")

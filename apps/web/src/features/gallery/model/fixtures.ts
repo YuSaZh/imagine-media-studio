@@ -186,7 +186,7 @@ export const PR1_MOCK_PROVIDER = {
       displayName: 'Studio Motion',
       mediaKind: 'video',
       capabilities: {
-        operations: ['video.generate', 'video.image_to_video'],
+        operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
         aspectRatios: ['2:3', '3:2', '1:1', '9:16', '16:9'],
         resolutions: ['720p', '1080p'],
         durations: [5, 10, 15],
@@ -324,7 +324,7 @@ export const PR1_MOCK_VIDEO_ITEMS: readonly FixtureVideoItem[] = Array.from(
       previewPath: study.path,
       inputDescriptor: null,
       persistedAsset: true,
-      sourcePath: null,
+      sourcePath: '/mock-media/study-motion.mp4',
       posterPath: study.path,
       durationSeconds: [5, 10, 15][index % 3] ?? 5,
     };

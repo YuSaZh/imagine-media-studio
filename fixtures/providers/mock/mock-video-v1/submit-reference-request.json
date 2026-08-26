@@ -1,0 +1,14 @@
+{
+  "operation": "video.reference_to_video",
+  "providerId": "mock",
+  "modelId": "mock-video-v1",
+  "prompt": "Use the fixed references",
+  "inputs": [
+    { "assetId": "asset-reference-1", "role": "reference" },
+    { "assetId": "asset-reference-2", "role": "reference" }
+  ],
+  "aspectRatio": "16:9",
+  "resolution": "720p",
+  "durationSeconds": 5,
+  "count": 1
+}

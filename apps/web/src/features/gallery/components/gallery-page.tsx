@@ -28,6 +28,15 @@ const FILTERS: Array<{ id: GalleryFilter; label: string }> = [
   { id: 'favorites', label: 'Saved' },
 ];
 
+export function mediaDownloadTarget(item: FixtureGalleryItem): { href: string; filename: string } | null {
+  const href = item.kind === 'video' ? item.sourcePath : item.previewPath;
+  if (!href) return null;
+  return {
+    filename: `${item.id}-${item.kind}.${item.kind === 'video' ? 'mp4' : 'png'}`,
+    href,
+  };
+}
+
 function matchesFilter(item: FixtureGalleryItem, filter: GalleryFilter): boolean {
   if (filter === 'image' || filter === 'video') return item.kind === filter;
   if (filter === 'in-progress') return ACTIVE_STATUSES.has(item.status);
@@ -55,9 +64,11 @@ export function GalleryPage() {
 
   const downloadSelected = () => {
     for (const item of selectedItems) {
+      const target = mediaDownloadTarget(item);
+      if (!target) continue;
       const anchor = document.createElement('a');
-      anchor.download = `${item.id}-preview.png`;
-      anchor.href = item.previewPath;
+      anchor.download = target.filename;
+      anchor.href = target.href;
       anchor.click();
     }
   };

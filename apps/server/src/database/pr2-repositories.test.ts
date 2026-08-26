@@ -14,6 +14,7 @@ import { JobRepository, JobRepositoryError } from './jobs.js';
 import { ModelRepository } from './models.js';
 import { ProviderRepository } from './providers.js';
 import { SettingsRepository } from './settings.js';
+import { SubmittedAssetValidationError } from '../jobs/submitted-asset-validator.js';
 
 const temporaryDirectories: string[] = [];
 const databases: DatabaseClient[] = [];
@@ -50,6 +51,36 @@ function assetInput(path: string) {
 }
 
 describe('PR 2 database repositories', () => {
+  it('caps persisted generation counts and rejects direct invalid result manifests', async () => {
+    const database = await createTestDatabase();
+    const jobs = new JobRepository(database.orm);
+
+    expect(() => jobs.create(createMockGenerationRequest({ count: 33 }))).toThrow();
+
+    const job = jobs.create(createMockGenerationRequest());
+    const claimed = jobs.claimQueued(job.id, job.revision);
+    if (!claimed) throw new Error('Expected the direct-manifest fixture job to be claimed.');
+    expect(() => jobs.compareAndSetStatus(
+      job.id,
+      claimed.revision,
+      ['submitting'],
+      'downloading',
+      'materializing_results',
+      {
+        resultManifest: [{
+          version: 1,
+          resultAssets: [{
+            type: 'image',
+            mimeType: 'image/png',
+            source: 'url',
+            url: 'https://cdn.example.invalid/result.png?token=must-not-persist',
+          }],
+        }],
+      },
+    )).toThrow(SubmittedAssetValidationError);
+    expect(jobs.get(job.id)).toMatchObject({ status: 'submitting', resultManifest: [] });
+  });
+
   it('stores typed settings and emits replayable ordered events', async () => {
     const database = await createTestDatabase();
     const settings = new SettingsRepository(database.orm);

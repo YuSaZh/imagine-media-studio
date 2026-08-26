@@ -1,0 +1,12 @@
+{
+  "state": "completed",
+  "assets": [
+    {
+      "type": "video",
+      "mimeType": "video/mp4",
+      "source": "base64",
+      "resultId": "<remote-job-id>",
+      "metadata": { "provider": "mock", "fixtureSha256": "4d240737eeba324e5b3efcdc82738ba9555386f6d383d9fa233c6fae1db47361" }
+    }
+  ]
+}

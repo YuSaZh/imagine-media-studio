@@ -42,7 +42,11 @@ export const PROVIDER_PROFILE_OPTIONS = [
   { value: 'openai-responses-image-v1', label: 'OpenAI Responses Image v1' },
   { value: 'gemini-interactions-image-v1', label: 'Gemini Interactions Image v1' },
   { value: 'gemini-generate-content-image-v1', label: 'Gemini Generate Content Image v1' },
+  { value: 'gemini-veo-operation-v1', label: 'Gemini Veo Operation v1' },
+  { value: 'gemini-omni-interactions-video-v1', label: 'Gemini Omni Interactions Video v1' },
   { value: 'xai-imagine-image-v1', label: 'xAI Imagine Image v1' },
+  { value: 'xai-imagine-video-v1', label: 'xAI Imagine Video v1' },
+  { value: 'openai-videos-v1-compatible', label: 'OpenAI-compatible Videos v1' },
 ] as const;
 
 type ProviderProfile = (typeof PROVIDER_PROFILE_OPTIONS)[number]['value'];
@@ -103,6 +107,9 @@ export function buildProviderWriteInput(form: ProviderFormState): ProviderWriteI
   if (!name) throw new Error('Provider name is required.');
   if (!type) throw new Error('Provider type is required.');
   const baseUrl = form.baseUrl.trim() || null;
+  if (type === 'openai-videos-v1-compatible' && baseUrl === null) {
+    throw new Error('OpenAI-compatible Videos requires a Base URL.');
+  }
   if (baseUrl !== null) {
     try {
       const parsed = new URL(baseUrl);
@@ -311,8 +318,13 @@ function ProviderEditor({
               This stored Provider profile is not available in PR4 and cannot be edited.
             </p>
           )}
+          {form.profile === 'openai-videos-v1-compatible' && !form.unsupportedType && (
+            <p className="provider-form-warning" role="status">
+              The OpenAI Videos API is scheduled to shut down on 2026-09-24. Use this profile only for compatible relays.
+            </p>
+          )}
           <label>
-            <span>Base URL</span>
+            <span>Base URL{form.profile === 'openai-videos-v1-compatible' ? ' (required)' : ''}</span>
             <input
               inputMode="url"
               onChange={(event) => update('baseUrl', event.target.value)}

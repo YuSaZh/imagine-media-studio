@@ -1,0 +1,11 @@
+{
+  "operation": "video.generate",
+  "providerId": "mock",
+  "modelId": "mock-video-v1",
+  "prompt": "A fixed mock video",
+  "inputs": [],
+  "aspectRatio": "16:9",
+  "resolution": "720p",
+  "durationSeconds": 1,
+  "count": 1
+}

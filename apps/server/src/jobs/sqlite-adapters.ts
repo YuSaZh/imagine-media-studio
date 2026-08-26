@@ -26,6 +26,14 @@ import type {
   RunnerJobPort,
 } from './ports.js';
 import type { StageRetryCounts } from './retry-budget.js';
+import {
+  MAX_SUBMITTED_ASSETS,
+  SubmittedAssetValidationError,
+  assertDurableResultManifest,
+  assertSubmittedManifestSize,
+  assertSubmittedMetadata,
+  validateSubmittedAssets,
+} from './submitted-asset-validator.js';
 
 interface DurableRunnerManifest {
   version: 1;
@@ -53,6 +61,10 @@ export interface SqliteJobRepositoryPort {
     expectedRevision: number,
   ): JobRecord | null | Promise<JobRecord | null>;
   recoverCancellation(
+    jobId: string,
+    expectedRevision: number,
+  ): JobRecord | null | Promise<JobRecord | null>;
+  quarantineInvalidManifest?(
     jobId: string,
     expectedRevision: number,
   ): JobRecord | null | Promise<JobRecord | null>;
@@ -92,57 +104,108 @@ function isMediaType(value: unknown): value is 'image' | 'video' {
   return value === 'image' || value === 'video';
 }
 
-function isSubmittedAsset(value: unknown): value is SubmittedAsset {
-  if (
-    !isRecord(value) ||
-    !isMediaType(value.type) ||
-    typeof value.mimeType !== 'string'
-  ) {
+function hasControlCharacters(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || code === 127;
+  });
+}
+
+function isOutputLink(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== 'slot' && key !== 'assetId')) {
     return false;
   }
   return (
-    (value.source === 'base64' && typeof value.base64 === 'string') ||
-    (value.source === 'url' && typeof value.url === 'string') ||
-    (
-      value.source === 'provider' &&
-      typeof value.providerId === 'string' && value.providerId.length > 0 && value.providerId.length <= 255 &&
-      typeof value.remoteJobId === 'string' && value.remoteJobId.length > 0 && value.remoteJobId.length <= 255 &&
-      value.variant === 'video'
-    )
+    Object.keys(value).length === 2 &&
+    typeof value.slot === 'number' &&
+    Number.isSafeInteger(value.slot) &&
+    value.slot >= 0 &&
+    (value.assetId === null || (
+      typeof value.assetId === 'string' &&
+      value.assetId.length > 0 &&
+      value.assetId.length <= 4_096 &&
+      !hasControlCharacters(value.assetId)
+    ))
   );
 }
 
 function isMaterializedAsset(value: unknown): value is MaterializedAsset {
-  return (
+  if (!(
     isRecord(value) &&
     isMediaType(value.type) &&
-    typeof value.mimeType === 'string' &&
-    typeof value.filePath === 'string' &&
+    typeof value.mimeType === 'string' && value.mimeType.length > 0 && value.mimeType.length <= 128 &&
+    typeof value.filePath === 'string' && value.filePath.length > 0 && value.filePath.length <= 4_096 &&
     typeof value.fileSize === 'number' &&
-    Number.isFinite(value.fileSize) &&
-    typeof value.sha256 === 'string' &&
+    Number.isSafeInteger(value.fileSize) && value.fileSize >= 0 &&
+    typeof value.sha256 === 'string' && value.sha256.length > 0 && value.sha256.length <= 4_096 &&
     (value.thumbnailPath === undefined || value.thumbnailPath === null || typeof value.thumbnailPath === 'string') &&
     (value.posterPath === undefined || value.posterPath === null || typeof value.posterPath === 'string') &&
-    (value.width === undefined || value.width === null || typeof value.width === 'number') &&
-    (value.height === undefined || value.height === null || typeof value.height === 'number') &&
-    (value.durationMs === undefined || value.durationMs === null || typeof value.durationMs === 'number') &&
+    (value.width === undefined || value.width === null || (typeof value.width === 'number' && Number.isFinite(value.width))) &&
+    (value.height === undefined || value.height === null || (typeof value.height === 'number' && Number.isFinite(value.height))) &&
+    (value.durationMs === undefined || value.durationMs === null || (typeof value.durationMs === 'number' && Number.isFinite(value.durationMs))) &&
     (value.materializationKey === undefined || typeof value.materializationKey === 'string') &&
     (value.sourceFingerprint === undefined || typeof value.sourceFingerprint === 'string') &&
     (value.resultId === undefined || typeof value.resultId === 'string') &&
     (value.filename === undefined || typeof value.filename === 'string') &&
     (value.metadata === undefined || isRecord(value.metadata))
-  );
+  )) return false;
+  const allowedKeys = new Set([
+    'type', 'mimeType', 'filePath', 'thumbnailPath', 'posterPath', 'width', 'height',
+    'durationMs', 'materializationKey', 'sourceFingerprint', 'fileSize', 'sha256', 'resultId',
+    'filename', 'metadata',
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+  const strings = [
+    value.mimeType,
+    value.filePath,
+    value.sha256,
+    value.thumbnailPath,
+    value.posterPath,
+    value.materializationKey,
+    value.sourceFingerprint,
+    value.resultId,
+    value.filename,
+  ];
+  if (strings.some((candidate) =>
+    candidate !== undefined && candidate !== null &&
+    (candidate.length > 4_096 || hasControlCharacters(candidate)))) return false;
+  if (value.metadata !== undefined) {
+    try {
+      assertSubmittedMetadata(value.metadata);
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
-function readManifest(value: readonly unknown[]): DurableRunnerManifest {
+function readMaterializedAssets(value: unknown, maxAssets: number): readonly MaterializedAsset[] {
+  if (!Array.isArray(value) || value.some((asset) => !isMaterializedAsset(asset))) {
+    throw new SubmittedAssetValidationError('Persisted materialized asset manifest is invalid.');
+  }
+  if (value.length > maxAssets || value.length > MAX_SUBMITTED_ASSETS) {
+    throw new SubmittedAssetValidationError('Persisted materialized asset manifest is too large.');
+  }
+  return value;
+}
+
+function readManifest(
+  value: readonly unknown[],
+  maxAssets: number,
+): DurableRunnerManifest {
+  assertDurableResultManifest(value, maxAssets);
+  assertSubmittedManifestSize(value);
   const envelope = value[0];
   if (isRecord(envelope) && envelope.version === 1) {
-    const resultAssets = Array.isArray(envelope.resultAssets)
-      ? envelope.resultAssets.filter(isSubmittedAsset)
-      : undefined;
-    const materializedAssets = Array.isArray(envelope.materializedAssets)
-      ? envelope.materializedAssets.filter(isMaterializedAsset)
-      : undefined;
+    if (Object.keys(envelope).some((key) => !['version', 'resultAssets', 'materializedAssets'].includes(key))) {
+      throw new SubmittedAssetValidationError('Persisted result manifest contains unsupported fields.');
+    }
+    const resultAssets = envelope.resultAssets === undefined
+      ? undefined
+      : validateSubmittedAssets(envelope.resultAssets, { allowEmpty: true, maxAssets });
+    const materializedAssets = envelope.materializedAssets === undefined
+      ? undefined
+      : readMaterializedAssets(envelope.materializedAssets, maxAssets);
     return {
       version: 1,
       ...(resultAssets === undefined ? {} : { resultAssets }),
@@ -150,12 +213,34 @@ function readManifest(value: readonly unknown[]): DurableRunnerManifest {
     };
   }
 
-  const resultAssets = value.filter(isSubmittedAsset);
-  const materializedAssets = value.filter(isMaterializedAsset);
+  // Completed jobs use the database's explicit output-link manifest. It is a
+  // separate durable shape from provider results and must be fully validated.
+  if (value.length > 0 && value.length <= MAX_SUBMITTED_ASSETS && value.every(isOutputLink)) {
+    return { version: 1 };
+  }
+
+  const resultAssetValues = value.filter((asset) => isRecord(asset) && 'source' in asset);
+  const materializedAssetValues = value.filter((asset) => isRecord(asset) && !('source' in asset));
+  if (resultAssetValues.length > 0 && materializedAssetValues.length > 0) {
+    return {
+      version: 1,
+      resultAssets: validateSubmittedAssets(resultAssetValues, { maxAssets }),
+      materializedAssets: readMaterializedAssets(materializedAssetValues, maxAssets),
+    };
+  }
+  const resultAssets = resultAssetValues.length > 0
+    ? validateSubmittedAssets(resultAssetValues, { maxAssets })
+    : undefined;
+  const materializedAssets = materializedAssetValues.length > 0
+    ? readMaterializedAssets(materializedAssetValues, maxAssets)
+    : undefined;
+  if (value.length > 0 && resultAssets === undefined && materializedAssets === undefined) {
+    throw new SubmittedAssetValidationError('Persisted result manifest contains unsupported values.');
+  }
   return {
     version: 1,
-    ...(resultAssets.length === 0 ? {} : { resultAssets }),
-    ...(materializedAssets.length === 0 ? {} : { materializedAssets }),
+    ...(resultAssets === undefined || resultAssets.length === 0 ? {} : { resultAssets }),
+    ...(materializedAssets === undefined || materializedAssets.length === 0 ? {} : { materializedAssets }),
   };
 }
 
@@ -175,7 +260,7 @@ function errorFor(record: JobRecord): RunnerJob['error'] {
 }
 
 export function toRunnerJob(record: JobRecord): RunnerJob {
-  const manifest = readManifest(record.resultManifest);
+  const manifest = readManifest(record.resultManifest, record.request.count ?? 1);
   return {
     id: record.id,
     request: record.request,
@@ -197,7 +282,7 @@ export function toRunnerJob(record: JobRecord): RunnerJob {
   };
 }
 
-function manifestFor(input: JobTransitionInput): readonly unknown[] | undefined {
+function manifestFor(input: JobTransitionInput, maxAssets: number): readonly unknown[] | undefined {
   if (input.resultAssets === undefined && input.materializedAssets === undefined) return undefined;
   if (
     ['failed', 'cancelled', 'rejected', 'expired'].includes(input.status) &&
@@ -206,6 +291,17 @@ function manifestFor(input: JobTransitionInput): readonly unknown[] | undefined 
   ) {
     return [];
   }
+  if (input.resultAssets !== undefined) {
+    validateSubmittedAssets(input.resultAssets, { allowEmpty: true, maxAssets });
+  }
+  if (
+    input.materializedAssets !== undefined &&
+    (input.materializedAssets.length > maxAssets ||
+      input.materializedAssets.length > MAX_SUBMITTED_ASSETS ||
+      input.materializedAssets.some((asset) => !isMaterializedAsset(asset)))
+  ) {
+    throw new SubmittedAssetValidationError('Materialized asset manifest is invalid.');
+  }
   const manifest: DurableRunnerManifest = {
     version: 1,
     ...(input.resultAssets === undefined ? {} : { resultAssets: input.resultAssets }),
@@ -213,10 +309,12 @@ function manifestFor(input: JobTransitionInput): readonly unknown[] | undefined 
       ? {}
       : { materializedAssets: input.materializedAssets }),
   };
+  assertDurableResultManifest([manifest], maxAssets);
+  assertSubmittedManifestSize(manifest);
   return [manifest];
 }
 
-function fieldsFor(input: JobTransitionInput): UpdateJobStatusFields {
+function fieldsFor(input: JobTransitionInput, maxAssets: number): UpdateJobStatusFields {
   const fields: {
     progress?: number | null;
     remoteJobId?: string | null;
@@ -238,7 +336,7 @@ function fieldsFor(input: JobTransitionInput): UpdateJobStatusFields {
     fields.errorCode = input.error?.code ?? null;
     fields.errorMessage = input.error?.message ?? null;
   }
-  const manifest = manifestFor(input);
+  const manifest = manifestFor(input, maxAssets);
   if (manifest !== undefined) fields.resultManifest = manifest;
   if (input.stageRetryCounts !== undefined) fields.stageRetryCounts = input.stageRetryCounts;
   return fields;
@@ -270,7 +368,16 @@ export class SqliteRunnerJobPort implements RunnerJobPort {
   }
 
   public async listRecoverable(): Promise<readonly RunnerJob[]> {
-    return (await this.jobs.listRecoverable()).map(toRunnerJob);
+    const recovered: RunnerJob[] = [];
+    for (const record of await this.jobs.listRecoverable()) {
+      try {
+        recovered.push(toRunnerJob(record));
+      } catch (error) {
+        if (!(error instanceof SubmittedAssetValidationError)) throw error;
+        await this.jobs.quarantineInvalidManifest?.(record.id, record.revision);
+      }
+    }
+    return recovered;
   }
 
   public async recoverCancellation(
@@ -296,13 +403,23 @@ export class SqliteRunnerJobPort implements RunnerJobPort {
     if (input.status === 'cancelled') {
       return this.cancel(jobId, input.expectedRevision);
     }
+    const current = input.resultAssets === undefined && input.materializedAssets === undefined
+      ? null
+      : await this.jobs.get(jobId);
+    const maxAssets = Math.min(
+      current?.request.count ?? 1,
+      MAX_SUBMITTED_ASSETS,
+    );
+    if (input.resultAssets !== undefined) {
+      validateSubmittedAssets(input.resultAssets, { allowEmpty: true, maxAssets });
+    }
     const record = await this.jobs.compareAndSetStatus(
       jobId,
       input.expectedRevision,
       input.expectedStatuses,
       input.status,
       input.stage,
-      fieldsFor(input),
+      fieldsFor(input, maxAssets),
     );
     return record === null ? null : this.committed(record);
   }

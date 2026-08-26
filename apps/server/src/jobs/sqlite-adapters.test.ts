@@ -1,14 +1,20 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import type { SubmittedAsset } from '@imagine/provider-contract';
 import type { JobStatus } from '@imagine/shared';
 import { createMockGenerationRequest } from '@imagine/testkit';
-import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
-import type { ChangeEventRecord, ChangeEventRepository } from '../database/events.js';
+import { createDatabase, type DatabaseClient } from '../database/client.js';
+import { ChangeEventRepository, type ChangeEventRecord } from '../database/events.js';
+import { JobRepository } from '../database/jobs.js';
 import type {
   FinalizeOutputsResult,
   JobOutputRecord,
   JobRecord,
-  JobRepository,
   UpdateJobStatusFields,
 } from '../database/jobs.js';
 import type { AssetMediaRecord, ProviderOutputMediaRecord } from '../media/types.js';
@@ -24,6 +30,18 @@ import {
   type SqliteChangeEventRepositoryPort,
   type SqliteJobRepositoryPort,
 } from './sqlite-adapters.js';
+import { SubmittedAssetValidationError } from './submitted-asset-validator.js';
+
+const migrationsDirectory = fileURLToPath(new URL('../../migrations', import.meta.url));
+const temporaryDirectories: string[] = [];
+const databases: DatabaseClient[] = [];
+
+afterEach(async () => {
+  for (const database of databases.splice(0)) database.sqlite.close();
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
+  );
+});
 
 function jobRecord(overrides: Partial<JobRecord> = {}): JobRecord {
   const now = new Date('2026-08-25T00:00:00.000Z');
@@ -271,6 +289,36 @@ describe('SqliteRunnerJobPort', () => {
     });
   });
 
+  it('fails recovery for an invalid persisted manifest instead of filtering it', () => {
+    const invalid = jobRecord({
+      resultManifest: [{
+        version: 1,
+        resultAssets: [{
+          type: 'image',
+          mimeType: 'image/png',
+          source: 'base64',
+          base64: 'not-canonical',
+        }],
+      }],
+    });
+
+    expect(() => toRunnerJob(invalid)).toThrow(SubmittedAssetValidationError);
+  });
+
+  it('rejects sensitive materialized metadata during recovery', () => {
+    const invalid = jobRecord({
+      resultManifest: [{
+        version: 1,
+        materializedAssets: [{
+          ...materializedAsset(),
+          metadata: { authorization: 'Bearer persisted-secret' },
+        }],
+      }],
+    });
+
+    expect(() => toRunnerJob(invalid)).toThrow(SubmittedAssetValidationError);
+  });
+
   it('claims with the observed revision and returns the committed outbox event', async () => {
     const repository = new FakeSqliteRepository();
     const port = new SqliteRunnerJobPort(repository, new FakeEventRepository(repository));
@@ -302,6 +350,131 @@ describe('SqliteRunnerJobPort', () => {
       { version: 1, resultAssets: submittedAssets() },
     ]);
     expect(committed?.job.resultAssets).toEqual(submittedAssets());
+  });
+
+  it('rejects a provider manifest over the persisted request count before CAS', async () => {
+    const repository = new FakeSqliteRepository(jobRecord({
+      status: 'submitting',
+      revision: 1,
+      request: createMockGenerationRequest({ count: 1 }),
+    }));
+    const port = new SqliteRunnerJobPort(repository, new FakeEventRepository(repository));
+    const twoAssets = [submittedAssets()[0]!, submittedAssets()[0]!];
+
+    await expect(port.transition('job-1', {
+      expectedStatuses: ['submitting'],
+      expectedRevision: 1,
+      status: 'downloading',
+      stage: 'materializing_results',
+      resultAssets: twoAssets,
+    })).rejects.toThrow(SubmittedAssetValidationError);
+    expect(repository.calls).toEqual([]);
+  });
+
+  it('limits materialized assets by the request count before CAS', async () => {
+    const repository = new FakeSqliteRepository(jobRecord({
+      status: 'downloading',
+      revision: 1,
+      request: createMockGenerationRequest({ count: 1 }),
+    }));
+    const port = new SqliteRunnerJobPort(repository, new FakeEventRepository(repository));
+
+    await expect(port.transition('job-1', {
+      expectedStatuses: ['downloading'],
+      expectedRevision: 1,
+      status: 'processing',
+      stage: 'processing',
+      resultAssets: [],
+      materializedAssets: [materializedAsset(), materializedAsset()],
+    })).rejects.toThrow(SubmittedAssetValidationError);
+    expect(repository.calls).toEqual([]);
+  });
+
+  it('loads the request count for materialized-only multi-output transitions', async () => {
+    const repository = new FakeSqliteRepository(jobRecord({
+      status: 'downloading',
+      revision: 1,
+      request: createMockGenerationRequest({ count: 2 }),
+    }));
+    const port = new SqliteRunnerJobPort(repository, new FakeEventRepository(repository));
+    const outputs = [materializedAsset(), materializedAsset()];
+
+    await expect(port.transition('job-1', {
+      expectedStatuses: ['downloading'],
+      expectedRevision: 1,
+      status: 'processing',
+      stage: 'processing',
+      materializedAssets: outputs,
+    })).resolves.toMatchObject({ job: { status: 'processing' } });
+    expect(repository.transitionFields?.resultManifest).toEqual([{
+      version: 1,
+      materializedAssets: outputs,
+    }]);
+  });
+
+  it('round-trips a validated result manifest across SQLite close and reopen', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'imagine-manifest-recovery-'));
+    temporaryDirectories.push(directory);
+    const firstDatabase = createDatabase(resolve(directory, 'app.db'), migrationsDirectory);
+    databases.push(firstDatabase);
+    const jobs = new JobRepository(firstDatabase.orm);
+    const created = jobs.create(createMockGenerationRequest({ count: 1 }));
+    const claimed = jobs.claimQueued(created.id, created.revision);
+    if (!claimed) throw new Error('Expected the manifest fixture job to be claimed.');
+    const submitted = jobs.compareAndSetStatus(
+      created.id,
+      claimed.revision,
+      ['submitting'],
+      'downloading',
+      'materializing_results',
+      { resultManifest: [{ version: 1, resultAssets: submittedAssets() }] },
+    );
+    if (!submitted) throw new Error('Expected the manifest fixture job to be persisted.');
+
+    databases.splice(databases.indexOf(firstDatabase), 1);
+    firstDatabase.sqlite.close();
+    const secondDatabase = createDatabase(resolve(directory, 'app.db'), migrationsDirectory);
+    databases.push(secondDatabase);
+    const recovered = new JobRepository(secondDatabase.orm).get(created.id);
+    if (!recovered) throw new Error('Expected the persisted manifest job to be recovered.');
+
+    expect(toRunnerJob(recovered).resultAssets).toEqual(submittedAssets());
+  });
+
+  it('quarantines one old signed-URL manifest without blocking other recovery jobs', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'imagine-manifest-isolation-'));
+    temporaryDirectories.push(directory);
+    const database = createDatabase(resolve(directory, 'app.db'), migrationsDirectory);
+    databases.push(database);
+    const jobs = new JobRepository(database.orm);
+    const events = new ChangeEventRepository(database.orm);
+    const valid = jobs.create(createMockGenerationRequest());
+    const invalid = jobs.create(createMockGenerationRequest());
+    const signedManifest = JSON.stringify([{
+      version: 1,
+      resultAssets: [{
+        type: 'image',
+        mimeType: 'image/png',
+        source: 'url',
+        url: 'https://cdn.example.invalid/image.png?token=old-secret',
+      }],
+    }]);
+    database.sqlite
+      .prepare('UPDATE jobs SET result_manifest_json = ? WHERE id = ?')
+      .run(signedManifest, invalid.id);
+
+    const recovered = await new SqliteRunnerJobPort(jobs, events).listRecoverable();
+
+    expect(recovered.map((job) => job.id)).toEqual([valid.id]);
+    expect(jobs.get(invalid.id)).toMatchObject({
+      status: 'rejected',
+      errorCode: 'provider_output_rejected',
+      errorMessage: 'The persisted provider output manifest was rejected.',
+      resultManifest: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
+    });
+    expect(JSON.stringify(jobs.get(invalid.id))).not.toContain('old-secret');
   });
 
   it('durably requests cancellation before committing the terminal status', async () => {

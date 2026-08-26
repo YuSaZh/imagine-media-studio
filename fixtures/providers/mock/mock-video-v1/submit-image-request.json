@@ -1,0 +1,13 @@
+{
+  "operation": "video.image_to_video",
+  "providerId": "mock",
+  "modelId": "mock-video-v1",
+  "prompt": "Animate the fixed frame",
+  "inputs": [
+    { "assetId": "asset-first-frame", "role": "first_frame" }
+  ],
+  "aspectRatio": "16:9",
+  "resolution": "720p",
+  "durationSeconds": 1,
+  "count": 1
+}

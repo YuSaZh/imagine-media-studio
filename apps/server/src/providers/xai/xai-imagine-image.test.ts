@@ -404,7 +404,7 @@ describe('XaiImagineImageProvider', () => {
     });
   });
 
-  it('bounds result count, result metadata strings, URLs, and rejects URL userinfo', () => {
+  it('bounds result count, result metadata strings, and rejects credential-bearing URLs', () => {
     const image = { url: 'https://cdn.example.invalid/result.png' };
     expect(() => parseXaiImagineImageResponse({ data: Array.from({ length: 11 }, () => image) }))
       .toThrow('too many image results');
@@ -414,7 +414,9 @@ describe('XaiImagineImageProvider', () => {
       .toThrow('oversized revised_prompt');
     expect(() => parseXaiImagineImageResponse({ data: [{ url: 'https://user:pass@cdn.example.invalid/result.png' }] }))
       .toThrow('cannot contain credentials');
-    expect(() => parseXaiImagineImageResponse({ data: [{ url: `https://cdn.example.invalid/${'x'.repeat(8_200)}` }] }))
+    expect(() => parseXaiImagineImageResponse({ data: [{ url: 'https://cdn.example.invalid/result.png?signature=secret' }] }))
+      .toThrow('credential-like query');
+    expect(() => parseXaiImagineImageResponse({ data: [{ url: `https://cdn.example.invalid/${'x'.repeat(4_100)}` }] }))
       .toThrow('oversized url');
   });
 

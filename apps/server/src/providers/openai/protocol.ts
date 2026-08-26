@@ -23,9 +23,25 @@ const VALID_INPUT_FIDELITIES = new Set(['low', 'high']);
 const VALID_MODERATION = new Set(['low', 'auto']);
 export const OPENAI_MAX_INLINE_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_BASE64_CHARS = Math.ceil((OPENAI_MAX_INLINE_OUTPUT_BYTES * 4) / 3) + 4;
-const MAX_OUTPUT_URL_CHARS = 8_192;
+const MAX_OUTPUT_URL_CHARS = 4_096;
 const MAX_RESULT_ID_CHARS = 256;
 const MAX_METADATA_BYTES = 16 * 1024;
+const CREDENTIAL_QUERY_NAMES = new Set([
+  'access_token',
+  'api_key',
+  'apikey',
+  'auth',
+  'authorization',
+  'bearer',
+  'credential',
+  'credentials',
+  'key',
+  'password',
+  'secret',
+  'sig',
+  'signature',
+  'token',
+]);
 
 export const IMAGE_EXTRA_KEYS = Object.freeze([
   'background',
@@ -598,6 +614,18 @@ function outputUrlAsset(
   }
   if (url.username || url.password) {
     throw new OpenAiResponseError('invalid_response', 'OpenAI returned an image URL with embedded credentials.');
+  }
+  for (const [name] of url.searchParams) {
+    const normalized = name.trim().toLowerCase();
+    if (
+      CREDENTIAL_QUERY_NAMES.has(normalized) ||
+      normalized.startsWith('x-amz-') ||
+      normalized.startsWith('x-goog-') ||
+      normalized.startsWith('x-ms-') ||
+      normalized.startsWith('oauth_')
+    ) {
+      throw new OpenAiResponseError('invalid_response', 'OpenAI returned an image URL with credential-like query data.');
+    }
   }
   const inferred = inferMimeType(rawUrl);
   if (claimedMimeType === undefined && inferred === undefined && /\.[a-z0-9]+(?:$|[?#])/i.test(url.pathname)) {
