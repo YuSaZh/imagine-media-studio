@@ -1,0 +1,12 @@
+{
+  "id": "video_fixture_001",
+  "object": "video",
+  "model": "sora-2",
+  "status": "completed",
+  "progress": 100,
+  "created_at": 1787702400,
+  "completed_at": 1787703000,
+  "expires_at": 1787706000,
+  "seconds": "4",
+  "size": "1280x720"
+}

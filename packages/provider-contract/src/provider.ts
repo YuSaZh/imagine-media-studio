@@ -57,6 +57,8 @@ export interface ProviderInput {
 export interface ProviderContext {
   providerId: string;
   jobId?: string;
+  /** Original request model, available to durable poll/recovery operations. */
+  modelId?: string;
   idempotencyKey?: string;
   attempt?: number;
   signal?: AbortSignal;
@@ -82,22 +84,51 @@ export type SubmittedAsset =
   | (SubmittedAssetBase & {
       source: 'url';
       url: string;
+    })
+  /**
+   * A provider-owned result that must be resolved with the current provider
+   * context before materialization. Credentials never belong in this value.
+   */
+  | (SubmittedAssetBase & {
+      source: 'provider';
+      providerId: string;
+      remoteJobId: string;
+      variant: 'video';
+      /** Keeps legacy image-only source narrowing source-compatible. */
+      url?: never;
     });
+
+export type ProviderAssetReference = Extract<SubmittedAsset, { source: 'provider' }>;
+
+/** Ephemeral target returned by an adapter; never persist this object. */
+export interface ProviderResultTarget {
+  url: string;
+  headers?: Readonly<Record<string, string>>;
+  claimedMimeType?: string;
+}
 
 export type SubmitResult =
   | {
       state: 'completed';
       assets: readonly SubmittedAsset[];
+      resultExpiresAt?: Date;
     }
   | {
       state: 'pending';
       remoteJobId: string;
       pollAfterMs?: number;
+      /** Provider result/download expiry, if supplied by the upstream API. */
+      resultExpiresAt?: Date;
     };
 
 export type PollResult =
-  | { state: 'remote_pending' | 'remote_running'; progress?: number; pollAfterMs?: number }
-  | { state: 'completed'; assets: readonly SubmittedAsset[] }
+  | {
+      state: 'remote_pending' | 'remote_running';
+      progress?: number;
+      pollAfterMs?: number;
+      resultExpiresAt?: Date;
+    }
+  | { state: 'completed'; assets: readonly SubmittedAsset[]; resultExpiresAt?: Date }
   | { state: 'failed'; error: ProviderError };
 
 export type ProviderErrorKind = 'expired' | 'rejected' | 'transient' | 'unknown';
@@ -121,5 +152,7 @@ export interface ProviderAdapter {
   submit(request: GenerationRequest, context: ProviderContext): Promise<SubmitResult>;
   poll?(remoteJobId: string, context: ProviderContext): Promise<PollResult>;
   cancel?(remoteJobId: string, context: ProviderContext): Promise<void>;
+  /** Resolve a provider-owned result into an ephemeral authenticated target. */
+  resolveResult?(asset: ProviderAssetReference, context: ProviderContext): Promise<ProviderResultTarget>;
   normalizeError(error: unknown): ProviderError;
 }

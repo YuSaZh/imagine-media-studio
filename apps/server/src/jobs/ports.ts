@@ -2,6 +2,7 @@ import type {
   ProviderAdapter,
   ProviderInput,
   ProviderError,
+  ProviderResultTarget,
   SubmittedAsset,
 } from '@imagine/provider-contract';
 import type { GenerationRequest, JobStatus } from '@imagine/shared';
@@ -19,6 +20,10 @@ export interface RunnerJob {
   idempotencyKey: string;
   attempt: number;
   remoteJobId: string | null;
+  /** Local maximum polling deadline persisted with the job. */
+  remoteDeadlineAt: Date | null;
+  /** Provider-declared downloadable result expiry persisted with the job. */
+  resultExpiresAt: Date | null;
   pollAfterAt: Date | null;
   cancelRequestedAt: Date | null;
   resultAssets: readonly SubmittedAsset[];
@@ -67,6 +72,8 @@ export interface JobTransitionInput {
   stage: string;
   progress?: number | null;
   remoteJobId?: string | null;
+  remoteDeadlineAt?: Date | null;
+  resultExpiresAt?: Date | null;
   pollAfterAt?: Date | null;
   resultAssets?: readonly SubmittedAsset[];
   materializedAssets?: readonly MaterializedAsset[];
@@ -134,18 +141,25 @@ export interface MediaMaterializerPort {
     job: RunnerJob,
     assets: readonly SubmittedAsset[],
     signal: AbortSignal,
+    resolveProviderAsset?: ProviderResultResolver,
   ): Promise<readonly MaterializedAsset[]>;
   /** Generate any derived media while keeping the originals immutable. */
   process(
     job: RunnerJob,
     assets: readonly MaterializedAsset[],
     signal: AbortSignal,
+    resolveProviderAsset?: ProviderResultResolver,
   ): Promise<readonly MaterializedAsset[]>;
   /** Delete provisional files after cancellation, failed CAS, or partial materialization. */
   discard?(job: RunnerJob, assets: readonly MaterializedAsset[]): Promise<void>;
   /** Release provisional markers after the Asset transaction commits. */
   finalized?(job: RunnerJob, assets: readonly MaterializedAsset[]): Promise<void>;
 }
+
+export type ProviderResultResolver = (
+  asset: Extract<SubmittedAsset, { source: 'provider' }>,
+  signal: AbortSignal,
+) => Promise<ProviderResultTarget>;
 
 export interface RunnerClock {
   now(): number;
@@ -172,4 +186,6 @@ export interface JobRunnerOptions {
   maxAttempts?: number;
   defaultPollAfterMs?: number;
   defaultRetryAfterMs?: number;
+  /** Local maximum polling deadline assigned to each pending remote job. */
+  defaultRemoteDeadlineMs?: number;
 }

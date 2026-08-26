@@ -38,6 +38,7 @@ describe('ProviderRegistry PR4 registrations', () => {
     const types = [
       'openai-images-v1',
       'openai-responses-image-v1',
+      'openai-videos-v1-compatible',
       'gemini-generate-content-image-v1',
       'gemini-interactions-image-v1',
       'xai-imagine-image-v1',

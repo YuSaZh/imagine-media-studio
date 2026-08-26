@@ -149,6 +149,7 @@ export const ProviderTypeSchema = z.enum([
   'mock',
   'openai-images-v1',
   'openai-responses-image-v1',
+  'openai-videos-v1-compatible',
   'gemini-interactions-image-v1',
   'gemini-generate-content-image-v1',
   'xai-imagine-image-v1',
@@ -326,6 +327,7 @@ export const JobDtoSchema = z.object({
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,
   completedAt: IsoTimestampSchema.nullable(),
+  resultExpiresAt: IsoTimestampSchema.nullable().optional(),
 }).strict();
 
 export type JobDto = z.infer<typeof JobDtoSchema>;

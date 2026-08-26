@@ -6,6 +6,7 @@ export {
   OpenAiResponsesImageProvider,
   parseOpenAiModelCatalog,
 } from './provider.js';
+export { createOpenAiVideosProvider, OpenAiVideosProvider } from './videos.js';
 export {
   OpenAiImagesProvider as OpenAiImagesAdapter,
   OpenAiResponsesImageProvider as OpenAiResponsesImageAdapter,
@@ -58,7 +59,9 @@ export {
   OPENAI_IMAGES_PROFILE,
   OPENAI_IMAGES_DEFAULT_BASE_URL,
   OPENAI_RESPONSES_IMAGE_PROFILE,
+  OPENAI_VIDEOS_PROFILE,
 } from './types.js';
+export type { OpenAiVideoProviderOptions } from './videos.js';
 export type {
   OpenAiAssetResolver,
   OpenAiHttpBody,
@@ -72,6 +75,7 @@ export type {
   OpenAiImageInput,
   OpenAiMultipartPart,
   OpenAiProfile,
+  OpenAiVideoProfile,
   OpenAiProviderOptions,
   OpenAiRuntimeContext,
   OpenAiProviderContext,

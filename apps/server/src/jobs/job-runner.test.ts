@@ -20,6 +20,7 @@ import { createDatabase } from '../database/client.js';
 import { AssetRepository, JobRepository } from '../database/jobs.js';
 import { MockProviderAdapter } from '../providers/mock-provider.js';
 import { UnsafeRemoteUrlError } from '../security/network-policy.js';
+import { RemoteHttpError } from '../security/safe-http-transport.js';
 import { ensureStorage, getStoragePaths } from '../storage/paths.js';
 import { JobRunner } from './job-runner.js';
 import type {
@@ -29,6 +30,7 @@ import type {
   MediaMaterializerPort,
   MaterializedAsset,
   ProviderRegistration,
+  RunnerClock,
   RunnerAssetPort,
   RunnerEvent,
   RunnerJob,
@@ -157,6 +159,8 @@ function createRunnerJob(
     idempotencyKey: overrides.idempotencyKey ?? `key-${id}`,
     attempt: overrides.attempt ?? 0,
     remoteJobId: overrides.remoteJobId ?? null,
+    remoteDeadlineAt: overrides.remoteDeadlineAt ?? null,
+    resultExpiresAt: overrides.resultExpiresAt ?? null,
     pollAfterAt: overrides.pollAfterAt ?? null,
     cancelRequestedAt: overrides.cancelRequestedAt ?? null,
     resultAssets: overrides.resultAssets ?? [],
@@ -203,6 +207,10 @@ class MemoryJobPort implements RunnerJobPort {
       status: 'cancelled',
       stage: 'cancelled',
       pollAfterAt: null,
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
       error: null,
       stageRetryCounts: { poll: 0, download: 0, process: 0 },
     });
@@ -247,6 +255,10 @@ class MemoryJobPort implements RunnerJobPort {
         'remoteJobId' in input ? (input.remoteJobId ?? null) : current.remoteJobId,
       pollAfterAt:
         'pollAfterAt' in input ? (input.pollAfterAt ?? null) : current.pollAfterAt,
+      remoteDeadlineAt:
+        'remoteDeadlineAt' in input ? (input.remoteDeadlineAt ?? null) : current.remoteDeadlineAt,
+      resultExpiresAt:
+        'resultExpiresAt' in input ? (input.resultExpiresAt ?? null) : current.resultExpiresAt,
       resultAssets:
         'resultAssets' in input ? (input.resultAssets ?? []) : current.resultAssets,
       materializedAssets:
@@ -395,6 +407,64 @@ class CompletedTestProvider implements ProviderAdapter {
   }
 }
 
+class ExpiredSubmitProvider extends CompletedTestProvider {
+  public pollCount = 0;
+
+  public constructor() {
+    super([submittedBase64Asset()]);
+  }
+
+  public override async submit(
+    _request: GenerationRequest,
+    _context: ProviderContext,
+  ): Promise<SubmitResult> {
+    return {
+      state: 'pending',
+      remoteJobId: 'expired-remote',
+      resultExpiresAt: new Date(Date.now() - 1),
+      pollAfterMs: 0,
+    };
+  }
+
+  public override async poll(
+    _remoteJobId: string,
+    _context: ProviderContext,
+  ): Promise<PollResult> {
+    this.pollCount += 1;
+    return { state: 'completed', assets: [submittedBase64Asset()], resultExpiresAt: new Date(Date.now() + 60_000) };
+  }
+}
+
+class FarExpiryProvider extends AsyncTestProvider {
+  public override async submit(
+    _request: GenerationRequest,
+    _context: ProviderContext,
+  ): Promise<SubmitResult> {
+    return {
+      state: 'pending',
+      remoteJobId: 'far-expiry-remote',
+      resultExpiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000),
+      pollAfterMs: 0,
+    };
+  }
+}
+
+class DownloadRetryProvider extends CompletedTestProvider {
+  public constructor() {
+    super([submittedBase64Asset()]);
+  }
+
+  public override normalizeError(_error: unknown): ProviderError {
+    return {
+      code: 'download_retryable',
+      kind: 'transient',
+      message: 'Download retry fixture failure',
+      retryable: true,
+      retryAfterMs: 86_400_000,
+    };
+  }
+}
+
 class RetryingSubmitProvider extends CompletedTestProvider {
   public readonly attempts: number[] = [];
 
@@ -506,6 +576,8 @@ function createMemoryRunner(
   ) => Promise<ProviderRegistration> | ProviderRegistration,
   mediaOverrides: {
     maxAttempts?: number;
+    defaultRemoteDeadlineMs?: number;
+    clock?: RunnerClock;
     materialize?: MediaMaterializerPort['materialize'];
     process?: MediaMaterializerPort['process'];
   } = {},
@@ -540,6 +612,7 @@ function createMemoryRunner(
     ...(mediaOverrides.maxAttempts === undefined
       ? {}
       : { maxAttempts: mediaOverrides.maxAttempts }),
+    ...(mediaOverrides.clock === undefined ? {} : { clock: mediaOverrides.clock }),
     media: {
       materialize: mediaOverrides.materialize ?? (async (job, submitted) =>
         submitted.map((asset, index) => {
@@ -563,6 +636,9 @@ function createMemoryRunner(
     concurrency: { imageSubmit: 1, videoSubmit: 1, poll: 4, download: 3, process: 2 },
     defaultPollAfterMs: 0,
     defaultRetryAfterMs: 0,
+    ...(mediaOverrides.defaultRemoteDeadlineMs === undefined
+      ? {}
+      : { defaultRemoteDeadlineMs: mediaOverrides.defaultRemoteDeadlineMs }),
   };
   return {
     runner: new JobRunner(options),
@@ -617,6 +693,7 @@ describe('JobRunner asynchronous state machine', () => {
       baseUrl: 'https://provider.example.test/v1',
       config: { modelFamily: 'fixture' },
       inputs: [{ assetId: 'asset-1', mimeType: 'image/png', role: 'source' }],
+      modelId: 'mock-image-v1',
     });
     expect(provider.submitContext?.secrets).toEqual({});
     expect(jobs.records.get('input-context')?.status).toBe('completed');
@@ -720,7 +797,13 @@ describe('JobRunner asynchronous state machine', () => {
     expect(inputLoadCount).toBe(1);
     provider.releasePolls();
     await waitForPhase(runner.waitForIdle(), 'late cancelled poll');
-    expect(jobs.records.get('cancel-1')?.status).toBe('cancelled');
+    expect(jobs.records.get('cancel-1')).toMatchObject({
+      status: 'cancelled',
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
+    });
     expect(materializedSources).toEqual([]);
     await runner.stop();
   });
@@ -737,6 +820,108 @@ describe('JobRunner asynchronous state machine', () => {
 
     expect(provider.pollCount).toBe(2);
     expect(jobs.records.get('repoll')).toMatchObject({ status: 'completed', progress: 100 });
+    await runner.stop();
+  });
+
+  it('does not stop polling merely because a pending result expiry has passed', async () => {
+    const provider = new ExpiredSubmitProvider();
+    const { runner, jobs } = createMemoryRunner([createRunnerJob('expired-submit')], () => ({
+      adapter: provider,
+      submitReplaySafe: false,
+    }));
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'expired submit');
+
+    expect(provider.pollCount).toBe(1);
+    expect(jobs.records.get('expired-submit')).toMatchObject({
+      status: 'completed',
+    });
+    await runner.stop();
+  });
+
+  it('does not poll a persisted remote job after its local polling deadline', async () => {
+    const provider = new ExpiredSubmitProvider();
+    const { runner, jobs } = createMemoryRunner([
+      createRunnerJob('expired-recovery', {
+        status: 'remote_running',
+        remoteJobId: 'expired-remote',
+        remoteDeadlineAt: new Date(Date.now() - 1),
+      }),
+    ], () => ({ adapter: provider, submitReplaySafe: false }));
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'expired recovery');
+
+    expect(provider.pollCount).toBe(0);
+    expect(jobs.records.get('expired-recovery')).toMatchObject({ status: 'expired' });
+    await runner.stop();
+  });
+
+  it('rejects invalid persisted polling dates instead of scheduling NaN delays', async () => {
+    const provider = new ExpiredSubmitProvider();
+    const { runner, jobs } = createMemoryRunner([
+      createRunnerJob('invalid-poll-schedule', {
+        status: 'remote_pending',
+        remoteJobId: 'invalid-remote',
+        remoteDeadlineAt: new Date(Number.NaN),
+        pollAfterAt: new Date(Number.NaN),
+      }),
+    ], () => ({ adapter: provider, submitReplaySafe: false }));
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'invalid poll schedule');
+
+    expect(provider.pollCount).toBe(0);
+    expect(jobs.records.get('invalid-poll-schedule')).toMatchObject({
+      status: 'rejected',
+      error: { code: 'provider_result_invalid' },
+    });
+    await runner.stop();
+  });
+
+  it('keeps an upstream result expiry separate from the fixed local poll deadline', async () => {
+    const provider = new FarExpiryProvider();
+    const { runner, jobs } = createMemoryRunner([createRunnerJob('far-expiry')], () => ({
+      adapter: provider,
+      submitReplaySafe: false,
+    }), [], undefined, undefined, { defaultRemoteDeadlineMs: 60_000 });
+
+    await runner.start();
+    await waitForPhase(provider.pollsEntered.promise, 'far expiry poll entry');
+    const persisted = jobs.records.get('far-expiry');
+    if (!persisted || !persisted.remoteDeadlineAt || !persisted.resultExpiresAt) {
+      throw new Error('Expected both durable video time boundaries.');
+    }
+    expect(persisted.resultExpiresAt.getTime()).toBeGreaterThan(persisted.remoteDeadlineAt.getTime());
+    expect(persisted.remoteDeadlineAt.getTime()).toBeLessThan(Date.now() + 120_000);
+    await runner.cancel('far-expiry');
+    provider.releasePolls();
+    await waitForPhase(runner.waitForIdle(), 'far expiry cancellation');
+    await runner.stop();
+  });
+
+  it('clamps download retry scheduling to the provider result expiry', async () => {
+    const provider = new DownloadRetryProvider();
+    const resultExpiresAt = new Date(Date.now() + 60_000);
+    const { runner, jobs } = createMemoryRunner([createRunnerJob('download-expiry-retry')], () => ({
+      adapter: provider,
+      submitReplaySafe: false,
+    }), [], undefined, undefined, {
+      maxAttempts: 3,
+      materialize: async () => {
+        throw new Error('download retry fixture failure');
+      },
+    });
+    const current = jobs.records.get('download-expiry-retry');
+    if (!current) throw new Error('Expected retry fixture job.');
+    current.resultExpiresAt = resultExpiresAt;
+
+    await runner.start();
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    const scheduled = jobs.records.get('download-expiry-retry');
+    expect(scheduled?.stage).toBe('download_retry_scheduled');
+    expect(scheduled?.pollAfterAt?.getTime()).toBeLessThanOrEqual(resultExpiresAt.getTime());
     await runner.stop();
   });
 
@@ -893,6 +1078,145 @@ describe('JobRunner asynchronous state machine', () => {
     await runner.stop();
   });
 
+  it('clears durable outputs on deterministic remote failure while preserving the remote id', async () => {
+    let materializeCalls = 0;
+    const { runner, jobs, discardedJobIds } = createMemoryRunner(
+      [createRunnerJob('remote-output-failure', {
+        status: 'downloading',
+        remoteJobId: 'remote-output-1',
+        remoteDeadlineAt: new Date(Date.now() + 60_000),
+        resultExpiresAt: new Date(Date.now() + 60_000),
+        resultAssets: [{
+          type: 'video',
+          mimeType: 'video/mp4',
+          source: 'provider',
+          providerId: 'video-provider',
+          remoteJobId: 'remote-output-1',
+          variant: 'video',
+        }],
+        materializedAssets: [{
+          type: 'video',
+          mimeType: 'video/mp4',
+          filePath: 'provisional/remote-output.mp4',
+          fileSize: 1,
+          sha256: 'remote-output',
+        }],
+      })],
+      () => ({ adapter: new CompletedTestProvider([]), submitReplaySafe: false }),
+      [],
+      undefined,
+      undefined,
+      {
+        materialize: async () => {
+          materializeCalls += 1;
+          throw new RemoteHttpError('Remote media request returned HTTP 404.', 'http_status', 404);
+        },
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'deterministic remote output failure');
+
+    expect(materializeCalls).toBe(1);
+    expect(discardedJobIds).toContain('remote-output-failure');
+    expect(jobs.records.get('remote-output-failure')).toMatchObject({
+      status: 'rejected',
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
+      remoteJobId: 'remote-output-1',
+      error: { code: 'provider_output_unavailable', retryable: false },
+    });
+    await runner.stop();
+  });
+
+  it('finishes from valid local outputs even after the provider result expiry', async () => {
+    const local = {
+      type: 'video' as const,
+      mimeType: 'video/mp4',
+      filePath: 'local/complete.mp4',
+      fileSize: 1,
+      sha256: 'local-complete',
+    };
+    let processCalls = 0;
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('local-output-after-expiry', {
+        status: 'processing',
+        resultExpiresAt: new Date(Date.now() - 1),
+        materializedAssets: [local],
+      })],
+      () => ({ adapter: new CompletedTestProvider([]), submitReplaySafe: false }),
+      [],
+      undefined,
+      undefined,
+      {
+        process: async (_job, assets) => {
+          processCalls += 1;
+          return assets;
+        },
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'local output after expiry');
+
+    expect(processCalls).toBe(1);
+    expect(jobs.records.get('local-output-after-expiry')).toMatchObject({ status: 'completed' });
+    await runner.stop();
+  });
+
+  it('does not re-resolve an invalid local output after provider result expiry', async () => {
+    const providerResult: SubmittedAsset = {
+      type: 'video',
+      mimeType: 'video/mp4',
+      source: 'provider',
+      providerId: 'video-provider',
+      remoteJobId: 'expired-video',
+      variant: 'video',
+    };
+    let processCalls = 0;
+    const { runner, jobs } = createMemoryRunner(
+      [createRunnerJob('invalid-local-after-expiry', {
+        status: 'processing',
+        resultExpiresAt: new Date(Date.now() - 1),
+        resultAssets: [providerResult],
+        materializedAssets: [{
+          type: 'video',
+          mimeType: 'video/mp4',
+          filePath: 'missing/expired.mp4',
+          fileSize: 1,
+          sha256: 'missing-expired',
+        }],
+      })],
+      () => ({ adapter: new CompletedTestProvider([]), submitReplaySafe: false }),
+      [],
+      undefined,
+      undefined,
+      {
+        process: async (_job, assets, signal, resolveProviderAsset) => {
+          processCalls += 1;
+          await resolveProviderAsset?.(providerResult, signal);
+          return assets;
+        },
+      },
+    );
+
+    await runner.start();
+    await waitForPhase(runner.waitForIdle(), 'invalid local output after expiry');
+
+    expect(processCalls).toBe(1);
+    expect(jobs.records.get('invalid-local-after-expiry')).toMatchObject({
+      status: 'expired',
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
+      error: { code: 'provider_result_expired', retryable: false },
+    });
+    await runner.stop();
+  });
+
   it('recovers every durable stage and fails an unsafe unknown submission', async () => {
     const provider = new CompletedTestProvider([submittedBase64Asset()]);
     const materialized: MaterializedAsset = {
@@ -952,6 +1276,9 @@ describe('JobRunner asynchronous state machine', () => {
       createRunnerJob('cancel-after-restart', {
         status: 'remote_pending',
         remoteJobId: 'remote-cancel-after-restart',
+        resultAssets: [submittedBase64Asset()],
+        remoteDeadlineAt: new Date(Date.now() + 60_000),
+        resultExpiresAt: new Date(Date.now() + 60_000),
         cancelRequestedAt: new Date('2026-08-25T00:00:00.000Z'),
       }),
     ], () => ({ adapter: provider, submitReplaySafe: true }));
@@ -964,6 +1291,10 @@ describe('JobRunner asynchronous state machine', () => {
     expect(jobs.records.get('cancel-after-restart')).toMatchObject({
       status: 'cancelled',
       stage: 'cancelled',
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
     });
     await runner.stop();
   });

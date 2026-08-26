@@ -87,6 +87,8 @@ export interface ProviderOutputBase64Input extends ProviderOutputMediaInput {
 
 export interface ProviderOutputUrlInput extends ProviderOutputMediaInput {
   headers?: Readonly<Record<string, string>>;
+  /** Selects the provider-scoped NetworkPolicy instead of public media policy. */
+  providerOwned?: boolean;
   url: string;
 }
 

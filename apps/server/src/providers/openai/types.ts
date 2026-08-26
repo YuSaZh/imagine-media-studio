@@ -6,9 +6,11 @@ import type {
 } from '@imagine/provider-contract';
 
 export type OpenAiProfile = 'openai-images-v1' | 'openai-responses-image-v1';
+export type OpenAiVideoProfile = 'openai-videos-v1-compatible';
 
 export const OPENAI_IMAGES_PROFILE = 'openai-images-v1' as const;
 export const OPENAI_RESPONSES_IMAGE_PROFILE = 'openai-responses-image-v1' as const;
+export const OPENAI_VIDEOS_PROFILE = 'openai-videos-v1-compatible' as const;
 export const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1' as const;
 export const OPENAI_IMAGES_DEFAULT_BASE_URL = OPENAI_DEFAULT_BASE_URL;
 
@@ -51,7 +53,7 @@ export type OpenAiHttpRequestExecutor = (
 
 export interface OpenAiInputAsset {
   readonly assetId: string;
-  readonly role: 'source' | 'reference' | 'mask';
+  readonly role: 'source' | 'reference' | 'mask' | 'first_frame';
   readonly mimeType: string;
   readonly bytes: Uint8Array;
   readonly filename?: string;
@@ -254,6 +256,22 @@ export class OpenAiHttpError extends Error {
 
 export class OpenAiTransportError extends Error {
   public override readonly name = 'OpenAiTransportError';
+
+  public constructor(message: string, options?: ErrorOptions) {
+    const cause = options?.cause;
+    const safeCause = cause instanceof Error
+      ? {
+          name: cause.name.slice(0, 64),
+          ...('code' in cause && typeof cause.code === 'string' && /^[A-Za-z0-9._:-]{1,64}$/u.test(cause.code)
+            ? { code: cause.code }
+            : {}),
+          ...('statusCode' in cause && typeof cause.statusCode === 'number' && Number.isSafeInteger(cause.statusCode)
+            ? { statusCode: cause.statusCode }
+            : {}),
+        }
+      : undefined;
+    super(message, safeCause === undefined ? undefined : { cause: safeCause });
+  }
 }
 
 export class OpenAiResponseError extends OpenAiValidationError {

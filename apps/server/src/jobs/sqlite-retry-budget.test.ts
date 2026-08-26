@@ -235,4 +235,81 @@ describe('SQLite stage retry budget recovery', () => {
     });
     await runner.stop();
   });
+
+  it('persists a polling deadline separately from result expiry and fails before polling after reopen', async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), 'imagine-sqlite-expiry-recovery-'));
+    directories.push(directory);
+    const databasePath = resolve(directory, 'app.db');
+    const firstDatabase = createDatabase(databasePath, migrationsDirectory);
+    databases.push(firstDatabase);
+    const firstJobs = new JobRepository(firstDatabase.orm);
+    const provider = new RetryablePollProvider();
+    const created = firstJobs.create(createMockGenerationRequest({
+      providerId: provider.type,
+      modelId: 'sqlite-expiry-video-v1',
+      operation: 'video.generate',
+    }));
+    const claimed = firstJobs.claimQueued(created.id, created.revision);
+    if (!claimed) throw new Error('Expected the SQLite expiry fixture Job to be claimed.');
+    const pending = firstJobs.compareAndSetStatus(
+      created.id,
+      claimed.revision,
+      ['submitting'],
+      'remote_pending',
+      'remote_pending',
+      {
+        remoteJobId: 'sqlite-expiry-remote',
+        resultManifest: [{
+          version: 1,
+          resultAssets: [
+            { type: 'image', mimeType: 'image/png', source: 'base64', base64: 'AQ==' },
+            { type: 'image', mimeType: 'image/png', source: 'url', url: 'https://cdn.example.invalid/result.png' },
+            {
+              type: 'video',
+              mimeType: 'video/mp4',
+              source: 'provider',
+              providerId: provider.type,
+              remoteJobId: 'sqlite-expiry-remote',
+              variant: 'video',
+            },
+          ],
+        }],
+        remoteDeadlineAt: new Date(1_000),
+        resultExpiresAt: new Date(1_000),
+        pollAfterAt: new Date(1_000),
+      },
+    );
+    if (!pending) throw new Error('Expected the SQLite expiry fixture Job to become pending.');
+    expect(firstJobs.get(created.id)?.remoteDeadlineAt).toEqual(new Date(1_000));
+    expect(firstJobs.get(created.id)?.resultExpiresAt).toEqual(new Date(1_000));
+    databases.splice(databases.indexOf(firstDatabase), 1);
+    firstDatabase.sqlite.close();
+
+    const secondDatabase = createDatabase(databasePath, migrationsDirectory);
+    databases.push(secondDatabase);
+    const secondJobs = new JobRepository(secondDatabase.orm);
+    const secondEvents = new ChangeEventRepository(secondDatabase.orm);
+    expect(secondJobs.get(created.id)).toMatchObject({
+      remoteDeadlineAt: new Date(1_000),
+      resultExpiresAt: new Date(1_000),
+    });
+    const runner = createRunner(secondJobs, secondEvents, provider, new ManualClock(2_000));
+
+    await runner.start();
+    await waitFor(() => secondJobs.get(created.id)?.status === 'expired', 'expired remote recovery');
+
+    expect(provider.pollCount).toBe(0);
+    expect(secondJobs.get(created.id)).toMatchObject({
+      status: 'expired',
+      errorCode: 'provider_result_expired',
+      resultManifest: [],
+      remoteJobId: 'sqlite-expiry-remote',
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
+    });
+    expect(JSON.stringify(secondJobs.get(created.id))).not.toContain('https://cdn.example.invalid');
+    expect(JSON.stringify(secondJobs.get(created.id))).not.toContain('AQ==');
+    expect(JSON.stringify(secondJobs.get(created.id))).not.toContain('"source":"provider"');
+    await runner.stop();
+  });
 });

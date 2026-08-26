@@ -1,0 +1,11 @@
+{
+  "id": "video_fixture_pro_001",
+  "object": "video",
+  "model": "sora-2-pro",
+  "status": "queued",
+  "progress": 0,
+  "created_at": 1787702400,
+  "expires_at": 1787706000,
+  "seconds": "16",
+  "size": "1920x1080"
+}

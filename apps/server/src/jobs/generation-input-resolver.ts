@@ -151,6 +151,39 @@ export class GenerationInputResolver {
       }
       return;
     }
+    if (request.operation === 'video.generate') {
+      if (request.inputs.length > 0) {
+        throw new GenerationInputError(
+          'input_role_not_allowed',
+          'video.generate does not accept input assets.',
+        );
+      }
+      return;
+    }
+    if (request.operation === 'video.image_to_video') {
+      if (count('first_frame') !== 1 || request.inputs.some((input) => input.role !== 'first_frame')) {
+        throw new GenerationInputError(
+          'source_input_required',
+          'video.image_to_video requires exactly one first_frame image.',
+        );
+      }
+      return;
+    }
+    if (request.operation === 'video.reference_to_video') {
+      if (references < 1 || request.inputs.some((input) => input.role !== 'reference')) {
+        throw new GenerationInputError(
+          'input_role_not_allowed',
+          'video.reference_to_video requires reference image inputs only.',
+        );
+      }
+      return;
+    }
+    if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+      throw new GenerationInputError(
+        'input_role_not_allowed',
+        `${request.operation} is not supported by the current video input runtime.`,
+      );
+    }
     if (request.operation !== 'image.edit') return;
 
     if (count('source') !== 1) {

@@ -1,0 +1,11 @@
+{
+  "id": "video_fixture_001",
+  "object": "video",
+  "model": "sora-2",
+  "status": "failed",
+  "progress": 17,
+  "error": {
+    "code": "content_policy_violation",
+    "message": "The prompt was rejected by the provider."
+  }
+}

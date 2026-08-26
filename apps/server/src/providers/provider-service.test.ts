@@ -32,6 +32,10 @@ const openAiImagesModelsFixture = new URL(
   '../../../../fixtures/providers/openai/openai-images-v1/models-response.json',
   import.meta.url,
 );
+const openAiVideosModelsFixture = new URL(
+  '../../../../fixtures/providers/openai/openai-videos-v1-compatible/models-response.json',
+  import.meta.url,
+);
 const xaiModelsFixture = new URL(
   '../../../../fixtures/providers/xai/xai-imagine-image-v1/models-response.json',
   import.meta.url,
@@ -289,6 +293,44 @@ describe('ProviderService', () => {
         capabilitySource: 'profile',
       }),
     ]));
+  });
+
+  it('refreshes the OpenAI-compatible Videos catalog through the custom Base URL', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(openAiVideosModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'OpenAI-compatible Videos',
+      type: 'openai-videos-v1-compatible',
+      baseUrl: 'https://proxy.example.test/videos/v1',
+      apiKey: 'openai-video-catalog-key',
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/videos/v1/models',
+      headers: { Authorization: 'Bearer openai-video-catalog-key' },
+    });
+    expect(refreshed.map((model) => model.modelId)).toEqual(expect.arrayContaining(['sora-2', 'sora-2-pro']));
+    expect(refreshed.find((model) => model.modelId === 'sora-2')?.capabilities).toMatchObject({
+      operations: ['video.generate', 'video.image_to_video'],
+      supportsProgress: true,
+      supportsCancel: false,
+    });
+    expect(refreshed.every((model) => model.capabilitySource === 'provider')).toBe(true);
   });
 
   it('uses the injected xAI models endpoint for live refresh and preserves manual overrides', async () => {

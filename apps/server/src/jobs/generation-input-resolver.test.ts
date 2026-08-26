@@ -208,4 +208,54 @@ describe('GenerationInputResolver', () => {
       'mask_parent_mismatch',
     );
   });
+
+  it('validates video generate and first-frame image-to-video roles explicitly', async () => {
+    const videoModel = model({
+      modelId: 'sora-2',
+      displayName: 'Sora 2',
+      capabilities: {
+        operations: ['video.generate', 'video.image_to_video'],
+        maxReferenceImages: 1,
+        supportsProgress: true,
+        supportsCancel: false,
+        inputImageConstraints: {
+          mimeTypes: ['image/png', 'image/jpeg', 'image/webp'],
+          maxBytes: 4_096,
+          maxPixels: 1_000_000,
+        },
+      },
+    });
+    const frame = asset({ id: 'frame' });
+    const resolver = harness([frame], [videoModel]);
+    expect(resolver.resolve(createMockGenerationRequest({
+      providerId: videoModel.providerId,
+      modelId: videoModel.modelId,
+      operation: 'video.generate',
+      inputs: [],
+    })).inputs).toHaveLength(0);
+    expect(resolver.resolve(createMockGenerationRequest({
+      providerId: videoModel.providerId,
+      modelId: videoModel.modelId,
+      operation: 'video.image_to_video',
+      inputs: [{ assetId: frame.id, role: 'first_frame' }],
+    })).inputs[0]?.input.role).toBe('first_frame');
+    await expectCode(
+      () => resolver.resolve(createMockGenerationRequest({
+        providerId: videoModel.providerId,
+        modelId: videoModel.modelId,
+        operation: 'video.generate',
+        inputs: [{ assetId: frame.id, role: 'reference' }],
+      })),
+      'input_role_not_allowed',
+    );
+    await expectCode(
+      () => resolver.resolve(createMockGenerationRequest({
+        providerId: videoModel.providerId,
+        modelId: videoModel.modelId,
+        operation: 'video.image_to_video',
+        inputs: [{ assetId: frame.id, role: 'reference' }],
+      })),
+      'source_input_required',
+    );
+  });
 });

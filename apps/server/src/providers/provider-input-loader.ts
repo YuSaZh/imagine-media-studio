@@ -99,6 +99,7 @@ export class ProviderInputLoader {
     request: GenerationRequest,
     signal?: AbortSignal,
   ): Promise<readonly ProviderInput[]> {
+    this.validateOperationInputs(request);
     let totalBytes = 0;
     const inputs: ProviderInput[] = [];
     for (const input of request.inputs) {
@@ -110,10 +111,11 @@ export class ProviderInputLoader {
           `Provider input Asset ${input.assetId} is unavailable.`,
         );
       }
-      if (asset.deletedAt !== null || asset.type !== 'image' || asset.fileSize < 1) {
+      const expectedType = 'image';
+      if (asset.deletedAt !== null || asset.type !== expectedType || asset.fileSize < 1) {
         throw new ProviderInputLoaderError(
           'provider_input_invalid',
-          `Provider input Asset ${input.assetId} is not a valid image.`,
+          `Provider input Asset ${input.assetId} is not a valid ${expectedType}.`,
         );
       }
       if (asset.fileSize > this.maxBytesPerFile || totalBytes + asset.fileSize > this.maxTotalBytes) {
@@ -166,5 +168,36 @@ export class ProviderInputLoader {
       }
     }
     return inputs;
+  }
+
+  private validateOperationInputs(request: GenerationRequest): void {
+    const roles = request.inputs.map((input) => input.role);
+    const count = (role: typeof roles[number]) => roles.filter((candidate) => candidate === role).length;
+    if (request.operation === 'video.generate' && request.inputs.length > 0) {
+      throw new ProviderInputLoaderError(
+        'provider_input_invalid',
+        'video.generate does not accept provider input assets.',
+      );
+    }
+    if (request.operation === 'video.image_to_video' &&
+      (request.inputs.length !== 1 || count('first_frame') !== 1)) {
+      throw new ProviderInputLoaderError(
+        'provider_input_invalid',
+        'video.image_to_video requires exactly one first_frame image.',
+      );
+    }
+    if (request.operation === 'video.reference_to_video' &&
+      (request.inputs.length < 1 || request.inputs.some((input) => input.role !== 'reference'))) {
+      throw new ProviderInputLoaderError(
+        'provider_input_invalid',
+        'video.reference_to_video requires reference image assets only.',
+      );
+    }
+    if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+      throw new ProviderInputLoaderError(
+        'provider_input_invalid',
+        `${request.operation} is not supported by the current video input runtime.`,
+      );
+    }
   }
 }

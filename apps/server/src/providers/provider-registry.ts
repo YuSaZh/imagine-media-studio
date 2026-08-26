@@ -8,6 +8,7 @@ import { GeminiInteractionsImageProvider, GeminiNativeImageProvider } from './ge
 import {
   createOpenAiImagesProvider,
   createOpenAiResponsesImageProvider,
+  createOpenAiVideosProvider,
 } from './openai/index.js';
 import { MockProviderAdapter } from './mock-provider.js';
 import type { ProviderHttpClient as SafeProviderHttpClient } from './provider-http-client.js';
@@ -98,6 +99,8 @@ function createAdapter(providerType: string, mockAdapter: ProviderAdapter): Prov
       return createOpenAiImagesProvider();
     case 'openai-responses-image-v1':
       return createOpenAiResponsesImageProvider();
+    case 'openai-videos-v1-compatible':
+      return createOpenAiVideosProvider();
     case 'gemini-generate-content-image-v1':
       return new GeminiNativeImageProvider();
     case 'gemini-interactions-image-v1':

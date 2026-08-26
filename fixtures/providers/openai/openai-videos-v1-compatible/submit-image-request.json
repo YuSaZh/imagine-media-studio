@@ -1,0 +1,8 @@
+{
+  "model": "sora-2",
+  "prompt": "Animate this still image with a slow camera move",
+  "seconds": "8",
+  "size": "720x1280",
+  "multipartField": "input_reference",
+  "inputMimeType": "image/png"
+}

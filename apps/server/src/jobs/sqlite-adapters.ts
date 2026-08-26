@@ -18,6 +18,7 @@ import type {
   MaterializedAsset,
   MediaMaterializerPort,
   ProviderRegistryPort,
+  ProviderResultResolver,
   RunnerAssetPort,
   RunnerEvent,
   RunnerEventPort,
@@ -101,7 +102,13 @@ function isSubmittedAsset(value: unknown): value is SubmittedAsset {
   }
   return (
     (value.source === 'base64' && typeof value.base64 === 'string') ||
-    (value.source === 'url' && typeof value.url === 'string')
+    (value.source === 'url' && typeof value.url === 'string') ||
+    (
+      value.source === 'provider' &&
+      typeof value.providerId === 'string' && value.providerId.length > 0 && value.providerId.length <= 255 &&
+      typeof value.remoteJobId === 'string' && value.remoteJobId.length > 0 && value.remoteJobId.length <= 255 &&
+      value.variant === 'video'
+    )
   );
 }
 
@@ -179,6 +186,8 @@ export function toRunnerJob(record: JobRecord): RunnerJob {
     idempotencyKey: record.idempotencyKey,
     attempt: record.submitAttempt,
     remoteJobId: record.remoteJobId,
+    remoteDeadlineAt: record.remoteDeadlineAt,
+    resultExpiresAt: record.resultExpiresAt,
     pollAfterAt: record.pollAfterAt,
     cancelRequestedAt: record.cancelRequestedAt,
     resultAssets: manifest.resultAssets ?? [],
@@ -190,6 +199,13 @@ export function toRunnerJob(record: JobRecord): RunnerJob {
 
 function manifestFor(input: JobTransitionInput): readonly unknown[] | undefined {
   if (input.resultAssets === undefined && input.materializedAssets === undefined) return undefined;
+  if (
+    ['failed', 'cancelled', 'rejected', 'expired'].includes(input.status) &&
+    input.resultAssets?.length === 0 &&
+    input.materializedAssets?.length === 0
+  ) {
+    return [];
+  }
   const manifest: DurableRunnerManifest = {
     version: 1,
     ...(input.resultAssets === undefined ? {} : { resultAssets: input.resultAssets }),
@@ -204,6 +220,8 @@ function fieldsFor(input: JobTransitionInput): UpdateJobStatusFields {
   const fields: {
     progress?: number | null;
     remoteJobId?: string | null;
+    remoteDeadlineAt?: Date | null;
+    resultExpiresAt?: Date | null;
     errorCode?: string | null;
     errorMessage?: string | null;
     pollAfterAt?: Date | null;
@@ -213,6 +231,8 @@ function fieldsFor(input: JobTransitionInput): UpdateJobStatusFields {
   } = {};
   if ('progress' in input) fields.progress = input.progress ?? null;
   if ('remoteJobId' in input) fields.remoteJobId = input.remoteJobId ?? null;
+  if ('remoteDeadlineAt' in input) fields.remoteDeadlineAt = input.remoteDeadlineAt ?? null;
+  if ('resultExpiresAt' in input) fields.resultExpiresAt = input.resultExpiresAt ?? null;
   if ('pollAfterAt' in input) fields.pollAfterAt = input.pollAfterAt ?? null;
   if ('error' in input) {
     fields.errorCode = input.error?.code ?? null;
@@ -303,6 +323,9 @@ export class SqliteRunnerJobPort implements RunnerJobPort {
       'cancelled',
       {
         pollAfterAt: null,
+        resultManifest: [],
+        remoteDeadlineAt: null,
+        resultExpiresAt: null,
         errorCode: null,
         errorMessage: null,
         stageRetryCounts: { poll: 0, download: 0, process: 0 },
@@ -407,6 +430,7 @@ export class AssetMediaMaterializer implements MediaMaterializerPort {
     job: RunnerJob,
     assets: readonly SubmittedAsset[],
     signal: AbortSignal,
+    resolveProviderAsset?: ProviderResultResolver,
   ): Promise<readonly MaterializedAsset[]> {
     const materialized: MaterializedAsset[] = [];
     try {
@@ -420,10 +444,24 @@ export class AssetMediaMaterializer implements MediaMaterializerPort {
           ...(asset.resultId === undefined ? {} : { resultId: asset.resultId }),
           signal,
         };
-        const record =
-          asset.source === 'base64'
-            ? await this.media.materializeProviderBase64({ ...common, base64: asset.base64 })
-            : await this.media.materializeProviderUrl({ ...common, url: asset.url });
+        let record;
+        if (asset.source === 'base64') {
+          record = await this.media.materializeProviderBase64({ ...common, base64: asset.base64 });
+        } else if (asset.source === 'url') {
+          record = await this.media.materializeProviderUrl({ ...common, url: asset.url });
+        } else {
+          if (resolveProviderAsset === undefined) {
+            throw new Error('Provider-owned result cannot be materialized without a resolver.');
+          }
+          const target = await resolveProviderAsset(asset, signal);
+          record = await this.media.materializeProviderUrl({
+            ...common,
+            ...(target.claimedMimeType === undefined ? {} : { claimedMimeType: target.claimedMimeType }),
+            ...(target.headers === undefined ? {} : { headers: target.headers }),
+            providerOwned: true,
+            url: target.url,
+          });
+        }
         materialized.push(toMaterializedAsset(record, asset));
       }
       return materialized;
@@ -437,6 +475,7 @@ export class AssetMediaMaterializer implements MediaMaterializerPort {
     job: RunnerJob,
     assets: readonly MaterializedAsset[],
     signal: AbortSignal,
+    resolveProviderAsset?: ProviderResultResolver,
   ): Promise<readonly MaterializedAsset[]> {
     try {
       if (await this.media.validateProviderOutputs(job.id, assets.map(toProviderOutputRecord))) {
@@ -446,7 +485,7 @@ export class AssetMediaMaterializer implements MediaMaterializerPort {
       if (job.resultAssets.length === 0) {
         throw new Error(`Job ${job.id} has no durable Provider results to rematerialize.`);
       }
-      return await this.materialize(job, job.resultAssets, signal);
+      return await this.materialize(job, job.resultAssets, signal, resolveProviderAsset);
     } catch (error) {
       await this.media.cleanupProviderOutputs(job.id, this.outputCount(job, assets)).catch(
         () => undefined,

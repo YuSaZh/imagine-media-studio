@@ -75,6 +75,8 @@ export interface JobRecord {
   readonly stage: string;
   readonly progress: number | null;
   readonly remoteJobId: string | null;
+  readonly remoteDeadlineAt: Date | null;
+  readonly resultExpiresAt: Date | null;
   readonly idempotencyKey: string;
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
@@ -125,6 +127,8 @@ export interface UpdateJobStatusFields {
   readonly errorCode?: string | null;
   readonly errorMessage?: string | null;
   readonly pollAfterAt?: Date | null;
+  readonly remoteDeadlineAt?: Date | null;
+  readonly resultExpiresAt?: Date | null;
   readonly completedAt?: Date | null;
   readonly resultManifest?: readonly unknown[];
   readonly stageRetryCounts?: StageRetryCounts;
@@ -193,6 +197,8 @@ function mapJob(row: typeof jobs.$inferSelect): JobRecord {
     stage: row.stage,
     progress: row.progress,
     remoteJobId: row.remoteJobId,
+    remoteDeadlineAt: row.remoteDeadlineAt,
+    resultExpiresAt: row.resultExpiresAt,
     idempotencyKey: row.idempotencyKey,
     errorCode: row.errorCode,
     errorMessage: row.errorMessage,
@@ -246,6 +252,8 @@ function statusUpdateValues(
   if ('errorCode' in fields) changes.errorCode = fields.errorCode ?? null;
   if ('errorMessage' in fields) changes.errorMessage = fields.errorMessage ?? null;
   if ('pollAfterAt' in fields) changes.pollAfterAt = fields.pollAfterAt ?? null;
+  if ('remoteDeadlineAt' in fields) changes.remoteDeadlineAt = fields.remoteDeadlineAt ?? null;
+  if ('resultExpiresAt' in fields) changes.resultExpiresAt = fields.resultExpiresAt ?? null;
   if ('completedAt' in fields) changes.completedAt = fields.completedAt ?? null;
   if (fields.resultManifest !== undefined) {
     changes.resultManifestJson = JSON.stringify(fields.resultManifest);
@@ -303,6 +311,8 @@ export class JobRepository {
           stage: 'queued',
           progress: null,
           remoteJobId: null,
+          remoteDeadlineAt: null,
+          resultExpiresAt: null,
           idempotencyKey: randomUUID(),
           errorCode: null,
           errorMessage: null,
@@ -613,7 +623,14 @@ export class JobRepository {
           cancelRequestedAt: now,
           status: nextStatus,
           stage: nextStatus === 'cancelled' ? 'cancelled' : 'cancel_requested',
-          ...(nextStatus === 'cancelled' ? { stageRetryCountsJson: '{}' } : {}),
+          ...(nextStatus === 'cancelled'
+            ? {
+                stageRetryCountsJson: '{}',
+                resultManifestJson: '[]',
+                remoteDeadlineAt: null,
+                resultExpiresAt: null,
+              }
+            : {}),
           updatedAt: now,
           revision: expectedRevision + 1,
         })
@@ -664,6 +681,9 @@ export class JobRepository {
           errorCode: null,
           errorMessage: null,
           pollAfterAt: null,
+          resultManifestJson: '[]',
+          remoteDeadlineAt: null,
+          resultExpiresAt: null,
           stageRetryCountsJson: '{}',
           updatedAt: now,
           revision: expectedRevision + 1,
@@ -737,6 +757,8 @@ export class JobRepository {
           stage: 'queued',
           progress: null,
           remoteJobId: null,
+          remoteDeadlineAt: null,
+          resultExpiresAt: null,
           idempotencyKey: randomUUID(),
           errorCode: null,
           errorMessage: null,

@@ -89,14 +89,15 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     allowInsecureHttp: options.config.allowHttpMediaDownloads,
     allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
   });
+  const providerNetworkPolicy = new NetworkPolicy({
+    allowInsecureHttp: options.config.allowInsecureProviderHttp,
+    allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
+  });
   const providerHttp = createProviderHttpClient({
     // Provider credentials must never be sent over the media-download HTTP
     // exception. Provider HTTP is independently opt-in and still uses the
     // private-network switch as a separate guard.
-    policy: new NetworkPolicy({
-      allowInsecureHttp: options.config.allowInsecureProviderHttp,
-      allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
-    }),
+    policy: providerNetworkPolicy,
     ...(options.providerHttpExecutor === undefined ? {} : { executor: options.providerHttpExecutor }),
   });
   const providerRegistry = new ProviderRegistry(providerRepository, vault, { http: providerHttp });
@@ -115,6 +116,9 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const remoteDownloader = new RemoteMediaDownloader(
     new SafeHttpTransport({ policy: networkPolicy }),
   );
+  const providerRemoteDownloader = new RemoteMediaDownloader(
+    new SafeHttpTransport({ policy: providerNetworkPolicy }),
+  );
   const uploadMedia = new AssetMediaService({
     imageProcessor,
     maxImageBytes: options.config.maxImageUploadBytes,
@@ -128,6 +132,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     maxImageBytes: options.config.maxRemoteImageBytes,
     maxVideoBytes: options.config.maxRemoteVideoBytes,
     paths: storage,
+    providerRemoteDownloader,
     remoteDownloader,
     repository: mediaRepository,
     videoProcessor,

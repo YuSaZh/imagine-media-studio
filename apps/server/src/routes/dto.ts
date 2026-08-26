@@ -72,6 +72,7 @@ export function toJobDto(record: JobRecord, outputCount: number): JobDto {
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     completedAt: timestamp(record.completedAt),
+    resultExpiresAt: timestamp(record.resultExpiresAt),
   });
 }
 

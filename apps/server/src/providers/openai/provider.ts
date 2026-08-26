@@ -750,7 +750,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
       response = typeof http === 'function' ? await http(request) : await http.request(request);
     } catch (error) {
       if (error instanceof OpenAiValidationError || error instanceof OpenAiTransportError) throw error;
-      throw new OpenAiTransportError('OpenAI connection request failed.');
+      throw new OpenAiTransportError('OpenAI connection request failed.', { cause: error });
     }
     try {
       const statusCode = response.statusCode ?? response.status;

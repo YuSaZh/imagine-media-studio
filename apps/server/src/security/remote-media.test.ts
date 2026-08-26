@@ -109,6 +109,58 @@ describe('NetworkPolicy', () => {
 });
 
 describe('SafeHttpTransport', () => {
+  it('strips the complete hop-by-hop header set before dispatch', async () => {
+    const response = rawResponse(200, { 'content-type': 'image/png' }, PNG);
+    let captured: Readonly<Record<string, string>> | undefined;
+    const transport = new SafeHttpTransport({
+      executor: async (_target, request) => {
+        captured = request.headers;
+        return response;
+      },
+      policy: new NetworkPolicy({ resolver: publicResolver }),
+    });
+    await transport.fetch('https://public.example/result', {
+      headers: {
+        Connection: 'keep-alive',
+        'Content-Length': '99',
+        Host: 'forged.example',
+        'Keep-Alive': 'timeout=5',
+        'Proxy-Auth': 'forged',
+        'Proxy-Authenticate': 'Basic forged',
+        'Proxy-Connection': 'keep-alive',
+        'Proxy-Authorization': 'Basic forged',
+        TE: 'trailers',
+        Trailer: 'X-Trailer',
+        'Transfer-Encoding': 'chunked',
+        Upgrade: 'websocket',
+        'X-Trace': 'kept',
+      },
+    });
+    expect(captured).toEqual({ 'X-Trace': 'kept' });
+    await response.dispose();
+  });
+
+  it('keeps provider HTTP policy independent from public media HTTP policy', async () => {
+    const response = rawResponse(200, { 'content-type': 'image/png' }, PNG);
+    const executor: PinnedRequestExecutor = async () => response;
+    const providerPolicy = new NetworkPolicy({
+      allowInsecureHttp: true,
+      allowPrivateNetwork: true,
+      resolver: () => Promise.resolve([{ address: '192.168.1.20', family: 4 }]),
+    });
+    const publicMediaPolicy = new NetworkPolicy({
+      allowInsecureHttp: false,
+      allowPrivateNetwork: false,
+      resolver: () => Promise.resolve([{ address: '192.168.1.20', family: 4 }]),
+    });
+    await expect(new SafeHttpTransport({ executor, policy: providerPolicy }).fetch('http://provider.lan/result'))
+      .resolves.toBeDefined();
+    await expect(new SafeHttpTransport({ executor, policy: publicMediaPolicy }).fetch('http://provider.lan/result'))
+      .rejects.toThrow(UnsafeRemoteUrlError);
+    expect(response.disposed()).toBe(false);
+    await response.dispose();
+  });
+
   it('revalidates redirects, pins each hop, and strips secrets across origins', async () => {
     const first = rawResponse(302, { location: 'https://second.example/final' });
     const second = rawResponse(200, { 'content-type': 'image/png' }, PNG);
@@ -152,9 +204,72 @@ describe('SafeHttpTransport', () => {
     await expect(transport.fetch('https://public.example/start')).rejects.toThrow('not allowed');
     expect(executor).toHaveBeenCalledTimes(1);
   });
+
+  it('classifies redirect-limit failures without retaining the target URL', async () => {
+    const response = rawResponse(302, { location: 'https://second.example/final' });
+    const transport = new SafeHttpTransport({
+      executor: async () => response,
+      maxRedirects: 0,
+      policy: new NetworkPolicy({ resolver: publicResolver }),
+    });
+    await expect(transport.fetch('https://first.example/start')).rejects.toMatchObject({
+      code: 'redirect_limit',
+    });
+  });
 });
 
 describe('RemoteMediaDownloader', () => {
+  it('classifies safe remote HTTP failures without retaining URL or body data', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ims-remote-error-codes-'));
+    temporaryDirectories.push(root);
+    const paths = getStoragePaths(root);
+    await ensureStorage(paths);
+    for (const statusCode of [404, 410, 500, 408, 429]) {
+      const response = rawResponse(statusCode, { 'content-type': 'image/png' }, Buffer.from('secret-body'));
+      const downloader = new RemoteMediaDownloader(
+        new SafeHttpTransport({
+          executor: async () => response,
+          policy: new NetworkPolicy({ resolver: publicResolver }),
+        }),
+      );
+      let caught: unknown;
+      try {
+        await downloader.download({
+          dataRoot: paths.root,
+          expectedKind: 'image',
+          maxBytes: 1024,
+          temporaryDirectory: paths.temporary,
+          url: 'https://public.example/result',
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({ code: 'http_status', statusCode });
+      expect(JSON.stringify(caught)).not.toContain('public.example');
+      expect(JSON.stringify(caught)).not.toContain('secret-body');
+    }
+    for (const headers of [
+      { 'content-length': 'not-a-number', 'content-type': 'image/png' },
+      { 'content-encoding': 'gzip', 'content-type': 'image/png' },
+    ]) {
+      const response = rawResponse(200, headers, PNG);
+      const downloader = new RemoteMediaDownloader(
+        new SafeHttpTransport({
+          executor: async () => response,
+          policy: new NetworkPolicy({ resolver: publicResolver }),
+        }),
+      );
+      await expect(downloader.download({
+        dataRoot: paths.root,
+        maxBytes: 1024,
+        temporaryDirectory: paths.temporary,
+        url: 'https://public.example/result',
+      })).rejects.toMatchObject({
+        code: headers['content-length'] === 'not-a-number' ? 'invalid_content_length' : 'compressed_response',
+      });
+    }
+  });
+
   it('streams a permitted response to a bounded staged file and detects MIME', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ims-remote-download-'));
     temporaryDirectories.push(root);

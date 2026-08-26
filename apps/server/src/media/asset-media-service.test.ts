@@ -11,6 +11,7 @@ import { ensureStorage, getStoragePaths } from '../storage/paths.js';
 import {
   AssetMediaService,
   InvalidBase64MediaError,
+  InvalidProviderDownloadTargetError,
 } from './asset-media-service.js';
 import { SharpImageProcessor } from './image-processor.js';
 import { auditMediaConsistency } from './maintenance.js';
@@ -20,6 +21,7 @@ import type {
   NewAssetMediaRecord,
 } from './types.js';
 import { VideoProcessor } from './video-processor.js';
+import { stageBuffer } from '../storage/atomic-file.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -96,6 +98,120 @@ async function rgbaPng(width: number, height: number, alpha: readonly number[]):
 }
 
 describe('AssetMediaService', () => {
+  it('uses the provider-scoped downloader for provider-owned results', async () => {
+    const { paths, png, repository } = await fixture();
+    const publicDownloader = { download: vi.fn() };
+    const providerDownloader = {
+      download: vi.fn(async (input: {
+        dataRoot: string;
+        headers?: Readonly<Record<string, string>>;
+        temporaryDirectory: string;
+      }) => ({
+        finalUrl: new URL('https://provider.example/video.mp4'),
+        mediaType: { extension: 'png', kind: 'image' as const, mimeType: 'image/png' },
+        staged: await stageBuffer({
+          bytes: png,
+          dataRoot: input.dataRoot,
+          maxBytes: 1024 * 1024,
+          temporaryDirectory: input.temporaryDirectory,
+        }),
+      })),
+    };
+    const service = new AssetMediaService({
+      imageProcessor: new SharpImageProcessor({ thumbnailSize: 32 }),
+      maxBytes: 1024 * 1024,
+      paths,
+      providerRemoteDownloader: providerDownloader as never,
+      remoteDownloader: publicDownloader as never,
+      repository,
+      videoProcessor: new VideoProcessor(),
+    });
+
+    await service.materializeProviderUrl({
+      claimedMimeType: 'image/png',
+      expectedKind: 'image',
+      jobId: 'provider-owned-job',
+      outputSlot: 0,
+      providerOwned: true,
+      url: 'https://provider.example/video.mp4',
+    });
+
+    expect(providerDownloader.download).toHaveBeenCalledTimes(1);
+    expect(publicDownloader.download).not.toHaveBeenCalled();
+  });
+
+  it('rejects provider result URL credentials and header injection before download', async () => {
+    const { paths, png, repository } = await fixture();
+    const providerDownloader = {
+      download: vi.fn(async (input: {
+        dataRoot: string;
+        headers?: Readonly<Record<string, string>>;
+        temporaryDirectory: string;
+      }) => ({
+        finalUrl: new URL('https://provider.example/video.mp4'),
+        mediaType: { extension: 'png', kind: 'image' as const, mimeType: 'image/png' },
+        staged: await stageBuffer({
+          bytes: png,
+          dataRoot: input.dataRoot,
+          maxBytes: 1024 * 1024,
+          temporaryDirectory: input.temporaryDirectory,
+        }),
+      })),
+    };
+    const service = new AssetMediaService({
+      imageProcessor: new SharpImageProcessor({ thumbnailSize: 32 }),
+      maxBytes: 1024 * 1024,
+      paths,
+      providerRemoteDownloader: providerDownloader as never,
+      repository,
+      videoProcessor: new VideoProcessor(),
+    });
+    await expect(service.materializeProviderUrl({
+      expectedKind: 'video',
+      headers: { Authorization: 'Bearer secret\r\nX-Leak: yes' },
+      jobId: 'provider-owned-invalid',
+      outputSlot: 0,
+      providerOwned: true,
+      url: 'https://user:pass@provider.example/video.mp4',
+    })).rejects.toBeInstanceOf(InvalidProviderDownloadTargetError);
+    await expect(service.materializeProviderUrl({
+      expectedKind: 'video',
+      headers: { Authorization: 'Bearer secret\r\nX-Leak: yes' },
+      jobId: 'provider-owned-invalid-header',
+      outputSlot: 0,
+      providerOwned: true,
+      url: 'https://provider.example/video.mp4',
+    })).rejects.toBeInstanceOf(InvalidProviderDownloadTargetError);
+    await expect(service.materializeProviderUrl({
+      expectedKind: 'video',
+      jobId: 'provider-owned-invalid-fragment',
+      outputSlot: 0,
+      providerOwned: true,
+      url: 'https://provider.example/video.mp4#fragment',
+    })).rejects.toBeInstanceOf(InvalidProviderDownloadTargetError);
+    await expect(service.materializeProviderUrl({
+      expectedKind: 'video',
+      jobId: 'provider-owned-invalid-query',
+      outputSlot: 0,
+      providerOwned: true,
+      url: 'https://provider.example/video.mp4?token=secret',
+    })).rejects.toBeInstanceOf(InvalidProviderDownloadTargetError);
+    await service.materializeProviderUrl({
+      claimedMimeType: 'image/png',
+      expectedKind: 'image',
+      headers: { Authorization: 'Bearer first', authorization: 'Bearer last', Accept: 'image/*' },
+      jobId: 'provider-owned-normalized-headers',
+      outputSlot: 0,
+      providerOwned: true,
+      url: 'https://provider.example/video.mp4?variant=video&format=fixture',
+    });
+    expect(providerDownloader.download).toHaveBeenCalledTimes(1);
+    expect(providerDownloader.download.mock.calls[0]?.[0].headers).toEqual({
+      authorization: 'Bearer last',
+      Accept: 'image/*',
+    });
+  });
+
   it('materializes an upload, derives a thumbnail, persists relative paths, and serves variants', async () => {
     const { paths, png, repository, service } = await fixture();
     const asset = await service.materializeUpload({

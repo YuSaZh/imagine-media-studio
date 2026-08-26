@@ -29,6 +29,8 @@ interface LegacyJobRecord {
   retryCount?: number;
   submitAttempt?: number;
   remoteJobId?: string | null;
+  remoteDeadlineAt?: Date | null;
+  resultExpiresAt?: Date | null;
   pollAfterAt?: Date | null;
   cancelRequestedAt?: Date | null;
 }
@@ -192,6 +194,8 @@ class LegacyJobPort implements RunnerJobPort {
     const casFields = {
       ...fields,
       ...('remoteJobId' in input ? { remoteJobId: input.remoteJobId ?? null } : {}),
+      ...('remoteDeadlineAt' in input ? { remoteDeadlineAt: input.remoteDeadlineAt ?? null } : {}),
+      ...('resultExpiresAt' in input ? { resultExpiresAt: input.resultExpiresAt ?? null } : {}),
       ...('pollAfterAt' in input ? { pollAfterAt: input.pollAfterAt ?? null } : {}),
       ...(input.resultAssets ? { resultManifest: input.resultAssets } : {}),
     };
@@ -258,6 +262,8 @@ class LegacyJobPort implements RunnerJobPort {
       idempotencyKey: record.idempotencyKey ?? record.id,
       attempt: record.submitAttempt ?? this.attempts.get(record.id) ?? 0,
       remoteJobId: record.remoteJobId ?? this.remoteJobIds.get(record.id) ?? null,
+      remoteDeadlineAt: record.remoteDeadlineAt ?? null,
+      resultExpiresAt: record.resultExpiresAt ?? null,
       pollAfterAt: record.pollAfterAt ?? this.pollAfterDates.get(record.id) ?? null,
       cancelRequestedAt: record.cancelRequestedAt ?? null,
       resultAssets: this.resultAssets.get(record.id) ?? [],

@@ -34,9 +34,13 @@ function singleHeader(headers: IncomingHttpHeaders, name: string): string | unde
 function parseContentLength(headers: IncomingHttpHeaders): number | null {
   const value = singleHeader(headers, 'content-length');
   if (value === undefined) return null;
-  if (!/^\d+$/.test(value)) throw new RemoteHttpError('Remote Content-Length is invalid.');
+  if (!/^\d+$/.test(value)) {
+    throw new RemoteHttpError('Remote Content-Length is invalid.', 'invalid_content_length');
+  }
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) throw new RemoteHttpError('Remote Content-Length is invalid.');
+  if (!Number.isSafeInteger(parsed)) {
+    throw new RemoteHttpError('Remote Content-Length is invalid.', 'invalid_content_length');
+  }
   return parsed;
 }
 
@@ -51,15 +55,25 @@ export class RemoteMediaDownloader {
     let staged: StagedFile | null = null;
     try {
       if (response.statusCode !== 200) {
-        throw new RemoteHttpError(`Remote media request returned HTTP ${response.statusCode}.`);
+        throw new RemoteHttpError(
+          `Remote media request returned HTTP ${response.statusCode}.`,
+          'http_status',
+          response.statusCode,
+        );
       }
       const encoding = singleHeader(response.headers, 'content-encoding');
       if (encoding !== undefined && encoding.toLowerCase() !== 'identity') {
-        throw new RemoteHttpError('Compressed remote media responses are not accepted.');
+        throw new RemoteHttpError(
+          'Compressed remote media responses are not accepted.',
+          'compressed_response',
+        );
       }
       const contentLength = parseContentLength(response.headers);
       if (contentLength !== null && contentLength > options.maxBytes) {
-        throw new RemoteHttpError(`Remote media exceeds the ${options.maxBytes} byte limit.`);
+        throw new RemoteHttpError(
+          `Remote media exceeds the ${options.maxBytes} byte limit.`,
+          'response_body_too_large',
+        );
       }
 
       staged = await stageReadable({

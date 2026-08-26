@@ -46,6 +46,10 @@ export class InvalidBase64MediaError extends Error {
   public override readonly name = 'InvalidBase64MediaError';
 }
 
+export class InvalidProviderDownloadTargetError extends Error {
+  public override readonly name = 'InvalidProviderDownloadTargetError';
+}
+
 export type InvalidMaskMediaCode =
   | 'mask_dimension_mismatch'
   | 'mask_has_no_edit_area'
@@ -74,6 +78,7 @@ export interface AssetMediaServiceOptions {
   maxVideoBytes?: number;
   paths: StoragePaths;
   remoteDownloader?: RemoteMediaDownloader;
+  providerRemoteDownloader?: RemoteMediaDownloader;
   repository: AssetMediaRepositoryPort;
   videoProcessor: VideoProcessor;
 }
@@ -84,6 +89,36 @@ interface PreparedMedia {
 }
 
 const PROVIDER_OUTPUT_EXTENSIONS = ['avif', 'gif', 'jpg', 'mov', 'mp4', 'png', 'webm', 'webp'] as const;
+const PROVIDER_HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const PROVIDER_HOP_BY_HOP_HEADERS = new Set([
+  'connection',
+  'content-length',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+  'host',
+]);
+const PROVIDER_CREDENTIAL_QUERY_NAMES = new Set([
+  'access_token',
+  'api_key',
+  'apikey',
+  'auth',
+  'authorization',
+  'bearer',
+  'credential',
+  'credentials',
+  'key',
+  'password',
+  'secret',
+  'sig',
+  'signature',
+  'token',
+]);
 
 const ProviderOutputManifestSchema = z.object({
   version: z.literal(1),
@@ -145,6 +180,59 @@ function parseBase64(input: string, maxBytes: number): { bytes: Buffer; claimedM
   return claimedMimeType === undefined ? { bytes } : { bytes, claimedMimeType };
 }
 
+function validateProviderDownloadTarget(
+  urlValue: string,
+  headers: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (typeof urlValue !== 'string' || urlValue.length === 0 || urlValue.length > 2_048) {
+    throw new InvalidProviderDownloadTargetError('Provider result URL is invalid.');
+  }
+  let url: URL;
+  try {
+    url = new URL(urlValue);
+  } catch {
+    throw new InvalidProviderDownloadTargetError('Provider result URL is invalid.');
+  }
+  if (
+    (url.protocol !== 'https:' && url.protocol !== 'http:') ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new InvalidProviderDownloadTargetError('Provider result URL is invalid.');
+  }
+  for (const [name] of url.searchParams) {
+    const normalized = name.trim().toLowerCase();
+    if (
+      normalized !== 'variant' &&
+      (PROVIDER_CREDENTIAL_QUERY_NAMES.has(normalized) ||
+        normalized.startsWith('x-amz-') ||
+        normalized.startsWith('x-goog-') ||
+        normalized.startsWith('x-ms-') ||
+        normalized.startsWith('oauth_'))
+    ) {
+      throw new InvalidProviderDownloadTargetError('Provider result URL contains credential-like query data.');
+    }
+  }
+  const entries = Object.entries(headers ?? {});
+  if (entries.length > 64) throw new InvalidProviderDownloadTargetError('Provider result headers exceed the safety limit.');
+  const normalizedHeaders: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    if (typeof name !== 'string' || typeof value !== 'string' ||
+      !PROVIDER_HEADER_NAME.test(name) || PROVIDER_HOP_BY_HOP_HEADERS.has(name.toLowerCase())) {
+      throw new InvalidProviderDownloadTargetError('Provider result header name is invalid.');
+    }
+    if (value.length > 8_192 || /\r|\n/.test(value)) {
+      throw new InvalidProviderDownloadTargetError('Provider result header value is invalid.');
+    }
+    for (const existing of Object.keys(normalizedHeaders)) {
+      if (existing.toLowerCase() === name.toLowerCase()) delete normalizedHeaders[existing];
+    }
+    normalizedHeaders[name] = value;
+  }
+  return Object.keys(normalizedHeaders).length === 0 ? undefined : normalizedHeaders;
+}
+
 function targetDirectory(paths: StoragePaths, input: MediaSourceInput): string {
   if (input.role === 'output') return paths.originals;
   if (input.role === 'mask') return paths.masks;
@@ -161,6 +249,7 @@ export class AssetMediaService {
   private readonly maxVideoBytes: number;
   private readonly paths: StoragePaths;
   private readonly remoteDownloader: RemoteMediaDownloader | undefined;
+  private readonly providerRemoteDownloader: RemoteMediaDownloader | undefined;
   private readonly repository: AssetMediaRepositoryPort;
   private readonly videoProcessor: VideoProcessor;
 
@@ -171,6 +260,7 @@ export class AssetMediaService {
     this.maxVideoBytes = options.maxVideoBytes ?? defaultMaxBytes;
     this.paths = options.paths;
     this.remoteDownloader = options.remoteDownloader;
+    this.providerRemoteDownloader = options.providerRemoteDownloader;
     this.repository = options.repository;
     this.videoProcessor = options.videoProcessor;
   }
@@ -262,6 +352,9 @@ export class AssetMediaService {
     input: ProviderOutputUrlInput,
   ): Promise<ProviderOutputMediaRecord> {
     assertOutputSlot(input.outputSlot);
+    const safeHeaders = input.providerOwned
+      ? validateProviderDownloadTarget(input.url, input.headers)
+      : input.headers;
     const sourceFingerprint = this.providerSourceFingerprint(input, sha256Text(input.url));
     const reusable = await this.readReusableProviderOutput(
       input,
@@ -269,17 +362,18 @@ export class AssetMediaService {
       input.claimedMimeType,
     );
     if (reusable !== null) return reusable;
-    if (this.remoteDownloader === undefined) {
+    const downloader = input.providerOwned ? this.providerRemoteDownloader : this.remoteDownloader;
+    if (downloader === undefined) {
       throw new Error('Remote media download is not configured.');
     }
-    const downloaded = await this.remoteDownloader.download({
+    const downloaded = await downloader.download({
       dataRoot: this.paths.root,
       maxBytes: this.maxBytesFor(input.expectedKind),
       temporaryDirectory: this.paths.temporary,
       url: input.url,
       ...(input.claimedMimeType === undefined ? {} : { claimedMimeType: input.claimedMimeType }),
       expectedKind: input.expectedKind,
-      ...(input.headers === undefined ? {} : { headers: input.headers }),
+      ...(safeHeaders === undefined ? {} : { headers: safeHeaders }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
     return this.finalizeProviderOutput(

@@ -17,7 +17,7 @@ afterEach(async () => {
 
 function request(
   assetIds: readonly string[],
-  roles?: readonly ('source' | 'reference' | 'mask')[],
+  roles?: readonly ('source' | 'reference' | 'mask' | 'first_frame')[],
 ): GenerationRequest {
   return {
     operation: 'image.edit',
@@ -28,6 +28,16 @@ function request(
       assetId,
       role: roles?.[index] ?? (index === 0 ? 'source' : 'reference'),
     })),
+  };
+}
+
+function videoRequest(assetId?: string): GenerationRequest {
+  return {
+    operation: assetId === undefined ? 'video.generate' : 'video.image_to_video',
+    providerId: 'provider',
+    modelId: 'video-model',
+    prompt: 'Animate the input',
+    inputs: assetId === undefined ? [] : [{ assetId, role: 'first_frame' }],
   };
 }
 
@@ -189,5 +199,43 @@ describe('ProviderInputLoader', () => {
     await expect(loader.load(request(['a']), controller.signal)).rejects.toMatchObject({
       name: 'AbortError',
     });
+  });
+
+  it('loads a first-frame image for video and rejects image inputs for video operations', async () => {
+    const bytes = Buffer.from('frame');
+    const frame = asset('frame', bytes, {
+      role: 'first_frame',
+      originalFilename: 'frame.png',
+    });
+    const loader = await harness([frame], { 'frame.png': bytes });
+    await expect(loader.load(videoRequest('frame'))).resolves.toMatchObject([{
+      assetId: 'frame',
+      role: 'first_frame',
+      fileSize: bytes.byteLength,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }]);
+    await expect(loader.load({ ...videoRequest(), inputs: [{ assetId: 'frame', role: 'reference' }] })).rejects.toMatchObject({
+      code: 'provider_input_invalid',
+    });
+  });
+
+  it('rejects unverified video edit/extend source inputs in the current runtime', async () => {
+    const bytes = Buffer.from('video');
+    const source = asset('video', bytes, {
+      type: 'video',
+      role: 'upload',
+      filePath: 'media/uploads/video.mp4',
+      originalFilename: 'video.mp4',
+      mimeType: 'video/mp4',
+      width: 1280,
+      height: 720,
+      durationMs: 4_000,
+    });
+    const loader = await harness([source], { 'video.mp4': bytes });
+    await expect(loader.load({
+      ...videoRequest('video'),
+      operation: 'video.edit',
+      inputs: [{ assetId: 'video', role: 'source' }],
+    })).rejects.toMatchObject({ code: 'provider_input_invalid' });
   });
 });

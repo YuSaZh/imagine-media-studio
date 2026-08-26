@@ -76,6 +76,10 @@ export const jobs = sqliteTable(
     stage: text('stage').notNull(),
     progress: integer('progress'),
     remoteJobId: text('remote_job_id'),
+    /** Local maximum polling deadline, independent from provider result expiry. */
+    remoteDeadlineAt: integer('remote_deadline_at', { mode: 'timestamp_ms' }),
+    /** Provider-declared downloadable result expiry. */
+    resultExpiresAt: integer('result_expires_at', { mode: 'timestamp_ms' }),
     idempotencyKey: text('idempotency_key').notNull(),
     errorCode: text('error_code'),
     errorMessage: text('error_message'),

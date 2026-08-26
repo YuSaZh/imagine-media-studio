@@ -34,8 +34,28 @@ export interface SafeHttpTransportOptions {
   policy: NetworkPolicy;
 }
 
+export type RemoteHttpErrorCode =
+  | 'compressed_response'
+  | 'download_error'
+  | 'http_status'
+  | 'invalid_content_length'
+  | 'invalid_redirect'
+  | 'redirect_limit'
+  | 'response_body_too_large';
+
 export class RemoteHttpError extends Error {
   public override readonly name = 'RemoteHttpError';
+
+  public constructor(
+    message: string,
+    public readonly code: RemoteHttpErrorCode = 'download_error',
+    statusCode?: number,
+  ) {
+    super(message);
+    if (statusCode !== undefined) this.statusCode = statusCode;
+  }
+
+  public readonly statusCode?: number;
 }
 
 function pinnedLookup(target: ValidatedRemoteTarget): LookupFunction {
@@ -86,18 +106,23 @@ function locationHeader(headers: IncomingHttpHeaders): string | null {
 }
 
 function stripHopByHopHeaders(headers: Readonly<Record<string, string>>): Record<string, string> {
+  const hopByHop = new Set([
+    'connection',
+    'content-length',
+    'keep-alive',
+    'host',
+    'proxy-auth',
+    'proxy-authenticate',
+    'proxy-connection',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ]);
   const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
-    const normalized = name.toLowerCase();
-    if (
-      normalized === 'connection' ||
-      normalized === 'content-length' ||
-      normalized === 'host' ||
-      normalized === 'proxy-authorization' ||
-      normalized === 'transfer-encoding'
-    ) {
-      continue;
-    }
+    if (hopByHop.has(name.toLowerCase())) continue;
     result[name] = value;
   }
   return result;
@@ -144,14 +169,20 @@ export class SafeHttpTransport {
 
       if (redirects >= this.maxRedirects) {
         await response.dispose();
-        throw new RemoteHttpError('Remote media URL exceeded the redirect limit.');
+        throw new RemoteHttpError(
+          'Remote media URL exceeded the redirect limit.',
+          'redirect_limit',
+        );
       }
       let next: URL;
       try {
         next = new URL(location, current);
       } catch {
         await response.dispose();
-        throw new RemoteHttpError('Remote server returned an invalid redirect URL.');
+        throw new RemoteHttpError(
+          'Remote server returned an invalid redirect URL.',
+          'invalid_redirect',
+        );
       }
       if (next.origin !== current.origin) headers = stripCrossOriginSecrets(headers);
       await response.dispose();

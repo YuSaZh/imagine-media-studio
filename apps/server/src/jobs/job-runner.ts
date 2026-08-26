@@ -4,6 +4,7 @@ import type {
   ProviderError,
   ProviderErrorKind,
   ProviderInput,
+  SubmittedAsset,
 } from '@imagine/provider-contract';
 import type { JobStatus } from '@imagine/shared';
 import PQueue from 'p-queue';
@@ -14,7 +15,11 @@ import {
   type LegacyJobRepository,
   type LegacyStoragePaths,
 } from './legacy-adapters.js';
-import { InvalidBase64MediaError, InvalidMaskMediaError } from '../media/asset-media-service.js';
+import {
+  InvalidBase64MediaError,
+  InvalidMaskMediaError,
+  InvalidProviderDownloadTargetError,
+} from '../media/asset-media-service.js';
 import { InvalidImageError } from '../media/image-processor.js';
 import { UnsupportedMediaTypeError } from '../media/mime.js';
 import { UnsafeRemoteUrlError } from '../security/network-policy.js';
@@ -29,6 +34,7 @@ import type {
   RunnerJob,
 } from './ports.js';
 import { ProviderInputLoaderError } from '../providers/provider-input-loader.js';
+import { RemoteHttpError } from '../security/safe-http-transport.js';
 import {
   clearStageRetryCount,
   EMPTY_STAGE_RETRY_COUNTS,
@@ -38,6 +44,7 @@ import {
 
 type WorkKind = 'submit' | 'poll' | 'download' | 'process';
 type RetriableWorkKind = Exclude<WorkKind, 'submit'>;
+const MAX_PROVIDER_DELAY_MS = 24 * 60 * 60 * 1_000;
 
 const TERMINAL_STATUSES = new Set<JobStatus>([
   'completed',
@@ -46,6 +53,14 @@ const TERMINAL_STATUSES = new Set<JobStatus>([
   'rejected',
   'expired',
 ]);
+
+export class ProviderResultExpiredError extends Error {
+  public override readonly name = 'ProviderResultExpiredError';
+}
+
+export class ProviderResultInvalidError extends Error {
+  public override readonly name = 'ProviderResultInvalidError';
+}
 
 const systemClock: RunnerClock = {
   now: () => Date.now(),
@@ -62,7 +77,49 @@ function runnerError(
   return { code, kind, message, retryable: false };
 }
 
+function validDate(value: Date | undefined): value is Date {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
+function validNullableDate(value: Date | null): boolean {
+  return value === null || validDate(value);
+}
+
+function boundedDelay(value: number | undefined, fallback: number): number {
+  const safeFallback = Number.isFinite(fallback) && fallback >= 0
+    ? Math.floor(fallback)
+    : 1_000;
+  const candidate = value ?? safeFallback;
+  if (!Number.isFinite(candidate) || candidate < 0) return Math.min(safeFallback, MAX_PROVIDER_DELAY_MS);
+  return Math.min(Math.floor(candidate), MAX_PROVIDER_DELAY_MS);
+}
+
 function deterministicOutputError(error: unknown): ProviderError | null {
+  if (error instanceof ProviderResultExpiredError) {
+    return runnerError('provider_result_expired', error.message, 'expired');
+  }
+  if (error instanceof ProviderResultInvalidError) {
+    return runnerError('provider_result_invalid', error.message, 'rejected');
+  }
+  if (error instanceof RemoteHttpError) {
+    if (
+      error.code === 'compressed_response' ||
+      error.code === 'invalid_content_length' ||
+      error.code === 'invalid_redirect' ||
+      error.code === 'redirect_limit' ||
+      error.code === 'response_body_too_large'
+    ) {
+      return runnerError('provider_output_rejected', error.message, 'rejected');
+    }
+    if (error.code === 'http_status') {
+      const status = error.statusCode;
+      if (status === 408 || status === 429 || (status !== undefined && status >= 500)) return null;
+      if (status !== undefined && status >= 400 && status < 500) {
+        return runnerError('provider_output_unavailable', error.message, 'rejected');
+      }
+      return runnerError('provider_output_rejected', error.message, 'rejected');
+    }
+  }
   if (
     error instanceof UnsafeRemoteUrlError ||
     error instanceof UnsafeStoragePathError ||
@@ -70,7 +127,8 @@ function deterministicOutputError(error: unknown): ProviderError | null {
     error instanceof AtomicFileTooLargeError ||
     error instanceof InvalidBase64MediaError ||
     error instanceof InvalidImageError ||
-    error instanceof InvalidMaskMediaError
+    error instanceof InvalidMaskMediaError ||
+    error instanceof InvalidProviderDownloadTargetError
   ) {
     return runnerError(
       'provider_output_rejected',
@@ -106,6 +164,7 @@ export class JobRunner {
   private readonly maxAttempts: number;
   private readonly defaultPollAfterMs: number;
   private readonly defaultRetryAfterMs: number;
+  private readonly defaultRemoteDeadlineMs: number;
   private readonly imageSubmitQueue: PQueue;
   private readonly videoSubmitQueue: PQueue;
   private readonly pollQueue: PQueue;
@@ -157,6 +216,14 @@ export class JobRunner {
     this.maxAttempts = maxAttempts;
     this.defaultPollAfterMs = this.options.defaultPollAfterMs ?? 1_000;
     this.defaultRetryAfterMs = this.options.defaultRetryAfterMs ?? 1_000;
+    if (!Number.isFinite(this.defaultPollAfterMs) || this.defaultPollAfterMs < 0 ||
+      !Number.isFinite(this.defaultRetryAfterMs) || this.defaultRetryAfterMs < 0) {
+      throw new RangeError('JobRunner retry and poll delays must be finite non-negative numbers.');
+    }
+    this.defaultRemoteDeadlineMs = this.options.defaultRemoteDeadlineMs ?? 6 * 60 * 60 * 1_000;
+    if (!Number.isSafeInteger(this.defaultRemoteDeadlineMs) || this.defaultRemoteDeadlineMs < 1) {
+      throw new RangeError('defaultRemoteDeadlineMs must be a positive safe integer.');
+    }
     const concurrency = this.options.concurrency ?? {};
     this.imageSubmitQueue = new PQueue({ concurrency: concurrency.imageSubmit ?? 2 });
     this.videoSubmitQueue = new PQueue({ concurrency: concurrency.videoSubmit ?? 2 });
@@ -217,14 +284,16 @@ export class JobRunner {
   }
 
   private async recoverCancellation(job: RunnerJob): Promise<void> {
+    const remoteJobId = job.remoteJobId;
+    const provisionalAssets = job.materializedAssets;
     const committed = await this.options.jobs.recoverCancellation(job.id, job.revision);
     if (!committed) return;
 
-    if (committed.job.remoteJobId) {
-      await this.cancelRemote(committed.job).catch(() => undefined);
+    if (remoteJobId) {
+      await this.cancelRemote({ ...committed.job, remoteJobId }).catch(() => undefined);
     }
-    if (committed.job.status === 'downloading' || committed.job.status === 'processing') {
-      await this.discardProvisional(committed.job, committed.job.materializedAssets);
+    if (job.status === 'downloading' || job.status === 'processing') {
+      await this.discardProvisional(job, provisionalAssets);
     }
   }
 
@@ -242,6 +311,10 @@ export class JobRunner {
         expectedRevision: job.revision,
         status: 'cancelled',
         stage: 'cancelled',
+        resultAssets: [],
+        materializedAssets: [],
+        remoteDeadlineAt: null,
+        resultExpiresAt: null,
         pollAfterAt: null,
         error: null,
         stageRetryCounts: EMPTY_STAGE_RETRY_COUNTS,
@@ -270,6 +343,30 @@ export class JobRunner {
   }
 
   private async recover(job: RunnerJob): Promise<void> {
+    if (job.pollAfterAt !== null && !validDate(job.pollAfterAt)) {
+      await this.fail(
+        job,
+        runnerError('provider_result_invalid', 'The persisted polling schedule is invalid.', 'rejected'),
+      );
+      return;
+    }
+    if (
+      (job.status === 'remote_pending' || job.status === 'remote_running') &&
+      (!validNullableDate(job.remoteDeadlineAt) || !validNullableDate(job.resultExpiresAt))
+    ) {
+      await this.fail(
+        job,
+        runnerError('provider_result_invalid', 'The persisted provider deadlines are invalid.', 'rejected'),
+      );
+      return;
+    }
+    if (job.status === 'downloading' && !validNullableDate(job.resultExpiresAt)) {
+      await this.fail(
+        job,
+        runnerError('provider_result_invalid', 'The persisted result expiry is invalid.', 'rejected'),
+      );
+      return;
+    }
     switch (job.status) {
       case 'queued':
         this.schedule('submit', job.id, job.pollAfterAt?.getTime() ?? this.clock.now());
@@ -490,13 +587,28 @@ export class JobRunner {
         return;
       }
       if (result.state === 'pending') {
-        const dueAt = this.clock.now() + (result.pollAfterMs ?? this.defaultPollAfterMs);
+        const now = this.clock.now();
+        const remoteDeadlineAt = new Date(now + this.defaultRemoteDeadlineMs);
+        if (!validDate(remoteDeadlineAt) ||
+          (result.resultExpiresAt !== undefined && !validDate(result.resultExpiresAt))) {
+          await this.fail(
+            claimed.job,
+            runnerError('provider_result_invalid', 'The provider returned an invalid result deadline.', 'rejected'),
+          );
+          return;
+        }
+        const dueAt = Math.min(
+          now + boundedDelay(result.pollAfterMs, this.defaultPollAfterMs),
+          remoteDeadlineAt.getTime(),
+        );
         const committed = await this.commitTransition(claimed.job, {
           expectedStatuses: ['submitting'],
           expectedRevision: claimed.job.revision,
           status: 'remote_pending',
           stage: 'remote_pending',
           remoteJobId: result.remoteJobId,
+          remoteDeadlineAt,
+          ...(result.resultExpiresAt === undefined ? {} : { resultExpiresAt: result.resultExpiresAt }),
           pollAfterAt: new Date(dueAt),
           error: null,
         });
@@ -506,12 +618,20 @@ export class JobRunner {
         return;
       }
 
+      if (result.resultExpiresAt !== undefined && !validDate(result.resultExpiresAt)) {
+        await this.fail(
+          claimed.job,
+          runnerError('provider_result_invalid', 'The provider returned an invalid result expiry.', 'rejected'),
+        );
+        return;
+      }
       const committed = await this.commitTransition(claimed.job, {
         expectedStatuses: ['submitting'],
         expectedRevision: claimed.job.revision,
         status: 'downloading',
         stage: 'materializing_results',
         resultAssets: result.assets,
+        ...(result.resultExpiresAt === undefined ? {} : { resultExpiresAt: result.resultExpiresAt }),
         pollAfterAt: null,
         error: null,
       });
@@ -547,6 +667,20 @@ export class JobRunner {
       if (!await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
         return;
       }
+      if (!validNullableDate(job.remoteDeadlineAt) || !validNullableDate(job.resultExpiresAt)) {
+        await this.fail(
+          job,
+          runnerError('provider_result_invalid', 'The persisted provider deadlines are invalid.', 'rejected'),
+        );
+        return;
+      }
+      if (job.remoteDeadlineAt !== null && job.remoteDeadlineAt.getTime() <= this.clock.now()) {
+        await this.fail(
+          job,
+          runnerError('provider_result_expired', 'The remote video polling deadline has passed.', 'expired'),
+        );
+        return;
+      }
       if (!registration.adapter.poll) {
         await this.fail(
           job,
@@ -566,13 +700,37 @@ export class JobRunner {
       if (!await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
         return;
       }
+      const nowAfterPoll = this.clock.now();
+      if (job.remoteDeadlineAt !== null && job.remoteDeadlineAt.getTime() <= nowAfterPoll) {
+        await this.fail(
+          job,
+          runnerError('provider_result_expired', 'The remote video polling deadline has passed.', 'expired'),
+        );
+        return;
+      }
       if (result.state === 'completed') {
+        if (result.resultExpiresAt !== undefined && !validDate(result.resultExpiresAt)) {
+          await this.fail(
+            job,
+            runnerError('provider_result_invalid', 'The provider returned an invalid result expiry.', 'rejected'),
+          );
+          return;
+        }
+        const resultExpiresAt = result.resultExpiresAt ?? job.resultExpiresAt;
+        if (resultExpiresAt !== null && resultExpiresAt !== undefined && resultExpiresAt.getTime() <= nowAfterPoll) {
+          await this.fail(
+            job,
+            runnerError('provider_result_expired', 'The remote video result has expired.', 'expired'),
+          );
+          return;
+        }
         const committed = await this.commitTransition(job, {
           expectedStatuses: ['remote_pending', 'remote_running'],
           expectedRevision: job.revision,
           status: 'downloading',
           stage: 'materializing_results',
           resultAssets: result.assets,
+          ...(resultExpiresAt === undefined ? {} : { resultExpiresAt }),
           pollAfterAt: null,
           error: null,
           stageRetryCounts: clearStageRetryCount(job.stageRetryCounts, 'poll'),
@@ -587,13 +745,34 @@ export class JobRunner {
         return;
       }
 
-      const dueAt = this.clock.now() + (result.pollAfterMs ?? this.defaultPollAfterMs);
+      const now = nowAfterPoll;
+      const remoteDeadlineAt = job.remoteDeadlineAt ?? new Date(now + this.defaultRemoteDeadlineMs);
+      if (!validDate(remoteDeadlineAt)) {
+        await this.fail(
+          job,
+          runnerError('provider_result_invalid', 'The provider returned an invalid polling deadline.', 'rejected'),
+        );
+        return;
+      }
+      if (result.resultExpiresAt !== undefined && !validDate(result.resultExpiresAt)) {
+        await this.fail(
+          job,
+          runnerError('provider_result_invalid', 'The provider returned an invalid result expiry.', 'rejected'),
+        );
+        return;
+      }
+      const dueAt = Math.min(
+        now + boundedDelay(result.pollAfterMs, this.defaultPollAfterMs),
+        remoteDeadlineAt.getTime(),
+      );
       const committed = await this.commitTransition(job, {
         expectedStatuses: ['remote_pending', 'remote_running'],
         expectedRevision: job.revision,
         status: result.state,
         stage: result.state,
         ...(result.progress === undefined ? {} : { progress: result.progress }),
+        remoteDeadlineAt,
+        ...(result.resultExpiresAt === undefined ? {} : { resultExpiresAt: result.resultExpiresAt }),
         pollAfterAt: new Date(dueAt),
         error: null,
         stageRetryCounts: clearStageRetryCount(job.stageRetryCounts, 'poll'),
@@ -629,10 +808,45 @@ export class JobRunner {
       if (!await this.isOperationActive(jobId, ['downloading'], controller)) {
         return;
       }
+      if (!validNullableDate(job.resultExpiresAt)) {
+        await this.fail(
+          job,
+          runnerError('provider_result_invalid', 'The persisted result expiry is invalid.', 'rejected'),
+        );
+        return;
+      }
+      if (job.resultExpiresAt !== null && job.resultExpiresAt.getTime() <= this.clock.now()) {
+        await this.fail(
+          job,
+          runnerError('provider_result_expired', 'The provider video result has expired before download.', 'expired'),
+        );
+        return;
+      }
+      const resolveProviderAsset = async (
+        asset: Extract<SubmittedAsset, { source: 'provider' }>,
+        signal: AbortSignal,
+      ) => {
+        if (job.resultExpiresAt !== null) {
+          if (!validDate(job.resultExpiresAt)) {
+            throw new ProviderResultInvalidError('The persisted provider result expiry is invalid.');
+          }
+          if (job.resultExpiresAt.getTime() <= this.clock.now()) {
+            throw new ProviderResultExpiredError('The provider result expired before rematerialization.');
+          }
+        }
+        if (registration?.adapter.resolveResult === undefined) {
+          throw new Error('Provider-owned result resolution is not configured.');
+        }
+        return registration.adapter.resolveResult(
+          asset,
+          this.contextFor(job, registration, signal),
+        );
+      };
       materialized = await this.options.media.materialize(
         job,
         job.resultAssets,
         controller.signal,
+        resolveProviderAsset,
       );
       if (!await this.isOperationActive(jobId, ['downloading'], controller)) {
         if (materialized !== undefined) {
@@ -691,10 +905,31 @@ export class JobRunner {
       if (!await this.isOperationActive(jobId, ['processing'], controller)) {
         return;
       }
+      const resolveProviderAsset = async (
+        asset: Extract<SubmittedAsset, { source: 'provider' }>,
+        signal: AbortSignal,
+      ) => {
+        if (job.resultExpiresAt !== null) {
+          if (!validDate(job.resultExpiresAt)) {
+            throw new ProviderResultInvalidError('The persisted provider result expiry is invalid.');
+          }
+          if (job.resultExpiresAt.getTime() <= this.clock.now()) {
+            throw new ProviderResultExpiredError('The provider result expired before rematerialization.');
+          }
+        }
+        if (registration?.adapter.resolveResult === undefined) {
+          throw new Error('Provider-owned result resolution is not configured.');
+        }
+        return registration.adapter.resolveResult(
+          asset,
+          this.contextFor(job, registration, signal),
+        );
+      };
       processed = await this.options.media.process(
         job,
         job.materializedAssets,
         controller.signal,
+        resolveProviderAsset,
       );
       if (!await this.isOperationActive(jobId, ['processing'], controller)) {
         if (processed !== undefined) {
@@ -737,7 +972,7 @@ export class JobRunner {
     normalized: ProviderError,
   ): Promise<void> {
     if (normalized.retryable && registration.submitReplaySafe && job.attempt < this.maxAttempts) {
-      const dueAt = this.clock.now() + (normalized.retryAfterMs ?? this.defaultRetryAfterMs);
+      const dueAt = this.clock.now() + boundedDelay(normalized.retryAfterMs, this.defaultRetryAfterMs);
       const committed = await this.commitTransition(job, {
         expectedStatuses: ['submitting'],
         expectedRevision: job.revision,
@@ -757,12 +992,25 @@ export class JobRunner {
   private async handlePollError(job: RunnerJob, error: ProviderError): Promise<void> {
     const counts = this.consumeStageRetry(job, 'poll');
     if (error.retryable && counts !== null) {
-      const dueAt = this.clock.now() + (error.retryAfterMs ?? this.defaultRetryAfterMs);
+      const now = this.clock.now();
+      const remoteDeadlineAt = job.remoteDeadlineAt;
+      const dueAt = Math.min(
+        now + boundedDelay(error.retryAfterMs, this.defaultRetryAfterMs),
+        remoteDeadlineAt?.getTime() ?? now + this.defaultRemoteDeadlineMs,
+      );
+      if (remoteDeadlineAt !== null && remoteDeadlineAt.getTime() <= now) {
+        await this.fail(
+          job,
+          runnerError('provider_result_expired', 'The remote video polling deadline has passed.', 'expired'),
+        );
+        return;
+      }
       const committed = await this.commitTransition(job, {
         expectedStatuses: ['remote_pending', 'remote_running'],
         expectedRevision: job.revision,
         status: 'remote_pending',
         stage: 'poll_retry_scheduled',
+        ...(remoteDeadlineAt === null ? { remoteDeadlineAt: new Date(now + this.defaultRemoteDeadlineMs) } : {}),
         pollAfterAt: new Date(dueAt),
         error,
         stageRetryCounts: counts,
@@ -785,7 +1033,25 @@ export class JobRunner {
       await this.fail(job, error);
       return;
     }
-    const dueAt = this.clock.now() + (error.retryAfterMs ?? this.defaultRetryAfterMs);
+    const now = this.clock.now();
+    let dueAt = now + boundedDelay(error.retryAfterMs, this.defaultRetryAfterMs);
+    if (kind === 'download' && job.resultExpiresAt !== null) {
+      if (!validDate(job.resultExpiresAt)) {
+        await this.fail(
+          job,
+          runnerError('provider_result_invalid', 'The persisted result expiry is invalid.', 'rejected'),
+        );
+        return;
+      }
+      if (job.resultExpiresAt.getTime() <= now) {
+        await this.fail(
+          job,
+          runnerError('provider_result_expired', 'The provider video result expired during download retry.', 'expired'),
+        );
+        return;
+      }
+      dueAt = Math.min(dueAt, job.resultExpiresAt.getTime());
+    }
     const committed = await this.commitTransition(job, {
       expectedStatuses: [job.status],
       expectedRevision: job.revision,
@@ -808,6 +1074,10 @@ export class JobRunner {
       status,
       stage: status,
       pollAfterAt: null,
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
       error,
       stageRetryCounts: EMPTY_STAGE_RETRY_COUNTS,
     });
@@ -887,6 +1157,7 @@ export class JobRunner {
     const context = {
       providerId: job.request.providerId,
       jobId: job.id,
+      modelId: job.request.modelId,
       idempotencyKey: job.idempotencyKey,
       attempt: job.attempt,
       ...(signal ? { signal } : {}),

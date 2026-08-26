@@ -35,6 +35,8 @@ function jobRecord(overrides: Partial<JobRecord> = {}): JobRecord {
     stage: overrides.stage ?? overrides.status ?? 'queued',
     progress: overrides.progress ?? null,
     remoteJobId: overrides.remoteJobId ?? null,
+    remoteDeadlineAt: overrides.remoteDeadlineAt ?? null,
+    resultExpiresAt: overrides.resultExpiresAt ?? null,
     idempotencyKey: overrides.idempotencyKey ?? 'idempotency-1',
     errorCode: overrides.errorCode ?? null,
     errorMessage: overrides.errorMessage ?? null,
@@ -141,6 +143,9 @@ class FakeSqliteRepository implements SqliteJobRepositoryPort {
       errorCode: null,
       errorMessage: null,
       pollAfterAt: null,
+      resultManifest: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
       stageRetryCounts: { poll: 0, download: 0, process: 0 },
     });
   }
@@ -195,6 +200,10 @@ class FakeSqliteRepository implements SqliteJobRepositoryPort {
         'remoteJobId' in fields ? (fields.remoteJobId ?? null) : this.current.remoteJobId,
       pollAfterAt:
         'pollAfterAt' in fields ? (fields.pollAfterAt ?? null) : this.current.pollAfterAt,
+      remoteDeadlineAt:
+        'remoteDeadlineAt' in fields ? (fields.remoteDeadlineAt ?? null) : this.current.remoteDeadlineAt,
+      resultExpiresAt:
+        'resultExpiresAt' in fields ? (fields.resultExpiresAt ?? null) : this.current.resultExpiresAt,
       errorCode: 'errorCode' in fields ? (fields.errorCode ?? null) : this.current.errorCode,
       errorMessage:
         'errorMessage' in fields ? (fields.errorMessage ?? null) : this.current.errorMessage,
@@ -327,6 +336,10 @@ describe('SqliteRunnerJobPort', () => {
       stage: 'cancelled',
       remoteJobId: 'remote-1',
       cancelRequestedAt: expect.any(Date),
+      resultAssets: [],
+      materializedAssets: [],
+      remoteDeadlineAt: null,
+      resultExpiresAt: null,
     });
   });
 });
@@ -406,6 +419,7 @@ describe('AssetMediaMaterializer', () => {
   it('routes base64 and URL assets through AssetMediaService and maps their records', async () => {
     const base64Inputs: unknown[] = [];
     const urlInputs: unknown[] = [];
+    const providerInputs: unknown[] = [];
     const media: AssetMediaServicePort = {
       cleanupProviderOutputs: vi.fn(),
       materializeProviderBase64: vi.fn(async (input) => {
@@ -414,7 +428,16 @@ describe('AssetMediaMaterializer', () => {
       }),
       materializeProviderUrl: vi.fn(async (input) => {
         urlInputs.push(input);
-        return providerOutputRecord({ filePath: 'url.png', materializationKey: 'job-key:1' });
+        return input.url.includes('/videos/')
+          ? providerOutputRecord({
+              filePath: 'provider-output.mp4',
+              materializationKey: 'job-key:2',
+              mimeType: 'video/mp4',
+              posterPath: 'media/posters/provider-output.jpg',
+              thumbnailPath: null,
+              type: 'video',
+            })
+          : providerOutputRecord({ filePath: 'url.png', materializationKey: 'job-key:1' });
       }),
       releaseProviderOutputs: vi.fn(),
       validateProviderOutputs: vi.fn(async () => true),
@@ -429,12 +452,29 @@ describe('AssetMediaMaterializer', () => {
         source: 'url',
         url: 'https://provider.invalid/result.png',
       },
+      {
+        type: 'video',
+        mimeType: 'video/mp4',
+        source: 'provider',
+        providerId: 'provider-1',
+        remoteJobId: 'video-1',
+        variant: 'video',
+        resultId: 'video-1',
+      },
     ];
 
     const result = await materializer.materialize(
       toRunnerJob(jobRecord()),
       submitted,
       controller.signal,
+      async (asset) => {
+        providerInputs.push(asset);
+        return {
+          url: 'https://provider.invalid/videos/video-1/content?variant=video',
+          headers: { Authorization: 'Bearer ephemeral-only' },
+          claimedMimeType: 'video/mp4',
+        };
+      },
     );
 
     expect(base64Inputs[0]).toMatchObject({
@@ -445,6 +485,11 @@ describe('AssetMediaMaterializer', () => {
       signal: controller.signal,
     });
     expect(urlInputs[0]).toMatchObject({ url: 'https://provider.invalid/result.png' });
+    expect(providerInputs[0]).toMatchObject({
+      source: 'provider',
+      remoteJobId: 'video-1',
+      variant: 'video',
+    });
     expect(result).toEqual([
       expect.objectContaining({
         filePath: 'base64.png',
@@ -455,10 +500,23 @@ describe('AssetMediaMaterializer', () => {
         filePath: 'url.png',
         materializationKey: 'job-key:1',
       }),
+      expect.objectContaining({
+        filePath: 'provider-output.mp4',
+        type: 'video',
+        posterPath: 'media/posters/provider-output.jpg',
+      }),
     ]);
+    expect(JSON.stringify(result)).not.toContain('ephemeral-only');
+    const resolver = vi.fn();
     await expect(
-      materializer.process(toRunnerJob(jobRecord()), result, controller.signal),
+      materializer.process(
+        toRunnerJob(jobRecord({ resultExpiresAt: new Date(1) })),
+        result,
+        controller.signal,
+        resolver,
+      ),
     ).resolves.toBe(result);
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it('cleans every provisional slot when a multi-output materialization partially fails', async () => {
