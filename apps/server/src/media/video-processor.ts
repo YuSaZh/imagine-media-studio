@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { open, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -31,6 +31,14 @@ export class MediaCommandError extends Error {
   public override readonly name = 'MediaCommandError';
 }
 
+class PosterUnavailableError extends MediaCommandError {}
+
+const MAX_VIDEO_DIMENSION = 16_384;
+const MAX_VIDEO_PIXELS = 100_000_000;
+const MAX_VIDEO_DURATION_MS = 24 * 60 * 60 * 1_000;
+const POSTER_MAX_BYTES = 32 * 1024 * 1024;
+const POSTER_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
 export type SpawnPort = (
   command: string,
   args: readonly string[],
@@ -58,20 +66,49 @@ export class SpawnCommandRunner implements CommandRunner {
       let outputBytes = 0;
       let settled = false;
 
-      const finish = (error?: Error, result?: CommandResult) => {
+      let closeObserved = false;
+      let terminationError: Error | undefined;
+      const forceTimer: { current?: ReturnType<typeof setTimeout> } = {};
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (forceTimer.current !== undefined) clearTimeout(forceTimer.current);
+        options.signal?.removeEventListener('abort', onAbort);
+        child.stdout?.removeListener('data', onStdout);
+        child.stderr?.removeListener('data', onStderr);
+        child.removeListener('error', onError);
+        child.removeListener('close', onClose);
+      };
+      const finish = (error: Error | undefined, result: CommandResult | undefined) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        options.signal?.removeEventListener('abort', onAbort);
+        cleanup();
         if (error) reject(error);
-        else if (result) resolve(result);
+        else resolve(result!);
       };
+      const abortedError = () => new MediaCommandError(`${command} was aborted.`);
       const terminate = (error: Error) => {
         if (settled) return;
-        child.kill('SIGTERM');
-        const forceTimer = setTimeout(() => child.kill('SIGKILL'), 1_000);
-        forceTimer.unref();
-        finish(error);
+        const preferredError = options.signal?.aborted ? abortedError() : error;
+        if (terminationError !== undefined) {
+          if (options.signal?.aborted) terminationError = preferredError;
+          return;
+        }
+        terminationError = preferredError;
+        forceTimer.current = setTimeout(() => {
+          if (settled || closeObserved) return;
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // A process that already exited will still deliver close.
+          }
+        }, 1_000);
+        forceTimer.current.unref();
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // The close event remains the only completion signal, even if kill races exit.
+        }
       };
       const append = (target: Buffer[], value: Buffer | string) => {
         const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
@@ -82,18 +119,28 @@ export class SpawnCommandRunner implements CommandRunner {
         }
         target.push(chunk);
       };
-      const onAbort = () => terminate(new MediaCommandError(`${command} was aborted.`));
-      const timer = setTimeout(
-        () => terminate(new MediaCommandError(`${command} exceeded ${options.timeoutMs}ms.`)),
-        options.timeoutMs,
-      );
-      timer.unref();
-
-      options.signal?.addEventListener('abort', onAbort, { once: true });
-      child.stdout?.on('data', (chunk: Buffer) => append(stdout, chunk));
-      child.stderr?.on('data', (chunk: Buffer) => append(stderr, chunk));
-      child.once('error', (error) => finish(error));
-      child.once('close', (code, signal) => {
+      function onAbort() {
+        terminate(abortedError());
+      }
+      function onStdout(chunk: Buffer | string) {
+        append(stdout, chunk);
+      }
+      function onStderr(chunk: Buffer | string) {
+        append(stderr, chunk);
+      }
+      function onError(error: Error) {
+        terminate(error);
+      }
+      function onClose(code: number | null, signal: NodeJS.Signals | null) {
+        closeObserved = true;
+        if (terminationError !== undefined) {
+          finish(terminationError, undefined);
+          return;
+        }
+        if (options.signal?.aborted) {
+          finish(abortedError(), undefined);
+          return;
+        }
         const stdoutText = Buffer.concat(stdout).toString('utf8');
         const stderrText = Buffer.concat(stderr).toString('utf8');
         if (code !== 0) {
@@ -101,11 +148,24 @@ export class SpawnCommandRunner implements CommandRunner {
             new MediaCommandError(
               `${command} failed (${code ?? signal ?? 'unknown'}): ${stderrText.slice(0, 1_024)}`,
             ),
+            undefined,
           );
           return;
         }
         finish(undefined, { stderr: stderrText, stdout: stdoutText });
-      });
+      }
+      const timer = setTimeout(
+        () => terminate(new MediaCommandError(`${command} exceeded ${options.timeoutMs}ms.`)),
+        options.timeoutMs,
+      );
+      timer.unref();
+
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+      child.stdout?.on('data', onStdout);
+      child.stderr?.on('data', onStderr);
+      child.once('error', onError);
+      child.once('close', onClose);
+      if (options.signal?.aborted) onAbort();
     });
   }
 }
@@ -121,9 +181,18 @@ interface ProbeDocument {
   }>;
 }
 
-function positiveNumber(value: unknown): number | null {
+function positiveSafeInteger(value: unknown, maximum: number): number | null {
   const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : null;
+}
+
+function positiveDurationMs(value: unknown): number | null {
+  const seconds = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > MAX_VIDEO_DURATION_MS / 1_000) {
+    return null;
+  }
+  const milliseconds = Math.round(seconds * 1_000);
+  return Number.isSafeInteger(milliseconds) && milliseconds > 0 ? milliseconds : null;
 }
 
 export function parseFfprobeOutput(stdout: string): VideoMediaMetadata {
@@ -133,17 +202,33 @@ export function parseFfprobeOutput(stdout: string): VideoMediaMetadata {
   } catch {
     throw new MediaCommandError('ffprobe returned invalid JSON.');
   }
-  const stream = document.streams?.find((candidate) => candidate.codec_type === 'video');
-  const width = positiveNumber(stream?.width);
-  const height = positiveNumber(stream?.height);
-  const durationSeconds = positiveNumber(stream?.duration) ?? positiveNumber(document.format?.duration);
-  if (!stream || !width || !height || !durationSeconds || !stream.codec_name) {
+  if (document === null || typeof document !== 'object') {
+    throw new MediaCommandError('ffprobe returned an invalid document.');
+  }
+  const stream = Array.isArray(document.streams)
+    ? document.streams.find((candidate) => candidate !== null && candidate.codec_type === 'video')
+    : undefined;
+  const width = positiveSafeInteger(stream?.width, MAX_VIDEO_DIMENSION);
+  const height = positiveSafeInteger(stream?.height, MAX_VIDEO_DIMENSION);
+  const durationMs = positiveDurationMs(stream?.duration) ?? positiveDurationMs(document.format?.duration);
+  if (
+    !stream ||
+    !width ||
+    !height ||
+    width * height > MAX_VIDEO_PIXELS ||
+    !durationMs ||
+    typeof stream.codec_name !== 'string' ||
+    stream.codec_name.length === 0
+  ) {
     throw new MediaCommandError('ffprobe did not return a usable video stream.');
   }
   return {
     codec: stream.codec_name,
-    durationMs: Math.round(durationSeconds * 1_000),
-    format: document.format?.format_name?.split(',')[0] ?? 'unknown',
+    durationMs,
+    format:
+      typeof document.format?.format_name === 'string'
+        ? document.format.format_name.split(',')[0] ?? 'unknown'
+        : 'unknown',
     height,
     width,
   };
@@ -205,21 +290,26 @@ export class VideoProcessor {
   }): Promise<StagedFile> {
     const rawPoster = join(options.temporaryDirectory, `ims-${randomUUID()}.poster.jpg`);
     const preferredSeek = Math.min(1, options.metadata.durationMs / 10_000);
+    let staged: StagedFile;
+    let usedFallback = false;
     try {
       try {
         await this.runPosterCommand(options.inputPath, rawPoster, preferredSeek, options.signal);
       } catch {
         options.signal?.throwIfAborted();
-        await rm(rawPoster, { force: true });
+        usedFallback = true;
+        await removeRawPoster(rawPoster);
         await this.runPosterCommand(options.inputPath, rawPoster, 0, options.signal);
       }
-      const staged = await stageReadable({
-        dataRoot: options.dataRoot,
-        maxBytes: 32 * 1024 * 1024,
-        source: createReadStream(rawPoster),
-        temporaryDirectory: options.temporaryDirectory,
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
+      try {
+        staged = await this.stagePoster(rawPoster, options);
+      } catch (error) {
+        if (!(error instanceof PosterUnavailableError) || usedFallback) throw error;
+        options.signal?.throwIfAborted();
+        await removeRawPoster(rawPoster);
+        await this.runPosterCommand(options.inputPath, rawPoster, 0, options.signal);
+        staged = await this.stagePoster(rawPoster, options);
+      }
       try {
         await commitStagedFile(options.dataRoot, staged, options.destinationPath);
         return staged;
@@ -228,7 +318,51 @@ export class VideoProcessor {
         throw error;
       }
     } finally {
-      await rm(rawPoster, { force: true });
+      await removeRawPoster(rawPoster);
+    }
+  }
+
+  private async stagePoster(
+    path: string,
+    options: {
+      dataRoot: string;
+      signal?: AbortSignal;
+      temporaryDirectory: string;
+    },
+  ): Promise<StagedFile> {
+    let handle;
+    try {
+      handle = await open(path, POSTER_OPEN_FLAGS);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ELOOP')) {
+        throw new PosterUnavailableError('ffmpeg did not produce a safe poster file.');
+      }
+      throw error;
+    }
+    try {
+      const file = await handle.stat();
+      if (!file.isFile() || file.size === 0) {
+        throw new PosterUnavailableError('ffmpeg did not produce a non-empty poster.');
+      }
+      const source = handle.createReadStream({ autoClose: false });
+      try {
+        const staged = await stageReadable({
+          dataRoot: options.dataRoot,
+          maxBytes: POSTER_MAX_BYTES,
+          source,
+          temporaryDirectory: options.temporaryDirectory,
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+        if (staged.bytes === 0) {
+          await discardStagedFile(staged);
+          throw new PosterUnavailableError('ffmpeg did not produce a non-empty poster.');
+        }
+        return staged;
+      } finally {
+        source.destroy();
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
     }
   }
 
@@ -267,4 +401,9 @@ export class VideoProcessor {
       },
     );
   }
+}
+
+async function removeRawPoster(path: string): Promise<void> {
+  // This path is generated above with randomUUID; recursive cleanup is limited to it.
+  await rm(path, { force: true, recursive: true }).catch(() => undefined);
 }

@@ -208,6 +208,7 @@ test('keeps the PR5 video fixture transitions safe at every viewport', async ({ 
   const expired = page.locator('[data-item-id="image-28"]');
   await expect(expired).toBeVisible();
   await clickCardAction(page, expired, 'Retry');
+  await page.locator('.gallery-filter').getByRole('button', { name: 'All', exact: true }).click();
   await expect(expired).toHaveClass(/status-queued/);
   await expect(expired).toContainText('Waiting in queue');
 
