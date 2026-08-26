@@ -78,6 +78,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.23.0
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -116,6 +119,10 @@ jobs:
       - name: Clean up isolated Compose resources
         if: always()
         run: |
+          if [ -z "${DATA_HOST_DIR:-}" ]; then
+            echo "DATA_HOST_DIR was not created; skipping isolated resource cleanup."
+            exit 0
+          fi
           cleanup_status=0
           timeout --foreground 180 docker compose down --volumes --remove-orphans || cleanup_status=$?
           case "$DATA_HOST_DIR" in
