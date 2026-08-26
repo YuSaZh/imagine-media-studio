@@ -1,0 +1,8 @@
+{
+  "model": "gemini-omni-flash-preview",
+  "input": "A quiet train passing through a snowy forest.",
+  "response_format": {
+    "type": "video",
+    "delivery": "uri"
+  }
+}

@@ -4,7 +4,12 @@ import type { ProviderRepository, ProviderStorageRecord } from '../database/prov
 import type { ProviderRegistration, ProviderRegistryPort } from '../jobs/ports.js';
 import type { SecretVault } from '../security/secret-vault.js';
 import { safeProviderConfig } from '../security/config-sanitizer.js';
-import { GeminiInteractionsImageProvider, GeminiNativeImageProvider } from './gemini/index.js';
+import {
+  GeminiInteractionsImageProvider,
+  GeminiNativeImageProvider,
+  GeminiOmniVideoProvider,
+  GeminiVeoProvider,
+} from './gemini/index.js';
 import {
   createOpenAiImagesProvider,
   createOpenAiResponsesImageProvider,
@@ -12,7 +17,7 @@ import {
 } from './openai/index.js';
 import { MockProviderAdapter } from './mock-provider.js';
 import type { ProviderHttpClient as SafeProviderHttpClient } from './provider-http-client.js';
-import { XaiImagineImageProvider } from './xai/index.js';
+import { XaiImagineImageProvider, XaiImagineVideoProvider } from './xai/index.js';
 
 export const MOCK_PROVIDER_ID = 'mock';
 
@@ -105,8 +110,14 @@ function createAdapter(providerType: string, mockAdapter: ProviderAdapter): Prov
       return new GeminiNativeImageProvider();
     case 'gemini-interactions-image-v1':
       return new GeminiInteractionsImageProvider();
+    case 'gemini-veo-operation-v1':
+      return new GeminiVeoProvider();
+    case 'gemini-omni-interactions-video-v1':
+      return new GeminiOmniVideoProvider();
     case 'xai-imagine-image-v1':
       return new XaiImagineImageProvider();
+    case 'xai-imagine-video-v1':
+      return new XaiImagineVideoProvider();
     default:
       return null;
   }

@@ -1,0 +1,8 @@
+{
+  "name": "operations/veo-fixture-001",
+  "done": true,
+  "error": {
+    "status": "INVALID_ARGUMENT",
+    "message": "The selected duration is not supported."
+  }
+}

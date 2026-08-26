@@ -1,0 +1,8 @@
+{
+  "model": "grok-imagine-video-1.5",
+  "prompt": "Animate this still image with a slow camera move",
+  "duration": 12,
+  "image": {
+    "url": "data:image/png;base64,AQID"
+  }
+}

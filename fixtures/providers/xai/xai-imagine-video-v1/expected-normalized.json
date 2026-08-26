@@ -1,0 +1,5 @@
+{
+  "state": "pending",
+  "remoteJobId": "req_fixture_001",
+  "pollAfterMs": 5000
+}

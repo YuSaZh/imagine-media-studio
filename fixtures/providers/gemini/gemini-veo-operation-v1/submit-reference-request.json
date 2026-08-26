@@ -1,0 +1,28 @@
+{
+  "instances": [
+    {
+      "prompt": "Show the subject wearing the referenced clothing in a studio.",
+      "referenceImages": [
+        {
+          "image": {
+            "inlineData": {
+              "mimeType": "image/png",
+              "data": "AQID"
+            }
+          },
+          "referenceType": "asset"
+        },
+        {
+          "image": {
+            "inlineData": {
+              "mimeType": "image/jpeg",
+              "data": "BAUG"
+            }
+          },
+          "referenceType": "asset"
+        }
+      ]
+    }
+  ],
+  "parameters": {}
+}

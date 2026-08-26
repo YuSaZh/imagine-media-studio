@@ -1,0 +1,16 @@
+{
+  "instances": [
+    {
+      "prompt": "Animate the scene with a slow camera move.",
+      "image": {
+        "inlineData": {
+          "mimeType": "image/jpeg",
+          "data": "AQID"
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "durationSeconds": "8"
+  }
+}

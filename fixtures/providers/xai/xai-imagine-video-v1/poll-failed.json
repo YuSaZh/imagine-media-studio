@@ -1,0 +1,8 @@
+{
+  "request_id": "req_fixture_001",
+  "status": "failed",
+  "error": {
+    "code": "content_policy_violation",
+    "message": "The prompt was rejected by xAI moderation."
+  }
+}

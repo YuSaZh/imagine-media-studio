@@ -1,0 +1,9 @@
+[
+  {
+    "type": "video",
+    "mimeType": "video/mp4",
+    "source": "base64",
+    "base64": "AAAA",
+    "resultId": "v1_fixture_001"
+  }
+]

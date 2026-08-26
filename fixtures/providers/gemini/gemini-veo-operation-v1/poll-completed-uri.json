@@ -1,0 +1,15 @@
+{
+  "name": "operations/veo-fixture-001",
+  "done": true,
+  "response": {
+    "generateVideoResponse": {
+      "generatedSamples": [
+        {
+          "video": {
+            "uri": "https://generativelanguage.googleapis.com/v1beta/files/veo-file-001"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "model": "gemini-omni-flash-preview",
+  "input": [
+    {
+      "type": "image",
+      "data": "AQID",
+      "mime_type": "image/jpeg"
+    },
+    {
+      "type": "text",
+      "text": "Animate this still image with a gentle breeze."
+    }
+  ],
+  "response_format": {
+    "type": "video",
+    "delivery": "uri"
+  },
+  "generation_config": {
+    "video_config": {
+      "task": "image_to_video"
+    }
+  }
+}

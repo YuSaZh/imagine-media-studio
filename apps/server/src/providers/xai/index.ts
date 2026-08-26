@@ -31,3 +31,34 @@ export type {
   XaiProviderContext,
   XaiProviderOptions,
 } from './xai-imagine-image.js';
+
+export {
+  XaiImagineVideoHttpError,
+  XaiImagineVideoExpiredError,
+  XaiImagineVideoAdapter,
+  XaiImagineVideoProvider,
+  XaiImagineVideoResponseError,
+  XaiImagineVideoTransportError,
+  XaiImagineVideoValidationError,
+  XAI_IMAGINE_VIDEO_DEFAULT_BASE_URL,
+  XAI_IMAGINE_VIDEO_BASE_MODEL,
+  XAI_IMAGINE_VIDEO_MODEL,
+  XAI_IMAGINE_VIDEO_PROFILE,
+  buildXaiImagineVideoPayload,
+  createXaiImagineVideoProvider,
+  getXaiImagineVideoCapabilities,
+  normalizeXaiImagineVideoError,
+} from './xai-imagine-video.js';
+export type {
+  XaiImagineVideoHttpClient,
+  XaiImagineVideoHttpHeaders,
+  XaiImagineVideoHttpRequest,
+  XaiImagineVideoHttpRequestExecutor,
+  XaiImagineVideoHttpResponse,
+  XaiImagineVideoInput,
+  XaiImagineVideoPayload,
+  XaiImagineVideoProviderContext,
+  XaiImagineVideoProviderOptions,
+  XaiVideoProviderContext,
+  XaiVideoProviderOptions,
+} from './xai-imagine-video.js';

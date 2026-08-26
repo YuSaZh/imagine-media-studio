@@ -37,6 +37,40 @@ export {
   supportedGeminiModels,
 } from './payload.js';
 export { normalizeGeminiImageResponse } from './response.js';
+export {
+  GeminiVeoProvider,
+  GeminiVeoOperationProvider,
+  GeminiVeoOperationAdapter,
+  GEMINI_VEO_DEFAULT_BASE_URL,
+  GEMINI_VEO_RESULT_RETENTION_MS,
+  GEMINI_VEO_OPERATION_PROFILE,
+  assertVeoPayload,
+  buildVeoPayload,
+} from './veo-provider.js';
+export type { VeoPayload } from './veo-provider.js';
+export {
+  GeminiOmniVideoProvider,
+  GeminiOmniInteractionsVideoProvider,
+  GeminiOmniInteractionsVideoAdapter,
+  GEMINI_OMNI_VIDEO_DEFAULT_BASE_URL,
+  GEMINI_OMNI_INTERACTIONS_VIDEO_PROFILE,
+  assertOmniPayload,
+  buildOmniVideoPayload,
+} from './omni-video-provider.js';
+export type { OmniPayload } from './omni-video-provider.js';
+export {
+  GEMINI_VEO_PROFILE,
+  GEMINI_OMNI_VIDEO_PROFILE,
+  GEMINI_VIDEO_DEFAULT_BASE_URL,
+  GEMINI_VIDEO_INPUT_MIME_TYPES,
+  GEMINI_VIDEO_MAX_INLINE_OUTPUT_BYTES,
+  GEMINI_VIDEO_OUTPUT_MIME_TYPE,
+} from './video-common.js';
+export type {
+  GeminiVideoHttp,
+  GeminiVideoProviderOptions,
+  GeminiVideoRuntimeContext,
+} from './video-common.js';
 export type {
   GeminiContentPart,
   GeminiGenerateContentPayload,

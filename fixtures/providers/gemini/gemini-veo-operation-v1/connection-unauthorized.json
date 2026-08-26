@@ -1,0 +1,6 @@
+{
+  "error": {
+    "status": "UNAUTHENTICATED",
+    "message": "The API key is invalid."
+  }
+}

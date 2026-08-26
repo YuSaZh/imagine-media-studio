@@ -40,6 +40,18 @@ const xaiModelsFixture = new URL(
   '../../../../fixtures/providers/xai/xai-imagine-image-v1/models-response.json',
   import.meta.url,
 );
+const xaiVideoModelsFixture = new URL(
+  '../../../../fixtures/providers/xai/xai-imagine-video-v1/models-response.json',
+  import.meta.url,
+);
+const geminiVeoModelsFixture = new URL(
+  '../../../../fixtures/providers/gemini/gemini-veo-operation-v1/models-response.json',
+  import.meta.url,
+);
+const geminiOmniVideoModelsFixture = new URL(
+  '../../../../fixtures/providers/gemini/gemini-omni-interactions-video-v1/models-response.json',
+  import.meta.url,
+);
 
 afterEach(async () => {
   for (const database of databases.splice(0)) database.sqlite.close();
@@ -331,6 +343,175 @@ describe('ProviderService', () => {
       supportsCancel: false,
     });
     expect(refreshed.every((model) => model.capabilitySource === 'provider')).toBe(true);
+  });
+
+  it('refreshes xAI Imagine Video through its video catalog and preserves manual overrides', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(xaiVideoModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service, models } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'Live xAI Video',
+      type: 'xai-imagine-video-v1',
+      baseUrl: 'https://proxy.example.test/xai/video/v1',
+      apiKey: 'xai-video-catalog-key',
+      headers: { 'X-Trace': 'xai-video-trace' },
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/xai/video/v1/video-generation-models',
+      headers: { Authorization: 'Bearer xai-video-catalog-key', 'X-Trace': 'xai-video-trace' },
+    });
+    expect(refreshed.map((model) => model.modelId)).toEqual(expect.arrayContaining([
+      'grok-imagine-video',
+      'grok-imagine-video-1.5',
+      'grok-video-unknown-preview',
+    ]));
+    expect(refreshed).toHaveLength(3);
+    expect(refreshed.find((model) => model.modelId === 'grok-imagine-video-1.5')?.capabilities)
+      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'], maxReferenceImages: 7 });
+    expect(refreshed.find((model) => model.modelId === 'grok-video-unknown-preview')?.capabilities)
+      .toMatchObject({ operations: ['video.generate'], maxReferenceImages: 0, resolutions: ['480p'] });
+
+    const unknownModel = refreshed.find((model) => model.modelId === 'grok-video-unknown-preview');
+    if (!unknownModel) throw new Error('Expected the conservative xAI video model.');
+    const manual = service.saveManualModel({
+      providerId: provider.id,
+      modelId: 'grok-video-unknown-preview',
+      displayName: 'Pinned xAI video model',
+      capabilities: unknownModel.capabilities,
+      enabled: false,
+    });
+    await expect(service.testConnection(provider.id)).resolves.toMatchObject({ ok: true });
+    expect(requests[1]).toMatchObject({ url: 'https://proxy.example.test/xai/video/v1/video-generation-models' });
+    const refreshedAgain = await service.refreshModels(provider.id);
+    expect(models.get(manual.id)).toMatchObject({
+      displayName: 'Pinned xAI video model',
+      capabilitySource: 'manual',
+      enabled: false,
+    });
+    expect(refreshedAgain).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: manual.id, capabilitySource: 'manual', displayName: 'Pinned xAI video model' }),
+    ]));
+    expect(JSON.stringify(service.get(provider.id))).not.toContain('xai-video-catalog-key');
+    expect(JSON.stringify(service.get(provider.id))).not.toContain('xai-video-trace');
+  });
+
+  it('refreshes Gemini Veo through its custom catalog endpoint and keeps unknown models conservative', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(geminiVeoModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'Live Gemini Veo',
+      type: 'gemini-veo-operation-v1',
+      baseUrl: 'https://proxy.example.test/gemini/veo/v1beta',
+      apiKey: 'gemini-veo-catalog-key',
+      headers: { 'X-Trace': 'gemini-veo-trace' },
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/gemini/veo/v1beta/models',
+      headers: { 'x-goog-api-key': 'gemini-veo-catalog-key', 'X-Trace': 'gemini-veo-trace' },
+    });
+    expect(refreshed.map((model) => model.modelId)).toEqual(expect.arrayContaining([
+      'veo-3.1-generate-preview',
+      'veo-future-preview',
+    ]));
+    expect(refreshed).toHaveLength(2);
+    expect(refreshed.find((model) => model.modelId === 'veo-3.1-generate-preview')?.capabilities)
+      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'], resolutions: ['720p', '1080p', '4k'] });
+    expect(refreshed.find((model) => model.modelId === 'veo-future-preview')?.capabilities)
+      .toMatchObject({ operations: ['video.generate'], resolutions: ['720p'], maxReferenceImages: 0 });
+    await expect(service.testConnection(provider.id)).resolves.toMatchObject({ ok: true });
+    expect(requests[1]).toMatchObject({ url: 'https://proxy.example.test/gemini/veo/v1beta/models' });
+    expect(JSON.stringify(service.get(provider.id))).not.toContain('gemini-veo-catalog-key');
+    expect(JSON.stringify(service.get(provider.id))).not.toContain('gemini-veo-trace');
+  });
+
+  it('refreshes Gemini Omni Video through its custom catalog endpoint and filters non-video models', async () => {
+    const requests: Array<{ method: string; url: string; headers: Readonly<Record<string, string>> }> = [];
+    const http = {
+      async request(input: { method: 'GET' | 'POST'; url: string; headers: Readonly<Record<string, string>> }) {
+        requests.push(input);
+        return {
+          status: 200,
+          statusCode: 200,
+          body: JSON.parse(readFileSync(geminiOmniVideoModelsFixture, 'utf8')) as unknown,
+          headers: {},
+          dispose: async () => undefined,
+        };
+      },
+    } as ProviderHttpClient;
+    const { service } = await createHarness(new MockProviderAdapter(), { http });
+    const provider = service.create({
+      name: 'Live Gemini Omni Video',
+      type: 'gemini-omni-interactions-video-v1',
+      baseUrl: 'https://proxy.example.test/gemini/omni/v1beta',
+      apiKey: 'gemini-omni-catalog-key',
+      headers: { 'X-Trace': 'gemini-omni-trace' },
+    });
+
+    const refreshed = await service.refreshModels(provider.id);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://proxy.example.test/gemini/omni/v1beta/models',
+      headers: { 'x-goog-api-key': 'gemini-omni-catalog-key', 'X-Trace': 'gemini-omni-trace' },
+    });
+    expect(refreshed.map((model) => model.modelId)).toEqual(expect.arrayContaining([
+      'gemini-omni-flash-preview',
+      'gemini-omni-future-preview',
+    ]));
+    expect(refreshed).toHaveLength(2);
+    expect(refreshed.find((model) => model.modelId === 'gemini-omni-flash-preview')?.capabilities)
+      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'], supportsCancel: false });
+    expect(refreshed.find((model) => model.modelId === 'gemini-omni-future-preview')?.capabilities)
+      .toMatchObject({ operations: ['video.generate'], maxReferenceImages: 0, supportsAudio: false });
+    await expect(service.testConnection(provider.id)).resolves.toMatchObject({ ok: true });
+    expect(requests[1]).toMatchObject({ url: 'https://proxy.example.test/gemini/omni/v1beta/models' });
+    expect(JSON.stringify(service.get(provider.id))).not.toContain('gemini-omni-catalog-key');
+    expect(JSON.stringify(service.get(provider.id))).not.toContain('gemini-omni-trace');
+  });
+
+  it('uses static catalogs for registered video profiles when no live client is configured', async () => {
+    const { service } = await createHarness();
+    const profiles = [
+      ['xai-imagine-video-v1', 'grok-imagine-video'],
+      ['gemini-veo-operation-v1', 'veo-3.1-generate-preview'],
+      ['gemini-omni-interactions-video-v1', 'gemini-omni-flash-preview'],
+    ] as const;
+
+    for (const [type, modelId] of profiles) {
+      const provider = service.create({ name: type, type });
+      const refreshed = await service.refreshModels(provider.id);
+      expect(refreshed).toEqual(expect.arrayContaining([
+        expect.objectContaining({ modelId, capabilitySource: 'profile' }),
+      ]));
+    }
   });
 
   it('uses the injected xAI models endpoint for live refresh and preserves manual overrides', async () => {

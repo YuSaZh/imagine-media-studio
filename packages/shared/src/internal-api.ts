@@ -152,7 +152,10 @@ export const ProviderTypeSchema = z.enum([
   'openai-videos-v1-compatible',
   'gemini-interactions-image-v1',
   'gemini-generate-content-image-v1',
+  'gemini-veo-operation-v1',
+  'gemini-omni-interactions-video-v1',
   'xai-imagine-image-v1',
+  'xai-imagine-video-v1',
 ]);
 
 const ProviderDtoBaseUrlSchema = z.string().transform((value) =>

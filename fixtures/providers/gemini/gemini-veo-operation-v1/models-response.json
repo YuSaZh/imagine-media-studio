@@ -1,0 +1,19 @@
+{
+  "models": [
+    {
+      "name": "models/veo-3.1-generate-preview",
+      "displayName": "Veo 3.1",
+      "supportedGenerationMethods": ["predictLongRunning"]
+    },
+    {
+      "name": "models/gemini-2.5-flash",
+      "displayName": "Gemini text",
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    {
+      "name": "models/veo-future-preview",
+      "displayName": "Future Veo",
+      "supportedGenerationMethods": ["predictLongRunning"]
+    }
+  ]
+}

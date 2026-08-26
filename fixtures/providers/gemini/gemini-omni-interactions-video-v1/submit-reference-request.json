@@ -1,0 +1,28 @@
+{
+  "model": "gemini-omni-flash-preview",
+  "input": [
+    {
+      "type": "image",
+      "data": "AQID",
+      "mime_type": "image/png"
+    },
+    {
+      "type": "image",
+      "data": "BAUG",
+      "mime_type": "image/jpeg"
+    },
+    {
+      "type": "text",
+      "text": "Create a short scene using the subjects from these references."
+    }
+  ],
+  "response_format": {
+    "type": "video",
+    "delivery": "uri"
+  },
+  "generation_config": {
+    "video_config": {
+      "task": "reference_to_video"
+    }
+  }
+}

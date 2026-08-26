@@ -1,0 +1,19 @@
+{
+  "name": "operations/veo-fixture-001",
+  "done": true,
+  "response": {
+    "generateVideoResponse": {
+      "generatedSamples": [
+        {
+          "video": {
+            "mimeType": "video/mp4",
+            "inlineData": {
+              "mimeType": "video/mp4",
+              "data": "AAAA"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

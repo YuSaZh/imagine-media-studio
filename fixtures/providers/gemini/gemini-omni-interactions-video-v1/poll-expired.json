@@ -1,0 +1,8 @@
+{
+  "id": "v1_fixture_001",
+  "status": "expired",
+  "error": {
+    "code": "EXPIRED",
+    "message": "The interaction expired before the video was ready."
+  }
+}

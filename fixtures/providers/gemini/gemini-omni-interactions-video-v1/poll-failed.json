@@ -1,0 +1,8 @@
+{
+  "id": "v1_fixture_001",
+  "status": "failed",
+  "error": {
+    "code": "SAFETY_BLOCK",
+    "message": "The video was blocked by safety filters."
+  }
+}

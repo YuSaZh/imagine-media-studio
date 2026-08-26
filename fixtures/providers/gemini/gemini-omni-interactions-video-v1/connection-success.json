@@ -1,0 +1,8 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-omni-flash-preview",
+      "supportedGenerationMethods": ["interactions"]
+    }
+  ]
+}

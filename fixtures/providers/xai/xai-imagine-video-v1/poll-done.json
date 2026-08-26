@@ -1,0 +1,10 @@
+{
+  "request_id": "req_fixture_001",
+  "status": "done",
+  "model": "grok-imagine-video-1.5",
+  "video": {
+    "url": "https://vidgen.x.ai/videos/req_fixture_001.mp4?expires=1999999999",
+    "duration": 10,
+    "respect_moderation": true
+  }
+}

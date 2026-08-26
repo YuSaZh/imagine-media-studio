@@ -1,0 +1,28 @@
+{
+  "models": [
+    {
+      "id": "grok-imagine-video",
+      "display_name": "Grok Imagine Video",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["video"]
+    },
+    {
+      "id": "grok-imagine-video-1.5",
+      "display_name": "Grok Imagine Video 1.5",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["video"]
+    },
+    {
+      "id": "grok-imagine-image-2.0",
+      "display_name": "Grok Imagine Image 2.0",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["image"]
+    },
+    {
+      "id": "grok-video-unknown-preview",
+      "display_name": "Unknown Video Preview",
+      "input_modalities": ["text"],
+      "output_modalities": ["video"]
+    }
+  ]
+}

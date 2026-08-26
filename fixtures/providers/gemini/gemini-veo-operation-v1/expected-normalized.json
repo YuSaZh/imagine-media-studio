@@ -1,0 +1,9 @@
+[
+  {
+    "type": "video",
+    "mimeType": "video/mp4",
+    "source": "base64",
+    "base64": "AAAA",
+    "resultId": "operations/veo-fixture-001"
+  }
+]

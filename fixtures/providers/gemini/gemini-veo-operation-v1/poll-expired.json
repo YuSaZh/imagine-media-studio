@@ -1,0 +1,8 @@
+{
+  "name": "operations/veo-fixture-001",
+  "done": true,
+  "error": {
+    "status": "DEADLINE_EXCEEDED",
+    "message": "The video operation expired before completion."
+  }
+}

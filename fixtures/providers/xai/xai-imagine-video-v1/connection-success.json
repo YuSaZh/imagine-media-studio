@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "id": "grok-imagine-video",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["video"]
+    },
+    {
+      "id": "grok-imagine-video-1.5",
+      "input_modalities": ["text", "image"],
+      "output_modalities": ["video"]
+    }
+  ]
+}

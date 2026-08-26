@@ -1,0 +1,9 @@
+{
+  "id": "v1_fixture_001",
+  "status": "completed",
+  "output_video": {
+    "type": "video",
+    "mime_type": "video/mp4",
+    "data": "AAAA"
+  }
+}

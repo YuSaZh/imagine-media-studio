@@ -13,9 +13,16 @@ import {
   ProviderPatchSchema,
   ProviderDtoSchema,
   SettingsPatchSchema,
+  ProviderTypeSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
+  it('accepts the registered PR5 video provider profiles', () => {
+    expect(ProviderTypeSchema.parse('xai-imagine-video-v1')).toBe('xai-imagine-video-v1');
+    expect(ProviderTypeSchema.parse('gemini-veo-operation-v1')).toBe('gemini-veo-operation-v1');
+    expect(ProviderTypeSchema.parse('gemini-omni-interactions-video-v1')).toBe('gemini-omni-interactions-video-v1');
+  });
+
   it('keeps authentication status and login payloads strict', () => {
     expect(AuthStatusSchema.parse({ authenticated: false, required: true })).toEqual({
       authenticated: false,

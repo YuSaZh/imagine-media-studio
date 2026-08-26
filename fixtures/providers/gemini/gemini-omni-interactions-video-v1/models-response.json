@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-omni-flash-preview",
+      "displayName": "Gemini Omni Flash",
+      "supportedGenerationMethods": ["interactions"]
+    },
+    {
+      "name": "models/gemini-2.5-flash",
+      "displayName": "Gemini Flash",
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    {
+      "name": "models/gemini-omni-future-preview",
+      "displayName": "Future Omni",
+      "supportedGenerationMethods": ["interactions"]
+    },
+    {
+      "name": "models/gemini-omni-no-method-preview",
+      "displayName": "Unverified Omni",
+      "supportedGenerationMethods": []
+    }
+  ]
+}
