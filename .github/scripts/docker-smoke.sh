@@ -726,8 +726,9 @@ JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
 SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
 EDIT_ASSET_ID="$edit_asset_id" VIDEO_JOB_ID="$video_job_id" VIDEO_ASSET_ID="$video_asset_id" \
 ASYNC_PENDING_JOB_ID="$async_pending_job_id" ASYNC_RUNNING_JOB_ID="$async_running_job_id" \
-QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" \
+  QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" \
   node --input-type=module <<'NODE'
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;

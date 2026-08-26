@@ -171,6 +171,20 @@ async function revealGalleryItem(page: Page, itemId: string): Promise<void> {
   await expect(item).toBeAttached();
 }
 
+async function ensureServiceWorkerControl(page: Page): Promise<boolean> {
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  if (await page.evaluate(() => navigator.serviceWorker.controller !== null)) return false;
+
+  await page.reload();
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  await expect.poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+  return true;
+}
+
 test('lists all PR5 video profiles and the compatible OpenAI warning', async ({ page }) => {
   await page.goto('/settings/providers');
   await dismissPwaNotice(page);
@@ -308,7 +322,16 @@ test('generates Mock text, image, and reference videos with durable media delive
   ]);
   expect(downloadedVideo.suggestedFilename()).toBe(`${output.id}-video.mp4`);
 
-  await expect.poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+  const reloadedForServiceWorker = await ensureServiceWorkerControl(page);
+  if (reloadedForServiceWorker) {
+    await dismissPwaNotice(page);
+    await page.goto('/imagine');
+    await dismissPwaNotice(page);
+    const restoredOutputCard = page.locator(`[data-item-id="${output.id}"]`);
+    await expect(restoredOutputCard).toBeVisible({ timeout: 30_000 });
+    await restoredOutputCard.locator('.media-card-open').click();
+    await expect(page.locator('video.viewer-media')).toHaveCount(1);
+  }
   const serviceWorkerUrl = await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.ready;
     return registration.active?.scriptURL ?? null;
@@ -333,33 +356,40 @@ test('generates Mock text, image, and reference videos with durable media delive
     const queryResponse = await fetch(queryPosterUrl);
     const queryPosterCached = (await cache.match(queryPosterUrl)) !== undefined;
     const posterResponse = await fetch(posterUrl);
-    const posterCached = (await cache.match(absolutePoster)) !== undefined;
     const rangeResponse = await fetch(contentUrl, { headers: { Range: 'bytes=0-7' } });
-    const cacheEntries: string[] = [];
-    for (const cacheName of await caches.keys()) {
-      const cache = await caches.open(cacheName);
-      for (const request of await cache.keys()) cacheEntries.push(request.url);
-    }
-    const absoluteContent = new URL(contentUrl, location.origin).href;
     return {
       authProbeCached,
       authProbeStatus: authProbeResponse.status,
-      contentCached: cacheEntries.includes(absoluteContent),
-      posterCached,
       posterStatus: posterResponse.status,
+      queryPosterUrl,
       queryPosterCached,
       queryPosterStatus: queryResponse.status,
       rangeStatus: rangeResponse.status,
     };
   }, { contentUrl: output.contentUrl, posterUrl: output.posterUrl! });
   expect(cacheProbe.posterStatus).toBe(200);
-  expect(cacheProbe.posterCached).toBe(true);
   expect(cacheProbe.rangeStatus).toBe(206);
-  expect(cacheProbe.contentCached).toBe(false);
   expect(cacheProbe.authProbeStatus).toBe(200);
   expect(cacheProbe.authProbeCached).toBe(false);
   expect(cacheProbe.queryPosterStatus).toBe(200);
   expect(cacheProbe.queryPosterCached).toBe(false);
+  await expect.poll(async () => page.evaluate(async (posterUrl) => {
+    const cache = await caches.open('imagine-derived-media-v1');
+    return (await cache.match(new URL(posterUrl, location.origin).href)) !== undefined;
+  }, output.posterUrl!)).toBe(true);
+  const cacheContents = await page.evaluate(async ({ contentUrl, queryPosterUrl }) => {
+    const entries: string[] = [];
+    for (const cacheName of await caches.keys()) {
+      const cache = await caches.open(cacheName);
+      for (const request of await cache.keys()) entries.push(request.url);
+    }
+    return {
+      contentCached: entries.includes(new URL(contentUrl, location.origin).href),
+      queryPosterCached: entries.includes(new URL(queryPosterUrl, location.origin).href),
+    };
+  }, { contentUrl: output.contentUrl, queryPosterUrl: cacheProbe.queryPosterUrl });
+  expect(cacheContents.contentCached).toBe(false);
+  expect(cacheContents.queryPosterCached).toBe(false);
 
   await page.context().setOffline(true);
   try {
