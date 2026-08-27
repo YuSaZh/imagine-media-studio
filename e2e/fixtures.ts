@@ -4,20 +4,18 @@ import type { APIRequestContext } from '@playwright/test';
 import {
   basicAuthorizationHeader,
   E2E_BASE_URL,
-  E2E_STORAGE_STATE,
 } from './runtime.js';
 
 /**
- * The built-in request fixture does not inherit browser storage state. Keep a
- * dedicated context so API setup has the same authenticated origin contract
- * as browser tests, with an explicit base URL for relative paths.
+ * Keep API setup independent from browser cookies: the server-side test user
+ * is authenticated explicitly with Basic auth and relative paths resolve
+ * against the configured test origin.
  */
 export const test = base.extend<{ request: APIRequestContext }>({
   request: async ({ playwright }, use) => {
     const context = await playwright.request.newContext({
       baseURL: E2E_BASE_URL,
       extraHTTPHeaders: { Authorization: basicAuthorizationHeader() },
-      storageState: E2E_STORAGE_STATE,
     });
     try {
       await use(context);

@@ -461,7 +461,7 @@ test('exposes both PR6 custom Provider profiles and opens Manage after creation'
   try {
     await editor.getByLabel('Name', { exact: true }).fill(providerName);
     await profile.selectOption('custom-http-v1');
-    await editor.getByLabel('Base URL', { exact: true }).fill('https://api.example.test/v1');
+    await editor.getByLabel('Base URL (required)', { exact: true }).fill('https://api.example.test/v1');
     await editor.getByLabel('API key', { exact: true }).fill(API_SECRET);
     const createResponsePromise = page.waitForResponse((response) =>
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/internal/providers',
