@@ -162,6 +162,7 @@ type TrustedService = Pick<
   | 'bind'
   | 'get'
   | 'getBinding'
+  | 'getCurrentOrDisabledBinding'
   | 'install'
   | 'list'
   | 'listBindings'
@@ -211,6 +212,7 @@ const SERVICE_MESSAGES: Readonly<Record<string, string>> = {
   digest_mismatch: 'The adapter source digest does not match its manifest.',
   already_exists: 'The adapter revision already exists.',
   adapter_id_immutable: 'The adapter id is immutable across revisions.',
+  disabled_revision: 'Disabled trusted adapter revisions cannot be rebound.',
   not_found: 'The adapter was not found.',
   adapter_not_found: 'The adapter was not found.',
   provider_not_found: 'The Provider was not found.',
@@ -839,7 +841,9 @@ export async function registerAdapterRoutes(
           version: query.data.version,
           digest: query.data.digest,
         });
-    return callTool(reply, () => services.trusted.getBinding(params.providerId, ref), (value) => {
+    return callTool(reply, () => ref === undefined
+      ? services.trusted.getCurrentOrDisabledBinding(params.providerId)
+      : services.trusted.getBinding(params.providerId, ref), (value) => {
       if (value === null) return reply.code(404).send({ error: 'not_found', message: SERVICE_MESSAGES.not_found });
       return TrustedAdapterBindingResponseSchema.parse({ binding: trustedBindingDto(value as TrustedServiceBindingDto) });
     });

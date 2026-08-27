@@ -1,4 +1,5 @@
 import {
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -201,6 +202,70 @@ export interface CustomAdapterWorkspaceActions {
 type ActionKey = keyof CustomAdapterWorkspaceActions;
 type ActionHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 type ActionOutcome = void | boolean | Promise<void | boolean>;
+type DraftUpdate<T> = T | ((current: T) => T);
+
+export interface LatestImportSequence {
+  readonly begin: () => number;
+  readonly invalidate: () => void;
+  readonly isLatest: (token: number) => boolean;
+}
+
+export type AdapterFileImportState = 'idle' | 'reading' | 'complete' | 'error';
+export type AdapterFileImportOutcome =
+  | { readonly state: 'complete' }
+  | { readonly state: 'error'; readonly error: unknown }
+  | { readonly state: 'stale' };
+
+export function isFileImportSelectionDisabled(
+  disabled: boolean,
+  busy: boolean,
+  state: AdapterFileImportState,
+): boolean {
+  return disabled || busy || state === 'reading';
+}
+
+export function adapterWorkspaceDisabledState(input: {
+  readonly adminAvailable: boolean;
+  readonly disabled: boolean;
+  readonly importPending: boolean;
+  readonly mode: CustomAdapterMode;
+  readonly status: AdapterWorkspaceStatus;
+}): { readonly localDisabled: boolean; readonly remoteDisabled: boolean } {
+  const trustedBindingMayBeDisabled = input.mode === 'trusted-js' && input.status === 'disabled';
+  return {
+    localDisabled: input.disabled || input.status === 'loading' || (!trustedBindingMayBeDisabled && input.status === 'disabled'),
+    remoteDisabled: input.importPending || input.disabled || !input.adminAvailable || input.status === 'loading' || input.status === 'error' || (!trustedBindingMayBeDisabled && input.status === 'disabled') || input.status === 'admin-unavailable' || input.status === 'offline',
+  };
+}
+
+/** Coordinates asynchronous file reads so stale results cannot replace newer input. */
+export function createLatestImportSequence(): LatestImportSequence {
+  let latest = 0;
+  return {
+    begin: () => {
+      latest += 1;
+      return latest;
+    },
+    invalidate: () => { latest += 1; },
+    isLatest: (token) => token === latest,
+  };
+}
+
+export async function settleLatestImport<T>(
+  sequence: LatestImportSequence,
+  token: number,
+  read: () => T | Promise<T>,
+  apply: (value: T) => void,
+): Promise<AdapterFileImportOutcome> {
+  try {
+    const value = await read();
+    if (!sequence.isLatest(token)) return { state: 'stale' };
+    apply(value);
+    return { state: 'complete' };
+  } catch (error) {
+    return sequence.isLatest(token) ? { state: 'error', error } : { state: 'stale' };
+  }
+}
 
 export interface CustomAdapterWorkspaceProps extends CustomAdapterWorkspaceActions {
   readonly actions?: CustomAdapterWorkspaceActions;
@@ -844,6 +909,45 @@ function isImportedAdapterDocument(value: unknown): value is ImportedAdapterDocu
   return value !== null && typeof value === 'object' && 'document' in value && typeof value.document === 'string' && 'format' in value && (value.format === 'json' || value.format === 'yaml');
 }
 
+/** Applies an import as one draft transition so document metadata cannot lag. */
+export function applyImportedAdapterDocument(
+  draft: CustomHttpDraft,
+  imported: ImportedAdapterDocument,
+): CustomHttpDraft {
+  return {
+    ...draft,
+    document: imported.document,
+    format: imported.format,
+    ...(imported.version === undefined ? {} : { version: imported.version }),
+  };
+}
+
+/** Preserves other Trusted draft edits while replacing an imported manifest. */
+export function applyImportedTrustedManifest(
+  draft: TrustedJsDraft,
+  manifest: string,
+): TrustedJsDraft {
+  return { ...draft, manifest };
+}
+
+function sameAdapterRevision(
+  left: AdapterRevisionRef,
+  right: AdapterRevisionRef,
+): boolean {
+  return left.kind === right.kind &&
+    left.adapterId === right.adapterId &&
+    left.version === right.version &&
+    left.digest === right.digest;
+}
+
+/** Disabled history entries remain terminal and cannot be rebound from the UI. */
+export function isAdapterRevisionDisabled(
+  ref: AdapterRevisionRef | undefined,
+  history: readonly AdapterRevision[],
+): boolean {
+  return ref !== undefined && history.some((revision) => revision.disabled === true && sameAdapterRevision(ref, revision));
+}
+
 function statusTone(status: AdapterWorkspaceStatus): CSSProperties | undefined {
   if (status === 'error') return styles.statusError;
   if (status === 'success') return styles.statusSuccess;
@@ -1058,7 +1162,10 @@ function CustomHttpEditor({
   busyAction,
   disabled,
   draft,
+  importSequence,
   onDraftChange,
+  onImportSettled,
+  onImportStarted,
   onRun,
   preview,
   providerId,
@@ -1071,7 +1178,10 @@ function CustomHttpEditor({
   readonly busyAction: string | null;
   readonly disabled: boolean;
   readonly draft: CustomHttpDraft;
-  readonly onDraftChange: (next: CustomHttpDraft) => void;
+  readonly importSequence: LatestImportSequence;
+  readonly onDraftChange: (update: DraftUpdate<CustomHttpDraft>) => void;
+  readonly onImportSettled: () => void;
+  readonly onImportStarted: () => void;
   readonly onRun: (key: ActionKey, payloadFactory: () => unknown, label: string) => void | Promise<void>;
   readonly preview?: CustomHttpPreview | null | undefined;
   readonly providerId?: string | undefined;
@@ -1082,7 +1192,8 @@ function CustomHttpEditor({
 }) {
   const importRef = useRef<HTMLInputElement>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const set = <K extends keyof CustomHttpDraft>(key: K, value: CustomHttpDraft[K]) => onDraftChange({ ...draft, [key]: value });
+  const [importState, setImportState] = useState<AdapterFileImportState>('idle');
+  const set = <K extends keyof CustomHttpDraft>(key: K, value: CustomHttpDraft[K]) => onDraftChange((current) => ({ ...current, [key]: value }));
   const handler = (key: ActionKey) => actionFromProps(actions, key);
   const runDocumentAction = (key: ActionKey, label: string) => {
     onRun(key, () => mapCustomHttpDraftToPayload(draft, providerId), label);
@@ -1090,28 +1201,35 @@ function CustomHttpEditor({
   const handleDocumentImport = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     if (file) {
+      const token = importSequence.begin();
       setFileError(null);
-      const result = handler('onImportDocument')?.(file);
-      void Promise.resolve(result).then((value) => {
+      setImportState('reading');
+      onImportStarted();
+      void settleLatestImport(importSequence, token, () => handler('onImportDocument')?.(file), (value) => {
         if (typeof value === 'string') {
-          const security = validateAdapterImportSecurity(draft.format, value);
-          if (!security.ok) throw new Error(security.error);
-          set('document', value);
+          onDraftChange((current) => {
+            const security = validateAdapterImportSecurity(current.format, value);
+            if (!security.ok) throw new Error(security.error);
+            return { ...current, document: value };
+          });
         }
         else if (isImportedAdapterDocument(value)) {
           const security = validateAdapterImportSecurity(value.format, value.document);
           if (!security.ok) throw new Error(security.error);
-          onDraftChange({
-            ...draft,
-            document: value.document,
-            format: value.format,
-            ...(value.version ? { version: value.version } : {}),
-          });
+          onDraftChange((current) => applyImportedAdapterDocument(current, value));
         }
-      }).catch((error: unknown) => setFileError(error instanceof Error ? error.message : 'The adapter document could not be read.'));
+      }).then((outcome) => {
+        if (outcome.state === 'stale') return;
+        setImportState(outcome.state);
+        onImportSettled();
+        if (outcome.state === 'error') {
+          setFileError(outcome.error instanceof Error ? outcome.error.message : 'The adapter document could not be read.');
+        }
+      });
     }
     event.currentTarget.value = '';
   };
+  const importSelectionDisabled = isFileImportSelectionDisabled(disabled, busyAction !== null, importState);
   const simulation = () => {
     const payload = mapCustomHttpDraftToPayload(draft, providerId);
     const status = Number(draft.simulationStatus);
@@ -1170,9 +1288,12 @@ function CustomHttpEditor({
           </Field>
           <Field label="Import document">
             <div style={styles.commandBar}>
-              <input accept=".json,.yaml,.yml,application/json,application/yaml" aria-label="Import JSON or YAML document" onChange={handleDocumentImport} ref={importRef} style={styles.hiddenFile} type="file" />
-              <ActionButton disabled={Boolean(disabled || busyAction !== null)} icon={<FolderOpen aria-hidden="true" size={16} />} label="Choose document file" onClick={() => importRef.current?.click()} />
+              <input accept=".json,.yaml,.yml,application/json,application/yaml" aria-label="Import JSON or YAML document" data-import-state={importState} disabled={importSelectionDisabled} onChange={handleDocumentImport} ref={importRef} style={styles.hiddenFile} type="file" />
+              <ActionButton disabled={importSelectionDisabled} icon={<FolderOpen aria-hidden="true" size={16} />} label="Choose document file" onClick={() => importRef.current?.click()} />
             </div>
+            <span aria-live="polite" data-import-state={importState} data-testid="custom-http-import-state" style={styles.helper}>
+              {importState === 'reading' ? 'Reading adapter document.' : importState === 'complete' ? 'Adapter document import complete.' : importState === 'error' ? 'Adapter document import failed.' : ''}
+            </span>
           </Field>
         </div>
         {fileError && <p aria-live="polite" role="alert" style={mergeStyle(styles.helper, styles.statusError)}>{fileError}</p>}
@@ -1239,7 +1360,10 @@ function TrustedJsEditor({
   busyAction,
   disabled,
   draft,
+  importSequence,
   onDraftChange,
+  onImportSettled,
+  onImportStarted,
   onRunTrusted,
   providerId,
   remoteDisabled,
@@ -1256,7 +1380,10 @@ function TrustedJsEditor({
   readonly busyAction: string | null;
   readonly disabled: boolean;
   readonly draft: TrustedJsDraft;
-  readonly onDraftChange: (next: TrustedJsDraft) => void;
+  readonly importSequence: LatestImportSequence;
+  readonly onDraftChange: (update: DraftUpdate<TrustedJsDraft>) => void;
+  readonly onImportSettled: () => void;
+  readonly onImportStarted: () => void;
   readonly onRunTrusted: (key: ActionKey, payloadFactory: (() => unknown) | undefined, label: string) => void | Promise<void>;
   readonly providerId?: string | undefined;
   readonly remoteDisabled: boolean;
@@ -1271,24 +1398,34 @@ function TrustedJsEditor({
   const manifestFileRef = useRef<HTMLInputElement>(null);
   const sourceFileRef = useRef<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [manifestImportState, setManifestImportState] = useState<AdapterFileImportState>('idle');
   const [sourceSelected, setSourceSelected] = useState(false);
-  const [selectedAdapterId, setSelectedAdapterId] = useState('');
-  const set = <K extends keyof TrustedJsDraft>(key: K, value: TrustedJsDraft[K]) => onDraftChange({ ...draft, [key]: value });
+  const [selectedAdapterId, setSelectedAdapterId] = useState(trustedAdapterRef?.adapterId ?? trustedBinding?.ref?.adapterId ?? '');
+  const set = <K extends keyof TrustedJsDraft>(key: K, value: TrustedJsDraft[K]) => onDraftChange((current) => ({ ...current, [key]: value }));
   const handler = (key: ActionKey) => actionFromProps(actions, key);
   const manifestResult = useMemo(() => validateTrustedJsManifest(draft.manifest), [draft.manifest]);
   const preview = trustedManifestPreview ?? (manifestResult.ok ? manifestResult.value : null);
   const handleManifestFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     if (file) {
+      const token = importSequence.begin();
       setFileError(null);
-      const result = handler('onManifestFileImport')?.(file);
-      void Promise.resolve(result).then((value) => {
+      setManifestImportState('reading');
+      onImportStarted();
+      void settleLatestImport(importSequence, token, () => handler('onManifestFileImport')?.(file), (value) => {
         if (typeof value === 'string') {
           const validation = validateTrustedJsManifest(value);
           if (!validation.ok) throw new Error(validation.error);
-          set('manifest', value);
+          onDraftChange((current) => applyImportedTrustedManifest(current, value));
         }
-      }).catch((error: unknown) => setFileError(error instanceof Error ? error.message : 'The manifest file could not be read.'));
+      }).then((outcome) => {
+        if (outcome.state === 'stale') return;
+        setManifestImportState(outcome.state);
+        onImportSettled();
+        if (outcome.state === 'error') {
+          setFileError(outcome.error instanceof Error ? outcome.error.message : 'The manifest file could not be read.');
+        }
+      });
     }
     event.currentTarget.value = '';
   };
@@ -1317,6 +1454,8 @@ function TrustedJsEditor({
   };
   const boundProviderId = draft.providerId.trim() || providerId?.trim() || '';
   const selectedRef = trustedAdapters.find((adapter) => adapter.adapterId === selectedAdapterId)?.ref ?? trustedAdapterRef ?? undefined;
+  const selectedBindingIsDisabled = isAdapterRevisionDisabled(selectedRef, trustedBindingHistory);
+  const manifestImportSelectionDisabled = isFileImportSelectionDisabled(disabled, busyAction !== null, manifestImportState);
   return (
     <>
       <div role="status" style={styles.warning}>
@@ -1336,8 +1475,11 @@ function TrustedJsEditor({
         {!manifestResult.ok && draft.manifest.trim() && <p aria-live="polite" role="alert" style={mergeStyle(styles.helper, styles.statusError)}>{manifestResult.error}</p>}
         <div style={styles.grid}>
           <Field label="Import manifest file">
-            <input accept="application/json,.json" aria-label="Import trusted JavaScript manifest file" onChange={handleManifestFile} ref={manifestFileRef} style={styles.hiddenFile} type="file" />
-            <ActionButton disabled={disabled || busyAction !== null} icon={<FolderOpen aria-hidden="true" size={16} />} label="Choose manifest file" onClick={() => manifestFileRef.current?.click()} />
+            <input accept="application/json,.json" aria-label="Import trusted JavaScript manifest file" data-import-state={manifestImportState} disabled={manifestImportSelectionDisabled} onChange={handleManifestFile} ref={manifestFileRef} style={styles.hiddenFile} type="file" />
+            <ActionButton disabled={manifestImportSelectionDisabled} icon={<FolderOpen aria-hidden="true" size={16} />} label="Choose manifest file" onClick={() => manifestFileRef.current?.click()} />
+            <span aria-live="polite" data-import-state={manifestImportState} data-testid="trusted-js-manifest-import-state" style={styles.helper}>
+              {manifestImportState === 'reading' ? 'Reading trusted manifest.' : manifestImportState === 'complete' ? 'Trusted manifest import complete.' : manifestImportState === 'error' ? 'Trusted manifest import failed.' : ''}
+            </span>
           </Field>
           <Field label="Source file" hint="JavaScript source is uploaded for installation and is never rendered here.">
             <input accept=".mjs,.js,text/javascript,application/javascript" aria-label="Trusted JavaScript source file" data-source-selected={sourceSelected} disabled={disabled} onChange={handleSourceFile} style={styles.input} type="file" />
@@ -1389,7 +1531,7 @@ function TrustedJsEditor({
           {trustedBindingHistory.map((revision) => (
             <div key={`${revision.adapterId}:${revision.version}:${revision.digest}`} style={styles.listRow}>
               <div style={styles.listCopy}><strong style={styles.listPrimary}>{revision.displayName ?? revision.adapterId}{revision.current ? ' (current)' : ''}</strong><span style={styles.listSecondary}>{revision.version} / {revision.digest}</span>{revision.disabled && <span style={styles.helper}>Disabled</span>}</div>
-              <div style={styles.listActions}><ActionButton disabled={Boolean(remoteDisabled || !adminAvailable || busyAction !== null || revision.disabled || !boundProviderId)} icon={<ShieldCheck aria-hidden="true" size={15} />} label={`Bind revision ${revision.version}`} onClick={() => void onRunTrusted('onBindProvider', () => ({ providerId: boundProviderId, ref: revision }), 'Bind')} /></div>
+              <div style={styles.listActions}><ActionButton disabled={Boolean(remoteDisabled || !adminAvailable || busyAction !== null || isAdapterRevisionDisabled(revision, trustedBindingHistory) || !boundProviderId)} icon={<ShieldCheck aria-hidden="true" size={15} />} label={`Bind revision ${revision.version}`} onClick={() => void onRunTrusted('onBindProvider', () => ({ providerId: boundProviderId, ref: revision }), 'Bind')} /></div>
             </div>
           ))}
         </div>}
@@ -1397,7 +1539,7 @@ function TrustedJsEditor({
 
       <section aria-labelledby="trusted-js-bind-heading" style={styles.section}>
         <div style={styles.sectionHeading}>
-          <div><h2 id="trusted-js-bind-heading" style={styles.sectionTitle}>Provider binding</h2><p style={styles.sectionHint}>{trustedBinding ? `Current binding: ${trustedBinding.displayName ?? trustedBinding.adapterId}` : 'No adapter is currently bound to this provider.'}</p></div>
+          <div><h2 id="trusted-js-bind-heading" style={styles.sectionTitle}>Provider binding</h2><p style={styles.sectionHint}>{trustedBinding ? `${trustedBindingDisabled ? 'Disabled binding' : 'Current binding'}: ${trustedBinding.displayName ?? trustedBinding.adapterId}` : 'No adapter is currently bound to this provider.'}</p></div>
           {trustedBinding && <div style={styles.commandBar}>
             <ActionButton disabled={Boolean(remoteDisabled || !adminAvailable || busyAction !== null || trustedBindingDisabled)} icon={<X aria-hidden="true" size={15} />} label="Disable provider binding" onClick={() => void onRunTrusted('onDisableProviderBinding', () => trustedBinding.ref, 'Disable binding')} />
             {trustedBinding.ref && <ActionButton disabled={Boolean(remoteDisabled || !adminAvailable || busyAction !== null)} icon={<Trash2 aria-hidden="true" size={15} />} label="Unbind provider" onClick={() => void onRunTrusted('onUnbindProvider', () => trustedBinding.ref, 'Unbind')} tone="danger" />}
@@ -1407,7 +1549,7 @@ function TrustedJsEditor({
           <Field label="Installed adapter"><select aria-label="Installed trusted adapter" disabled={disabled || !adminAvailable} onChange={(event) => setSelectedAdapterId(event.target.value)} style={styles.select} value={selectedAdapterId}><option value="">Choose an adapter</option>{trustedAdapters.map((adapter) => <option key={adapter.adapterId} value={adapter.adapterId}>{adapter.displayName ?? adapter.adapterId}</option>)}</select></Field>
           <Field label="Provider id"><input aria-label="Provider id for trusted adapter" disabled={disabled || !adminAvailable} onChange={(event) => set('providerId', event.target.value)} style={styles.input} value={boundProviderId} /></Field>
         </div>
-        <div style={styles.commandBar}><ActionButton disabled={Boolean(remoteDisabled || !adminAvailable || busyAction !== null || !boundProviderId || !selectedAdapterId)} icon={<ShieldCheck aria-hidden="true" size={16} />} label="Bind adapter to provider" onClick={() => void onRunTrusted('onBindProvider', () => ({ providerId: boundProviderId, ...(selectedRef ? { ref: selectedRef } : {}) }), 'Bind')} /></div>
+        <div style={styles.commandBar}><ActionButton disabled={Boolean(remoteDisabled || !adminAvailable || busyAction !== null || !boundProviderId || !selectedAdapterId || selectedBindingIsDisabled)} icon={<ShieldCheck aria-hidden="true" size={16} />} label="Bind adapter to provider" onClick={() => void onRunTrusted('onBindProvider', () => ({ providerId: boundProviderId, ...(selectedRef ? { ref: selectedRef } : {}) }), 'Bind')} /></div>
       </section>
     </>
   );
@@ -1447,15 +1589,40 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
   const mode = controlledMode ?? localMode;
   const [httpDraft, setHttpDraft] = useState<CustomHttpDraft>({ ...DEFAULT_CUSTOM_HTTP_DRAFT, ...customHttp });
   const [jsDraft, setJsDraft] = useState<TrustedJsDraft>({ ...DEFAULT_TRUSTED_JS_DRAFT, ...trustedJs });
+  const httpDraftRef = useRef(httpDraft);
+  const jsDraftRef = useRef(jsDraft);
+  const importSequenceRef = useRef<LatestImportSequence>(createLatestImportSequence());
+  const previousModeRef = useRef(mode);
+  const [importPending, setImportPending] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [commandMessage, setCommandMessage] = useState<string | null>(null);
   const effectiveStatus: AdapterWorkspaceStatus = !online ? 'offline' : status ?? state ?? 'success';
-  const remoteDisabled = disabled || !adminAvailable || effectiveStatus === 'loading' || effectiveStatus === 'error' || effectiveStatus === 'disabled' || effectiveStatus === 'admin-unavailable' || effectiveStatus === 'offline';
-  const localDisabled = disabled || effectiveStatus === 'loading' || effectiveStatus === 'disabled';
+  const { localDisabled, remoteDisabled } = adapterWorkspaceDisabledState({
+    adminAvailable,
+    disabled,
+    importPending,
+    mode,
+    status: effectiveStatus,
+  });
   const effectiveAdminAvailable = adminAvailable && effectiveStatus !== 'admin-unavailable';
   const handler = (key: ActionKey) => actionFromProps(props, key);
+  useLayoutEffect(() => {
+    if (previousModeRef.current === mode) return;
+    previousModeRef.current = mode;
+    importSequenceRef.current.invalidate();
+    setImportPending(false);
+  }, [mode]);
+  useLayoutEffect(() => {
+    const sequence = importSequenceRef.current;
+    return () => sequence.invalidate();
+  }, []);
   const setMode = (next: CustomAdapterMode) => {
     if (modeLocked) return;
+    if (next !== mode) {
+      previousModeRef.current = next;
+      importSequenceRef.current.invalidate();
+      setImportPending(false);
+    }
     if (!controlledMode) setLocalMode(next);
     handler('onModeChange')?.(next);
   };
@@ -1498,18 +1665,22 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
       setBusyAction(null);
     }
   };
-  const updateHttpDraft = (next: CustomHttpDraft) => {
+  const updateHttpDraft = (update: DraftUpdate<CustomHttpDraft>) => {
+    const next = typeof update === 'function' ? update(httpDraftRef.current) : update;
+    httpDraftRef.current = next;
     setHttpDraft(next);
     void handler('onCustomHttpChange')?.(next);
   };
-  const updateTrustedDraft = (next: TrustedJsDraft) => {
+  const updateTrustedDraft = (update: DraftUpdate<TrustedJsDraft>) => {
+    const next = typeof update === 'function' ? update(jsDraftRef.current) : update;
+    jsDraftRef.current = next;
     setJsDraft(next);
     void handler('onTrustedJsChange')?.(next);
   };
   const statusText = commandMessage || statusMessage || STATUS_LABELS[effectiveStatus];
   const statusModeLabel = mode === 'custom-http' ? 'Custom HTTP' : 'Trusted JavaScript';
   return (
-    <main aria-label="Custom adapter workspace" data-mode={mode} data-testid="custom-adapter-workspace" style={styles.root}>
+    <main aria-busy={importPending} aria-label="Custom adapter workspace" data-import-pending={importPending} data-mode={mode} data-testid="custom-adapter-workspace" style={styles.root}>
       <header style={styles.heading}>
         <div>
           <p style={styles.eyebrow}>Provider adapters</p>
@@ -1525,9 +1696,9 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
       {effectiveStatus === 'empty' && <div aria-live="polite" style={styles.empty}>Start with a document or manifest. Existing revisions remain unchanged until Save or Install is selected.</div>}
       {effectiveStatus === 'admin-unavailable' && <div aria-live="polite" style={styles.warning}><ShieldCheck aria-hidden="true" size={18} /><span>Administrator authorization is required for trusted adapter installation and lifecycle actions.</span></div>}
       {mode === 'custom-http' ? (
-        <CustomHttpEditor actions={props} busyAction={busyAction} disabled={localDisabled} draft={httpDraft} dryRunResult={dryRunResult} onDraftChange={updateHttpDraft} onRun={runAction} pathTestResult={pathTestResult} preview={preview ?? null} providerId={providerId ?? ''} remoteDisabled={remoteDisabled} simulationResult={simulationResult} />
+        <CustomHttpEditor actions={props} busyAction={busyAction} disabled={localDisabled} draft={httpDraft} dryRunResult={dryRunResult} importSequence={importSequenceRef.current} onDraftChange={updateHttpDraft} onImportSettled={() => setImportPending(false)} onImportStarted={() => setImportPending(true)} onRun={runAction} pathTestResult={pathTestResult} preview={preview ?? null} providerId={providerId ?? ''} remoteDisabled={remoteDisabled} simulationResult={simulationResult} />
       ) : (
-        <TrustedJsEditor actions={props} adminAvailable={effectiveAdminAvailable} busyAction={busyAction} disabled={localDisabled} draft={jsDraft} onDraftChange={updateTrustedDraft} onRunTrusted={runTrusted} providerId={providerId ?? ''} remoteDisabled={remoteDisabled} trustedAdapterRef={trustedAdapterRef ?? null} trustedAdapters={trustedAdapters} trustedBinding={trustedBinding ?? null} trustedBindingDisabled={trustedBindingDisabled} trustedBindingHistory={trustedBindingHistory} trustedBindingHistoryCursor={trustedBindingHistoryCursor ?? null} trustedManifestPreview={trustedManifestPreview ?? null} />
+        <TrustedJsEditor actions={props} adminAvailable={effectiveAdminAvailable} busyAction={busyAction} disabled={localDisabled} draft={jsDraft} importSequence={importSequenceRef.current} onDraftChange={updateTrustedDraft} onImportSettled={() => setImportPending(false)} onImportStarted={() => setImportPending(true)} onRunTrusted={runTrusted} providerId={providerId ?? ''} remoteDisabled={remoteDisabled} trustedAdapterRef={trustedAdapterRef ?? null} trustedAdapters={trustedAdapters} trustedBinding={trustedBinding ?? null} trustedBindingDisabled={trustedBindingDisabled} trustedBindingHistory={trustedBindingHistory} trustedBindingHistoryCursor={trustedBindingHistoryCursor ?? null} trustedManifestPreview={trustedManifestPreview ?? null} />
       )}
       {mode === 'custom-http' && <CapabilityPreview busyAction={busyAction} disabled={remoteDisabled} onPreview={() => void runAction('onCapabilitiesPreview', () => mapCustomHttpDraftToPayload(httpDraft, providerId), 'Capability preview')} value={capabilityPreview} />}
       {mode === 'custom-http' && (

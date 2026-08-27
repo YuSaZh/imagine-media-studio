@@ -5,15 +5,31 @@ import { describe, expect, it } from 'vitest';
 import {
   CustomAdapterWorkspace,
   DEFAULT_CUSTOM_HTTP_DRAFT,
+  adapterWorkspaceDisabledState,
+  applyImportedAdapterDocument,
+  applyImportedTrustedManifest,
+  createLatestImportSequence,
   formatAdapterExportName,
   hasForbiddenAdapterFields,
+  isAdapterRevisionDisabled,
+  isFileImportSelectionDisabled,
   mapCustomHttpDraftToPayload,
   redactCustomHttpPreview,
+  settleLatestImport,
   validateAdapterImportSecurity,
   validateCustomHttpDocument,
   validateTrustedJsManifest,
   type CustomHttpPreview,
 } from './custom-adapter-workspace.js';
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => { resolvePromise = resolve; });
+  return { promise, resolve: (value) => resolvePromise?.(value) };
+}
 
 const trustedManifest = JSON.stringify({
   schemaVersion: 1,
@@ -121,9 +137,175 @@ describe('CustomAdapterWorkspace SSR contract', () => {
     expect(markup).toContain('aria-label="Validate" disabled=""');
     expect(markup).toContain('Administrator access is unavailable');
   });
+
+  it('keeps Trusted lifecycle actions available when the current binding is disabled', () => {
+    const trustedRef = {
+      kind: 'trusted-javascript' as const,
+      adapterId: 'trusted-image',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    const trustedSummary = {
+      adapterId: trustedRef.adapterId,
+      version: trustedRef.version,
+      displayName: 'Trusted image adapter',
+      ref: trustedRef,
+      manifest: {
+        id: trustedRef.adapterId,
+        version: trustedRef.version,
+        displayName: 'Trusted image adapter',
+        allowedHosts: ['api.example.com'],
+        requiredSecrets: [],
+        resourceLimits: { timeoutMs: 5_000 },
+      },
+    };
+    const markup = renderToStaticMarkup(createElement(CustomAdapterWorkspace, {
+      mode: 'trusted-js',
+      providerId: 'provider-1',
+      status: 'disabled',
+      trustedAdapters: [trustedSummary],
+      trustedBinding: trustedSummary,
+      trustedBindingDisabled: true,
+      trustedBindingHistory: [{ ...trustedRef, current: true, disabled: true }],
+      trustedBindingHistoryCursor: 'next',
+    }));
+    const buttonMarkup = (label: string): string => markup.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`, 'u'))?.[0] ?? '';
+    expect(buttonMarkup('Disable provider binding')).toContain('disabled=""');
+    expect(buttonMarkup('Unbind provider')).not.toContain('disabled=""');
+    expect(buttonMarkup(`Remove trusted adapter ${trustedRef.adapterId}`)).not.toContain('disabled=""');
+    expect(buttonMarkup('Load more binding history')).not.toContain('disabled=""');
+    expect(buttonMarkup('Bind adapter to provider')).toContain('disabled=""');
+    expect(markup).toContain('data-state="disabled"');
+    expect(markup).toContain('Disabled binding: Trusted image adapter');
+  });
 });
 
 describe('CustomAdapterWorkspace mapping and validation', () => {
+  it('applies imported document, format, and envelope version in one draft value', () => {
+    const draft = applyImportedAdapterDocument({
+      ...DEFAULT_CUSTOM_HTTP_DRAFT,
+      format: 'json',
+      version: '9.9.9',
+    }, {
+      document: 'schemaVersion: 1\nversion: 1.2.3\ndefinition:\n  id: imported\n',
+      format: 'yaml',
+      version: '1.2.3',
+    });
+    expect(draft).toMatchObject({
+      document: 'schemaVersion: 1\nversion: 1.2.3\ndefinition:\n  id: imported\n',
+      format: 'yaml',
+      version: '1.2.3',
+    });
+    expect(draft).not.toBe(DEFAULT_CUSTOM_HTTP_DRAFT);
+  });
+
+  it('keeps edits made during file reads and ignores stale HTTP and Trusted imports', async () => {
+    const httpSequence = createLatestImportSequence();
+    const firstHttp = deferred<{ document: string; format: 'json'; version: string }>();
+    const secondHttp = deferred<{ document: string; format: 'yaml'; version: string }>();
+    let httpDraft = { ...DEFAULT_CUSTOM_HTTP_DRAFT, baseUrl: 'https://before.example' };
+    const firstHttpTask = settleLatestImport(httpSequence, httpSequence.begin(), () => firstHttp.promise, (imported) => {
+      httpDraft = applyImportedAdapterDocument(httpDraft, imported);
+    });
+    const secondHttpTask = settleLatestImport(httpSequence, httpSequence.begin(), () => secondHttp.promise, (imported) => {
+      httpDraft = applyImportedAdapterDocument(httpDraft, imported);
+    });
+    httpDraft = { ...httpDraft, baseUrl: 'https://edited-while-reading.example' };
+    secondHttp.resolve({ document: 'id: second', format: 'yaml', version: '2.0.0' });
+    await expect(secondHttpTask).resolves.toEqual({ state: 'complete' });
+    firstHttp.resolve({ document: '{"id":"first"}', format: 'json', version: '1.0.0' });
+    await expect(firstHttpTask).resolves.toEqual({ state: 'stale' });
+    expect(httpDraft).toMatchObject({
+      baseUrl: 'https://edited-while-reading.example',
+      document: 'id: second',
+      format: 'yaml',
+      version: '2.0.0',
+    });
+
+    const trustedSequence = createLatestImportSequence();
+    const firstManifest = deferred<string>();
+    const secondManifest = deferred<string>();
+    let trustedDraft = { manifest: 'initial', providerId: 'provider-before' };
+    const firstManifestTask = settleLatestImport(trustedSequence, trustedSequence.begin(), () => firstManifest.promise, (imported) => {
+      trustedDraft = applyImportedTrustedManifest(trustedDraft, imported);
+    });
+    const secondManifestTask = settleLatestImport(trustedSequence, trustedSequence.begin(), () => secondManifest.promise, (imported) => {
+      trustedDraft = applyImportedTrustedManifest(trustedDraft, imported);
+    });
+    trustedDraft = { ...trustedDraft, providerId: 'provider-edited-while-reading' };
+    secondManifest.resolve('second manifest');
+    await expect(secondManifestTask).resolves.toEqual({ state: 'complete' });
+    firstManifest.resolve('first manifest');
+    await expect(firstManifestTask).resolves.toEqual({ state: 'stale' });
+    expect(trustedDraft).toEqual({
+      manifest: 'second manifest',
+      providerId: 'provider-edited-while-reading',
+    });
+
+    const errorSequence = createLatestImportSequence();
+    const error = new Error('read failed');
+    await expect(settleLatestImport(errorSequence, errorSequence.begin(), () => { throw error; }, () => undefined)).resolves.toEqual({
+      error,
+      state: 'error',
+    });
+
+    const invalidatedSequence = createLatestImportSequence();
+    const invalidatedRead = deferred<string>();
+    let invalidatedApplied = false;
+    const invalidatedTask = settleLatestImport(
+      invalidatedSequence,
+      invalidatedSequence.begin(),
+      () => invalidatedRead.promise,
+      () => { invalidatedApplied = true; },
+    );
+    invalidatedSequence.invalidate();
+    invalidatedRead.resolve('old workspace result');
+    await expect(invalidatedTask).resolves.toEqual({ state: 'stale' });
+    expect(invalidatedApplied).toBe(false);
+  });
+
+  it('treats every disabled history ref as terminal for Bind actions', () => {
+    const disabled = {
+      adapterId: 'disabled-adapter',
+      digest: 'd'.repeat(64),
+      kind: 'trusted-javascript' as const,
+      version: '1.0.0',
+    };
+    const enabled = { ...disabled, adapterId: 'enabled-adapter', digest: 'e'.repeat(64) };
+    const history = [
+      { ...enabled, current: true, disabled: false },
+      { ...disabled, current: false, disabled: true },
+    ];
+    expect(isAdapterRevisionDisabled(disabled, history)).toBe(true);
+    expect(isAdapterRevisionDisabled(enabled, history)).toBe(false);
+    expect(isAdapterRevisionDisabled(undefined, history)).toBe(false);
+  });
+
+  it('prevents another file selection while either import is reading', () => {
+    expect(isFileImportSelectionDisabled(false, false, 'reading')).toBe(true);
+    expect(isFileImportSelectionDisabled(false, false, 'complete')).toBe(false);
+    expect(isFileImportSelectionDisabled(false, false, 'error')).toBe(false);
+    expect(isFileImportSelectionDisabled(true, false, 'idle')).toBe(true);
+    expect(isFileImportSelectionDisabled(false, true, 'idle')).toBe(true);
+  });
+
+  it('blocks remote commands during import without disabling ordinary fields', () => {
+    expect(adapterWorkspaceDisabledState({
+      adminAvailable: true,
+      disabled: false,
+      importPending: true,
+      mode: 'custom-http',
+      status: 'success',
+    })).toEqual({ localDisabled: false, remoteDisabled: true });
+    expect(adapterWorkspaceDisabledState({
+      adminAvailable: true,
+      disabled: false,
+      importPending: true,
+      mode: 'trusted-js',
+      status: 'disabled',
+    })).toEqual({ localDisabled: false, remoteDisabled: true });
+  });
+
   it('rejects secret-like and administrator-only fields recursively', () => {
     expect(hasForbiddenAdapterFields({ request: { extra: { adminEnabled: true } } })).toBe(true);
     expect(hasForbiddenAdapterFields({ request: { extra: { apiKey: 'plaintext' } } })).toBe(true);

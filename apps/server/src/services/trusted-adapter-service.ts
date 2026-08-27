@@ -52,6 +52,7 @@ export interface TrustedAdapterStorePort {
 
 export interface TrustedAdapterDefinitionRepositoryPort {
   getCurrent(providerId: string): ProviderAdapterDefinitionRecord | null;
+  getCurrentOrLatestDisabled(providerId: string): ProviderAdapterDefinitionRecord | null;
   getByRef(providerId: string, ref: CustomAdapterRef): ProviderAdapterDefinitionRecord | null;
   list(providerId: string): readonly ProviderAdapterDefinitionRecord[];
   disable(providerId: string, ref?: CustomAdapterRef): ProviderAdapterDefinitionRecord | null;
@@ -157,6 +158,7 @@ export type TrustedAdapterServiceErrorCode =
   | 'digest_mismatch'
   | 'already_exists'
   | 'adapter_id_immutable'
+  | 'disabled_revision'
   | 'not_found'
   | 'manifest_mismatch'
   | 'provider_not_found'
@@ -178,6 +180,7 @@ const ERROR_MESSAGES: Readonly<Record<TrustedAdapterServiceErrorCode, string>> =
   digest_mismatch: 'The trusted adapter source digest does not match its manifest.',
   already_exists: 'The trusted adapter is already installed.',
   adapter_id_immutable: 'The trusted adapter id is immutable; install an upgraded revision under a new id.',
+  disabled_revision: 'Disabled trusted adapter revisions cannot be rebound.',
   not_found: 'The trusted adapter was not found.',
   manifest_mismatch: 'The installed trusted adapter manifest does not match the requested revision.',
   provider_not_found: 'The Provider was not found.',
@@ -206,6 +209,7 @@ function statusFor(code: TrustedAdapterServiceErrorCode): number {
       return 404;
     case 'already_exists':
     case 'adapter_id_immutable':
+    case 'disabled_revision':
     case 'manifest_mismatch':
     case 'provider_type_mismatch':
     case 'adapter_references_in_use':
@@ -516,6 +520,21 @@ export class TrustedAdapterService {
     });
   }
 
+  /** Returns current, or the latest disabled binding when current was disabled. */
+  public async getCurrentOrDisabledBinding(providerId: string): Promise<TrustedAdapterBindingDto | null> {
+    this.assertAdmin();
+    this.requireCustomJavaScriptProvider(providerId);
+    const initial = this.readCurrentOrDisabledBindingDefinition(providerId);
+    if (initial === null) return null;
+    return this.withAdapterLock(initial.ref.adapterId, async () => {
+      const definition = this.readCurrentOrDisabledBindingDefinition(providerId);
+      if (definition === null) return null;
+      const result = await this.readBinding(providerId, definition);
+      if (result.events.length > 0) await this.flushOutbox();
+      return result.dto;
+    });
+  }
+
   /** Returns all current and historical trusted revisions bound to a Provider. */
   public async listBindings(providerId: string): Promise<readonly TrustedAdapterBindingDto[]> {
     this.assertAdmin();
@@ -713,6 +732,18 @@ export class TrustedAdapterService {
     let definition: ProviderAdapterDefinitionRecord | null;
     try {
       definition = this.adapterDefinitions.getCurrent(providerId);
+    } catch (error) {
+      throw this.mapDefinitionError(error);
+    }
+    if (definition === null) return null;
+    this.assertTrustedBindingDefinition(providerId, definition);
+    return definition;
+  }
+
+  private readCurrentOrDisabledBindingDefinition(providerId: string): ProviderAdapterDefinitionRecord | null {
+    let definition: ProviderAdapterDefinitionRecord | null;
+    try {
+      definition = this.adapterDefinitions.getCurrentOrLatestDisabled(providerId);
     } catch (error) {
       throw this.mapDefinitionError(error);
     }
@@ -1112,6 +1143,8 @@ export class TrustedAdapterService {
           return new TrustedAdapterServiceError('provider_not_found');
         case 'already_exists':
           return new TrustedAdapterServiceError('already_exists');
+        case 'disabled_revision':
+          return new TrustedAdapterServiceError('disabled_revision');
         case 'invalid_reference':
           return new TrustedAdapterServiceError('provider_type_mismatch');
         case 'referenced_jobs':

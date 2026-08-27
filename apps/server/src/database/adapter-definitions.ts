@@ -5,7 +5,7 @@ import {
   CustomAdapterRefSchema,
   type CustomAdapterRef,
 } from '@imagine/shared';
-import { and, asc, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 
 import {
   canonicalDeclarativeSpec,
@@ -83,6 +83,7 @@ export class ProviderAdapterDefinitionError extends Error {
       | 'digest_mismatch'
       | 'provider_not_found'
       | 'already_exists'
+      | 'disabled_revision'
       | 'not_found'
       | 'referenced_jobs'
       | 'referenced_definitions'
@@ -572,6 +573,12 @@ function trustedBindingInTransaction(
   if (existing !== undefined && existing.definitionJson !== null) {
     throw new ProviderAdapterDefinitionError('persisted_invalid', 'Stored trusted adapter definition is invalid.');
   }
+  if (existing?.disabled === true) {
+    throw new ProviderAdapterDefinitionError(
+      'disabled_revision',
+      'Disabled trusted adapter revisions cannot be rebound.',
+    );
+  }
 
   transaction
     .update(providerAdapterDefinitions)
@@ -685,6 +692,38 @@ export class ProviderAdapterDefinitionRepository {
       .where(and(eq(providerAdapterDefinitions.providerId, providerId), eq(providerAdapterDefinitions.isCurrent, true)))
       .get();
     return row === undefined ? null : persistedRecord(row);
+  }
+
+  /** Returns current, or the most recently disabled exact binding when none is current. */
+  public getCurrentOrLatestDisabled(providerId: string): ProviderAdapterDefinitionRecord | null {
+    const current = this.database
+      .select()
+      .from(providerAdapterDefinitions)
+      .where(and(
+        eq(providerAdapterDefinitions.providerId, providerId),
+        eq(providerAdapterDefinitions.kind, 'trusted-javascript'),
+        eq(providerAdapterDefinitions.isCurrent, true),
+      ))
+      .get();
+    if (current !== undefined) return persistedRecord(current);
+    const disabled = this.database
+      .select()
+      .from(providerAdapterDefinitions)
+      .where(and(
+        eq(providerAdapterDefinitions.providerId, providerId),
+        eq(providerAdapterDefinitions.kind, 'trusted-javascript'),
+        eq(providerAdapterDefinitions.disabled, true),
+      ))
+      .orderBy(
+        desc(providerAdapterDefinitions.updatedAt),
+        desc(providerAdapterDefinitions.createdAt),
+        asc(providerAdapterDefinitions.kind),
+        asc(providerAdapterDefinitions.adapterId),
+        asc(providerAdapterDefinitions.version),
+        asc(providerAdapterDefinitions.digest),
+      )
+      .get();
+    return disabled === undefined ? null : persistedRecord(disabled);
   }
 
   public getByRef(providerId: string, rawRef: CustomAdapterRef): ProviderAdapterDefinitionRecord | null {
@@ -1042,6 +1081,12 @@ export class ProviderAdapterDefinitionRepository {
       if (existing !== undefined) {
         if (existing.definitionJson !== normalized.canonical) {
           throw new ProviderAdapterDefinitionError('persisted_invalid', 'Stored adapter definition is invalid.');
+        }
+        if (ref.kind === 'trusted-javascript' && existing.disabled) {
+          throw new ProviderAdapterDefinitionError(
+            'disabled_revision',
+            'Disabled trusted adapter revisions cannot be rebound.',
+          );
         }
       }
       const now = new Date();

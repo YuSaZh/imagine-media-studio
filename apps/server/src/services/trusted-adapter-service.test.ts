@@ -524,8 +524,51 @@ describe('TrustedAdapterService', () => {
     const disabled = await harness.service.disableBinding(harness.provider.id);
     expect(disabled).toMatchObject({ ref: second.ref, isCurrent: false, disabled: true });
     await expect(harness.service.getBinding(harness.provider.id)).resolves.toBeNull();
+    await expect(harness.service.getCurrentOrDisabledBinding(harness.provider.id)).resolves.toMatchObject({
+      ref: second.ref,
+      isCurrent: false,
+      disabled: true,
+    });
     await expect(harness.service.getBinding(harness.provider.id, second.ref)).resolves.toMatchObject({
       ref: second.ref,
+      isCurrent: false,
+      disabled: true,
+    });
+    await expect(harness.service.bind(harness.provider.id, second.ref)).rejects.toMatchObject({
+      code: 'disabled_revision',
+      statusCode: 409,
+    });
+  });
+
+  it('ignores retained declarative rows after a Provider switches to trusted JavaScript', async () => {
+    const harness = await harnessFactory(true, 'custom-http-v1');
+    const timestamp = Date.parse('2026-08-27T00:00:00.000Z');
+    harness.database.sqlite.prepare(`
+      INSERT INTO provider_adapter_definitions (
+        provider_id, kind, adapter_id, version, digest, definition_json,
+        is_current, disabled, created_at, updated_at
+      ) VALUES (?, 'declarative-http', 'retained-declarative', '1.0.0', ?, '{}', 1, 0, ?, ?)
+    `).run(harness.provider.id, 'a'.repeat(64), timestamp, timestamp);
+    expect(harness.providers.update(harness.provider.id, { type: 'custom-js-v1' })?.type).toBe('custom-js-v1');
+
+    await expect(harness.service.getCurrentOrDisabledBinding(harness.provider.id)).resolves.toBeNull();
+    harness.database.sqlite.prepare(`
+      UPDATE provider_adapter_definitions
+      SET is_current = 0, disabled = 1, updated_at = ?
+      WHERE provider_id = ? AND kind = 'declarative-http'
+    `).run(timestamp + 1, harness.provider.id);
+    await expect(harness.service.getCurrentOrDisabledBinding(harness.provider.id)).resolves.toBeNull();
+
+    const input = await fixture();
+    const installed = await harness.service.install(installRequest(input, harness.provider.id));
+    await expect(harness.service.getCurrentOrDisabledBinding(harness.provider.id)).resolves.toMatchObject({
+      ref: installed.ref,
+      isCurrent: true,
+      disabled: false,
+    });
+    await harness.service.disableBinding(harness.provider.id, installed.ref);
+    await expect(harness.service.getCurrentOrDisabledBinding(harness.provider.id)).resolves.toMatchObject({
+      ref: installed.ref,
       isCurrent: false,
       disabled: true,
     });
@@ -607,6 +650,7 @@ describe('TrustedAdapterService', () => {
       digest: '0'.repeat(64),
     };
     await expect(harness.service.getBinding(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
+    await expect(harness.service.getCurrentOrDisabledBinding(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
     await expect(harness.service.getBinding(harness.provider.id, ref)).rejects.toMatchObject({ code: 'administrator_required' });
     await expect(harness.service.listBindings(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
     await expect(harness.service.disableBinding(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });

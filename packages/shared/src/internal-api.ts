@@ -1351,6 +1351,7 @@ export const AdapterErrorCodeSchema = z.enum([
   'source_too_large',
   'manifest_too_large',
   'adapter_id_immutable',
+  'disabled_revision',
   'manifest_mismatch',
   'adapter_references_in_use',
   'adapter_references_unavailable',

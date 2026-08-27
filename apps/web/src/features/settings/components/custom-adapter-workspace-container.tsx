@@ -43,9 +43,11 @@ import {
 import {
   CustomAdapterWorkspace,
   formatAdapterExportName,
+  isAdapterRevisionDisabled,
   type AdapterRevision,
   type AdapterRevisionRef,
   type AdapterWorkspaceStatus,
+  type CustomAdapterMode,
   type CustomAdapterWorkspaceActions,
   type CustomHttpDraft,
   type CustomHttpPreview,
@@ -145,6 +147,41 @@ function trustedBindingRevisionSummary(item: TrustedAdapterBindingDto): AdapterR
 
 export const mapTrustedBindingRevisionToSummary = trustedBindingRevisionSummary;
 
+export function projectTrustedWorkspaceState(
+  currentOrDisabled: TrustedAdapterBindingDto | null,
+  visibleHistory: readonly TrustedAdapterBindingDto[],
+): {
+  readonly binding: TrustedAdapterBindingDto | null;
+  readonly bindingHistory: readonly AdapterRevision[];
+} {
+  return {
+    binding: currentOrDisabled,
+    bindingHistory: visibleHistory.map(trustedBindingRevisionSummary),
+  };
+}
+
+function workspaceRefKey(ref: CustomAdapterRef | null | undefined): readonly string[] | null {
+  return ref === null || ref === undefined
+    ? null
+    : [ref.kind, ref.adapterId, ref.version, ref.digest];
+}
+
+export function customAdapterWorkspaceKey(input: {
+  readonly providerId: string;
+  readonly mode: CustomAdapterMode;
+  readonly customRef?: CustomAdapterRef | null;
+  readonly trustedBindingRef?: CustomAdapterRef | null;
+  readonly trustedLookupRef?: CustomAdapterRef | null;
+}): string {
+  return JSON.stringify([
+    input.providerId,
+    input.mode,
+    workspaceRefKey(input.customRef),
+    workspaceRefKey(input.trustedBindingRef),
+    workspaceRefKey(input.trustedLookupRef),
+  ]);
+}
+
 function customDraft(definition: CustomAdapterDefinitionDto | null): Partial<CustomHttpDraft> {
   return definition?.definition === null || definition?.definition === undefined
     ? {}
@@ -166,7 +203,7 @@ function documentFormatForFile(file: File): 'json' | 'yaml' {
   return file.type === 'application/yaml' || file.type === 'text/yaml' || lowerName.endsWith('.yaml') || lowerName.endsWith('.yml') ? 'yaml' : 'json';
 }
 
-async function readImportedDocument(file: File): Promise<ImportedAdapterDocument> {
+export async function readImportedDocument(file: File): Promise<ImportedAdapterDocument> {
   const format = documentFormatForFile(file);
   const text = await file.text();
   if (format === 'json') {
@@ -303,8 +340,13 @@ export function CustomAdapterWorkspaceContainer({
       : customRevisionQuery.data?.definition ?? null
     : null;
   const customRevisionItems = useMemo(() => flattenCustomAdapterRevisionPages(customRevisionsQuery.data).map(customRevisionSummary), [customRevisionsQuery.data]);
-  const trustedBinding = isTrustedJs ? trustedBindingQuery.data?.binding ?? null : null;
-  const trustedBindingItems = useMemo(() => flattenTrustedBindingPages(trustedBindingsQuery.data).map(trustedBindingRevisionSummary), [trustedBindingsQuery.data]);
+  const trustedBindingRecords = useMemo(() => flattenTrustedBindingPages(trustedBindingsQuery.data), [trustedBindingsQuery.data]);
+  const trustedWorkspaceState = useMemo(() => projectTrustedWorkspaceState(
+    isTrustedJs ? trustedBindingQuery.data?.binding ?? null : null,
+    trustedBindingRecords,
+  ), [isTrustedJs, trustedBindingQuery.data?.binding, trustedBindingRecords]);
+  const trustedBinding = trustedWorkspaceState.binding;
+  const trustedBindingItems = trustedWorkspaceState.bindingHistory;
   const trustedItems = useMemo(() => (trustedAdaptersQuery.data?.items ?? []).map((item) => trustedAdapterSummary(item)), [trustedAdaptersQuery.data?.items]);
   const queryError = isCustomHttp
     ? customCurrentQuery.error ?? customRevisionsQuery.error
@@ -366,17 +408,7 @@ export function CustomAdapterWorkspaceContainer({
   const actions: CustomAdapterWorkspaceActions = {
     onCustomHttpChange: () => setDirty(true),
     onTrustedJsChange: () => setDirty(true),
-    onImportDocument: async (file) => {
-      try {
-        const result = await readImportedDocument(file);
-        setMessage(`Selected ${file.name}.`);
-        setDirty(true);
-        return result;
-      } catch (error) {
-        setMessage(errorMessage(error, 'The adapter document could not be read.'));
-        throw error;
-      }
-    },
+    onImportDocument: (file) => readImportedDocument(file),
     onValidate: (payload) => execute('Validate', async () => {
       await validate.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}), ...(payload.request === undefined ? {} : { request: payload.request as never }) } });
     }),
@@ -429,12 +461,7 @@ export function CustomAdapterWorkspaceContainer({
       if (!ask(`Delete adapter revision ${revision?.version ?? 'current'}?`)) return false;
       return execute('Delete', async () => { await deleteCurrent.mutateAsync(provider.id); setDirty(false); });
     },
-    onManifestFileImport: async (file) => {
-      const text = await file.text();
-      setMessage(`Imported ${file.name}.`);
-      setDirty(true);
-      return text;
-    },
+    onManifestFileImport: (file) => file.text(),
     onSourceFileSelect: () => setDirty(true),
     onInstall: (payload) => execute('Install', async () => {
       const manifest = TrustedAdapterManifestSchema.parse(payload.manifest);
@@ -452,6 +479,9 @@ export function CustomAdapterWorkspaceContainer({
     },
     onBindProvider: (payload) => execute('Bind', async () => {
       if (payload.ref === undefined) throw new Error('Choose an installed adapter before binding.');
+      if (isAdapterRevisionDisabled(payload.ref, trustedBindingItems)) {
+        throw new Error('Disabled trusted adapter revisions cannot be rebound.');
+      }
       const ref = fromRef(payload.ref);
       if (payload.ref.kind !== 'trusted-javascript') throw new Error('Choose a trusted JavaScript adapter before binding.');
       await bindTrusted.mutateAsync({ providerId: payload.providerId, ref: { ...ref, kind: 'trusted-javascript' } });
@@ -509,7 +539,13 @@ export function CustomAdapterWorkspaceContainer({
                 <div aria-live="polite" className="custom-adapter-revision-error" data-testid="custom-adapter-revision-error" role="alert">Select Retry to load the revision.</div>
               ) : isCustomHttp || isTrustedJs ? (
                 <CustomAdapterWorkspace
-                  key={`${provider.id}:${loadedCustomRef?.digest ?? 'loading'}:${trustedBinding?.adapter.ref.digest ?? 'none'}:${trustedLookup?.ref.digest ?? 'none'}`}
+                  key={customAdapterWorkspaceKey({
+                    providerId: provider.id,
+                    mode: isCustomHttp ? 'custom-http' : 'trusted-js',
+                    customRef: loadedCustomRef ?? null,
+                    trustedBindingRef: trustedBinding?.adapter.ref ?? null,
+                    trustedLookupRef: trustedLookup?.ref ?? null,
+                  })}
                   actions={actions}
                   adminAvailable={adminAvailable}
                   capabilityPreview={capabilities.data}

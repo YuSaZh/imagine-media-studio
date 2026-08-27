@@ -646,6 +646,8 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
       mimeType: 'application/json',
       name: 'pr6-export.json',
     });
+    await expect(workspace.getByTestId('custom-http-import-state')).toHaveAttribute('data-import-state', 'complete');
+    await expect(workspace).toHaveAttribute('data-import-pending', 'false');
     await expect(documentField).toHaveValue(/pr6-safe-sync-image/u);
     await expect(workspace.getByRole('button', { name: 'JSON', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(versionField).toHaveValue('1.0.0');
@@ -703,6 +705,8 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
       mimeType: 'application/yaml',
       name: 'pr6-export.yaml',
     });
+    await expect(workspace.getByTestId('custom-http-import-state')).toHaveAttribute('data-import-state', 'complete');
+    await expect(workspace).toHaveAttribute('data-import-pending', 'false');
     await expect(workspace.getByRole('button', { name: 'YAML', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(versionField).toHaveValue('1.0.0');
     const yamlSaveResponse = await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
@@ -813,8 +817,10 @@ test('installs, binds, disables, unbinds, and removes a trusted adapter without 
 
     acceptNextConfirm(page);
     await workspace.getByRole('button', { name: 'Disable provider binding', exact: true }).click();
-    await expect(workspace.locator('section[aria-labelledby="trusted-js-bind-heading"]')).toContainText('Current binding:');
+    await expect(workspace.locator('section[aria-labelledby="trusted-js-bind-heading"]')).toContainText('Disabled binding:');
     await expect(workspace).toContainText('Disabled');
+    await expect(workspace.getByRole('button', { name: 'Unbind provider', exact: true })).toBeEnabled();
+    await expect(workspace.getByRole('button', { name: `Remove trusted adapter ${manifest.id}`, exact: true })).toBeEnabled();
 
     acceptNextConfirm(page);
     await workspace.getByRole('button', { name: 'Unbind provider', exact: true }).click();

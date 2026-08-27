@@ -116,6 +116,7 @@ function trustedTools() {
     bind: vi.fn(async () => ({ manifest: validManifest(), ref: { ...trustedRef, digest: digestAdapterSource(trustedSource) }, createdAt: now, updatedAt: now })),
     get: vi.fn(async () => ({ manifest: validManifest(), ref: { ...trustedRef, digest: digestAdapterSource(trustedSource) }, createdAt: now, updatedAt: now })),
     getBinding: vi.fn(async () => binding),
+    getCurrentOrDisabledBinding: vi.fn(async () => binding),
     install: vi.fn(async () => ({ manifest: validManifest(), ref: { ...trustedRef, digest: digestAdapterSource(trustedSource) }, createdAt: now, updatedAt: now })),
     list: vi.fn(async () => []),
     listBindings: vi.fn(async () => [binding]),
@@ -497,6 +498,18 @@ describe('adapter management routes', () => {
       });
       expect(bound.statusCode).toBe(201);
       expect(trusted.bind).toHaveBeenCalledWith({ providerId: 'provider-1', ref: trustedRef });
+      trusted.bind.mockRejectedValueOnce(new TrustedAdapterServiceError('disabled_revision'));
+      const disabled = await app.inject({
+        method: 'POST',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript',
+        headers: { 'content-type': 'application/json' },
+        payload: { ref: trustedRef },
+      });
+      expect(disabled.statusCode).toBe(409);
+      expect(disabled.json()).toEqual({
+        error: 'disabled_revision',
+        message: 'Disabled trusted adapter revisions cannot be rebound.',
+      });
     } finally {
       await app.close();
     }
@@ -505,8 +518,7 @@ describe('adapter management routes', () => {
   it('serves the trusted current binding, disables it, and rejects source or request injection', async () => {
     const trusted = trustedTools();
     const binding = trustedBindingRecord();
-    trusted.getBinding
-      .mockResolvedValueOnce(binding)
+    trusted.getCurrentOrDisabledBinding
       .mockResolvedValueOnce(binding)
       .mockResolvedValueOnce(null as never)
       .mockResolvedValueOnce({ ...binding, source: 'secret-source' } as never)
@@ -526,7 +538,7 @@ describe('adapter management routes', () => {
         url: `/internal/providers/provider-1/adapter/trusted-javascript?kind=${binding.ref.kind}&adapterId=${binding.ref.adapterId}&version=${binding.ref.version}&digest=${binding.ref.digest}`,
       });
       expect(historical.statusCode).toBe(200);
-      expect(trusted.getBinding).toHaveBeenNthCalledWith(2, 'provider-1', binding.ref);
+      expect(trusted.getBinding).toHaveBeenCalledWith('provider-1', binding.ref);
 
       const unbound = await app.inject({ method: 'GET', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
       expect(unbound.statusCode).toBe(404);
@@ -560,7 +572,38 @@ describe('adapter management routes', () => {
         url: '/internal/providers/provider-1/adapter/trusted-javascript?adminEnabled=true',
       });
       expect(queryInjection.statusCode).toBe(400);
-      expect(trusted.getBinding).toHaveBeenCalledTimes(5);
+      expect(trusted.getBinding).toHaveBeenCalledTimes(1);
+      expect(trusted.getCurrentOrDisabledBinding).toHaveBeenCalledTimes(4);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('projects only the dedicated trusted current-or-disabled service result', async () => {
+    const trusted = trustedTools();
+    const disabled = trustedBindingRecord({ isCurrent: false, disabled: true });
+    trusted.getCurrentOrDisabledBinding
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce(disabled);
+    const { app } = await createRouteApp(trusted);
+    try {
+      const retainedDeclarativeOnly = await app.inject({
+        method: 'GET',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript',
+      });
+      expect(retainedDeclarativeOnly.statusCode).toBe(404);
+
+      const trustedDisabled = await app.inject({
+        method: 'GET',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript',
+      });
+      expect(trustedDisabled.statusCode).toBe(200);
+      expect(trustedDisabled.json<{ binding: { adapter: { ref: typeof trustedRef }; disabled: boolean } }>().binding).toMatchObject({
+        adapter: { ref: disabled.ref },
+        disabled: true,
+      });
+      expect(trusted.getBinding).not.toHaveBeenCalled();
+      expect(trusted.getCurrentOrDisabledBinding).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();
     }
@@ -626,6 +669,47 @@ describe('adapter management routes', () => {
       });
       expect(invalid.statusCode).toBe(400);
       expect(trusted.listBindings).toHaveBeenCalledTimes(5);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('reads a disabled binding independently of the first 50 revision rows', async () => {
+    const trusted = trustedTools();
+    const rows = Array.from({ length: 51 }, (_, index) => trustedBindingRecord({
+      ref: {
+        ...trustedRef,
+        adapterId: `trusted-route-${String(index).padStart(2, '0')}`,
+        digest: index.toString(16).padStart(64, '0'),
+      },
+      isCurrent: false,
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)),
+      updatedAt: new Date(Date.UTC(2026, 0, 1, 0, index)),
+    }));
+    const disabled = { ...rows[0]!, disabled: true, updatedAt: new Date('2026-08-27T00:00:00.000Z') };
+    trusted.listBindings.mockResolvedValue(rows);
+    trusted.getCurrentOrDisabledBinding.mockResolvedValue(disabled);
+    const { app } = await createRouteApp(trusted);
+    try {
+      const page = await app.inject({
+        method: 'GET',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript/revisions?limit=50',
+      });
+      expect(page.statusCode).toBe(200);
+      const pageBody = page.json<{ items: Array<{ adapter: { ref: typeof trustedRef } }> }>();
+      expect(pageBody.items).toHaveLength(50);
+      expect(pageBody.items.some((item) => item.adapter.ref.adapterId === disabled.ref.adapterId)).toBe(false);
+
+      const state = await app.inject({
+        method: 'GET',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript',
+      });
+      expect(state.statusCode).toBe(200);
+      expect(state.json<{ binding: { adapter: { ref: typeof trustedRef }; disabled: boolean } }>().binding).toMatchObject({
+        adapter: { ref: disabled.ref },
+        disabled: true,
+      });
+      expect(trusted.getCurrentOrDisabledBinding).toHaveBeenCalledWith('provider-1');
     } finally {
       await app.close();
     }

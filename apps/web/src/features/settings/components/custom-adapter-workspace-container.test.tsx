@@ -12,10 +12,13 @@ import {
 
 import {
   CustomAdapterWorkspaceContainer,
+  customAdapterWorkspaceKey,
   mapCustomDefinitionToDraft,
   mapCustomRevisionToSummary,
   mapTrustedAdapterToSummary,
   mapTrustedBindingRevisionToSummary,
+  readImportedDocument,
+  projectTrustedWorkspaceState,
 } from './custom-adapter-workspace-container.js';
 
 const manifest = TrustedAdapterManifestSchema.parse({
@@ -100,6 +103,79 @@ describe('custom adapter workspace container mappings', () => {
       open: false,
       provider,
     })))).not.toThrow();
+  });
+
+  it('reads JSON and YAML export envelopes with their document metadata', async () => {
+    const json = await readImportedDocument(new File([JSON.stringify({
+      schemaVersion: 1,
+      version: '2.0.0',
+      definition: { id: 'json-adapter', name: 'JSON adapter' },
+    })], 'adapter.json', { type: 'application/json' }));
+    expect(json).toEqual({
+      document: JSON.stringify({ id: 'json-adapter', name: 'JSON adapter' }, null, 2),
+      format: 'json',
+      version: '2.0.0',
+    });
+
+    const yamlText = 'schemaVersion: 1\nversion: 3.0.0\ndefinition:\n  id: yaml-adapter\n';
+    await expect(readImportedDocument(new File([yamlText], 'adapter.yaml', { type: 'application/yaml' }))).resolves.toEqual({
+      document: yamlText,
+      format: 'yaml',
+      version: '3.0.0',
+    });
+  });
+
+  it('uses the dedicated disabled binding query beyond the visible 50-row history page', () => {
+    const visibleHistory = Array.from({ length: 50 }, (_, index) => ({
+      ...binding,
+      adapter: {
+        ...binding.adapter,
+        ref: {
+          ...binding.adapter.ref,
+          adapterId: `visible-${String(index).padStart(2, '0')}`,
+          digest: index.toString(16).padStart(64, '0'),
+        },
+      },
+      isCurrent: false,
+    })) satisfies TrustedAdapterBindingDto[];
+    const disabled = {
+      ...binding,
+      isCurrent: false,
+      disabled: true,
+      updatedAt: '2026-08-27T00:01:00.000Z',
+    } satisfies TrustedAdapterBindingDto;
+    const state = projectTrustedWorkspaceState(disabled, visibleHistory);
+    expect(state.binding).toBe(disabled);
+    expect(state.bindingHistory).toHaveLength(50);
+    expect(state.bindingHistory.some((item) => item.adapterId === disabled.adapter.ref.adapterId)).toBe(false);
+  });
+
+  it('keys the workspace by provider, mode, and every immutable ref field', () => {
+    const base = customAdapterWorkspaceKey({
+      providerId: 'provider-1',
+      mode: 'custom-http',
+      customRef: ref,
+    });
+    expect(customAdapterWorkspaceKey({
+      providerId: 'provider-1',
+      mode: 'custom-http',
+      customRef: { ...ref, version: '2.0.0' },
+    })).not.toBe(base);
+    expect(customAdapterWorkspaceKey({
+      providerId: 'provider-1',
+      mode: 'custom-http',
+      customRef: { ...ref, adapterId: 'custom-fixture-other' },
+    })).not.toBe(base);
+    expect(customAdapterWorkspaceKey({
+      providerId: 'provider-1',
+      mode: 'trusted-js',
+      trustedBindingRef: { ...ref, kind: 'trusted-javascript' },
+    })).not.toBe(base);
+    expect(customAdapterWorkspaceKey({
+      providerId: 'provider-2',
+      mode: 'custom-http',
+      customRef: ref,
+    })).not.toBe(base);
   });
 
   it('keeps mobile sheet and touch-target rules in existing CSS', () => {

@@ -901,6 +901,9 @@ function normalizeGenerationRequest(providerId: string, request: GenerationReque
 function mapError(error: unknown): CustomAdapterServiceError {
   if (error instanceof CustomAdapterServiceError) return error;
   if (error instanceof ProviderAdapterDefinitionError) {
+    if (error.code === 'disabled_revision') {
+      return serviceError('storage_error', 'Adapter definition operation failed.');
+    }
     const known: CustomAdapterServiceErrorCode[] = [
       'invalid_reference',
       'invalid_definition',

@@ -433,6 +433,76 @@ describe('ProviderAdapterDefinitionRepository', () => {
     expect(definitions.getTrustedAdapterInstallation(ref.adapterId)).toEqual(result.installation);
   });
 
+  it('finds a disabled binding beyond 50 created revisions and rejects exact rebinding', async () => {
+    const database = await createTestDatabase();
+    const provider = new ProviderRepository(database.orm).create({ name: 'Trusted disabled lookup', type: 'custom-js-v1' });
+    const definitions = new ProviderAdapterDefinitionRepository(database.orm);
+    const refs = Array.from({ length: 51 }, (_, index) => ({
+      kind: 'trusted-javascript' as const,
+      adapterId: `trusted-page-${String(index).padStart(2, '0')}`,
+      version: '1.0.0',
+      digest: index.toString(16).padStart(64, '0'),
+    }));
+    for (const [index, ref] of refs.entries()) {
+      definitions.installTrustedAdapter({
+        ref,
+        providerId: provider.id,
+        now: new Date(Date.UTC(2026, 0, 1, 0, index)),
+      });
+    }
+    const oldest = refs[0]!;
+    definitions.installTrustedAdapter({ ref: oldest, providerId: provider.id, now: new Date('2026-08-27T00:00:00.000Z') });
+    const disabled = definitions.disable(provider.id, oldest);
+
+    expect(disabled).toMatchObject({ ref: oldest, isCurrent: false, disabled: true });
+    expect(definitions.getCurrent(provider.id)).toBeNull();
+    expect(definitions.getCurrentOrLatestDisabled(provider.id)).toMatchObject({ ref: oldest, disabled: true });
+    expect(definitions.getByRef(provider.id, oldest)).toMatchObject({ ref: oldest, disabled: true });
+    expect(() => definitions.installTrustedAdapter({ ref: oldest, providerId: provider.id })).toThrow(
+      expect.objectContaining({ code: 'disabled_revision' }),
+    );
+    expect(() => definitions.replace(provider.id, { ref: oldest })).toThrow(
+      expect.objectContaining({ code: 'disabled_revision' }),
+    );
+    expect(definitions.delete(provider.id, oldest)).toBe(true);
+  });
+
+  it('ignores retained declarative current and disabled rows after a Provider type switch', async () => {
+    const database = await createTestDatabase();
+    const providers = new ProviderRepository(database.orm);
+    const provider = providers.create({ name: 'Type-switched Provider', type: 'custom-http-v1' });
+    const definitions = new ProviderAdapterDefinitionRepository(database.orm);
+    const declarative = await declarativeRef();
+    definitions.replace(provider.id, declarative);
+
+    expect(providers.update(provider.id, { type: 'custom-js-v1' })?.type).toBe('custom-js-v1');
+    expect(definitions.getCurrent(provider.id)).toMatchObject({ ref: declarative.ref, isCurrent: true });
+    expect(definitions.getCurrentOrLatestDisabled(provider.id)).toBeNull();
+
+    expect(definitions.disable(provider.id, declarative.ref)).toMatchObject({ ref: declarative.ref, disabled: true });
+    expect(definitions.getCurrentOrLatestDisabled(provider.id)).toBeNull();
+
+    const trustedRef = {
+      kind: 'trusted-javascript' as const,
+      adapterId: 'type-switched-trusted',
+      version: '1.0.0',
+      digest: 'f'.repeat(64),
+    };
+    definitions.installTrustedAdapter({ ref: trustedRef, providerId: provider.id });
+    expect(definitions.getCurrentOrLatestDisabled(provider.id)).toMatchObject({
+      ref: trustedRef,
+      isCurrent: true,
+      disabled: false,
+    });
+    definitions.disable(provider.id, trustedRef);
+    expect(definitions.getCurrentOrLatestDisabled(provider.id)).toMatchObject({
+      ref: trustedRef,
+      isCurrent: false,
+      disabled: true,
+    });
+    expect(definitions.getByRef(provider.id, declarative.ref)).toMatchObject({ disabled: true });
+  });
+
   it('rolls back installation, binding, and events when a lifecycle event transaction aborts', async () => {
     const database = await createTestDatabase();
     const provider = new ProviderRepository(database.orm).create({ name: 'Trusted rollback', type: 'custom-js-v1' });
