@@ -1985,6 +1985,7 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
     void handler('onTrustedJsChange')?.(next);
   };
   const statusText = resolveWorkspaceStatusMessage(commandMessage, statusMessage, STATUS_LABELS[effectiveStatus]);
+  const commandFeedback = resolveWorkspaceStatusMessage(commandMessage, statusMessage, '');
   const statusModeLabel = mode === 'custom-http' ? 'Custom HTTP' : 'Trusted JavaScript';
   return (
     <main aria-busy={importPending} aria-label="Custom adapter workspace" data-import-pending={importPending} data-mode={mode} data-testid="custom-adapter-workspace" style={styles.root}>
@@ -2021,7 +2022,7 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
           revisions={revisions}
         />
       )}
-      {mode === 'custom-http' && <section aria-label="Adapter command feedback" aria-live="polite" role="status" style={styles.helper}>{busyAction ? `Running ${busyAction.replace(/^on/u, '').replace(/[A-Z]/gu, (letter) => ` ${letter.toLowerCase()}`)}...` : commandMessage}</section>}
+      {mode === 'custom-http' && <section aria-label="Adapter command feedback" aria-live="polite" role="status" style={styles.helper}>{busyAction ? `Running ${busyAction.replace(/^on/u, '').replace(/[A-Z]/gu, (letter) => ` ${letter.toLowerCase()}`)}...` : commandFeedback}</section>}
     </main>
   );
 }

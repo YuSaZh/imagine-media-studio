@@ -145,10 +145,19 @@ describe('CustomAdapterWorkspace SSR contract', () => {
     expect(markup).toContain('Adapter workspace error');
   });
 
-  it('prioritizes local feedback, then durable container feedback, then status fallback', () => {
-    expect(resolveWorkspaceStatusMessage('Canceled.', 'Save complete.', 'Adapter workspace ready.')).toBe('Canceled.');
-    expect(resolveWorkspaceStatusMessage(null, 'Save complete.', 'Adapter workspace ready.')).toBe('Save complete.');
-    expect(resolveWorkspaceStatusMessage(null, null, 'Adapter workspace ready.')).toBe('Adapter workspace ready.');
+  it('renders durable container feedback in the command aria-live region', () => {
+    const markup = renderToStaticMarkup(createElement(CustomAdapterWorkspace, {
+      status: 'success',
+      statusMessage: 'Save complete.',
+    }));
+    const feedback = markup.match(/<section aria-label="Adapter command feedback"[^>]*>([^<]*)<\/section>/u)?.[1];
+    expect(feedback).toBe('Save complete.');
+  });
+
+  it('prioritizes local feedback, then durable container feedback, then an explicit fallback', () => {
+    expect(resolveWorkspaceStatusMessage('Path test failed.', 'Save complete.', '')).toBe('Path test failed.');
+    expect(resolveWorkspaceStatusMessage('', 'Save complete.', '')).toBe('Save complete.');
+    expect(resolveWorkspaceStatusMessage('', '', '')).toBe('');
   });
 
   it('keeps trusted source outside rendered markup while exposing the manifest workflow', () => {
