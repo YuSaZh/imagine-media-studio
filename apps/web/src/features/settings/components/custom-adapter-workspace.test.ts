@@ -17,6 +17,7 @@ import {
   mapCustomHttpPathTestToPayload,
   mapCustomHttpDraftToPayload,
   redactCustomHttpPreview,
+  resolveWorkspaceStatusMessage,
   runWorkspaceAction,
   settleLatestImport,
   validateAdapterImportSecurity,
@@ -142,6 +143,12 @@ describe('CustomAdapterWorkspace SSR contract', () => {
       statusMessage: '',
     }));
     expect(markup).toContain('Adapter workspace error');
+  });
+
+  it('prioritizes local feedback, then durable container feedback, then status fallback', () => {
+    expect(resolveWorkspaceStatusMessage('Canceled.', 'Save complete.', 'Adapter workspace ready.')).toBe('Canceled.');
+    expect(resolveWorkspaceStatusMessage(null, 'Save complete.', 'Adapter workspace ready.')).toBe('Save complete.');
+    expect(resolveWorkspaceStatusMessage(null, null, 'Adapter workspace ready.')).toBe('Adapter workspace ready.');
   });
 
   it('keeps trusted source outside rendered markup while exposing the manifest workflow', () => {

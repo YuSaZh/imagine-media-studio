@@ -1222,6 +1222,15 @@ export async function runWorkspaceAction(
   }
 }
 
+/** Local feedback handles standalone workspaces; container feedback survives remounts. */
+export function resolveWorkspaceStatusMessage(
+  commandMessage: string | null | undefined,
+  statusMessage: string | null | undefined,
+  fallback: string,
+): string {
+  return commandMessage || statusMessage || fallback;
+}
+
 function isImportedAdapterDocument(value: unknown): value is ImportedAdapterDocument {
   return value !== null && typeof value === 'object' && 'document' in value && typeof value.document === 'string' && 'format' in value && (value.format === 'json' || value.format === 'yaml');
 }
@@ -1975,7 +1984,7 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
     setJsDraft(next);
     void handler('onTrustedJsChange')?.(next);
   };
-  const statusText = commandMessage || statusMessage || STATUS_LABELS[effectiveStatus];
+  const statusText = resolveWorkspaceStatusMessage(commandMessage, statusMessage, STATUS_LABELS[effectiveStatus]);
   const statusModeLabel = mode === 'custom-http' ? 'Custom HTTP' : 'Trusted JavaScript';
   return (
     <main aria-busy={importPending} aria-label="Custom adapter workspace" data-import-pending={importPending} data-mode={mode} data-testid="custom-adapter-workspace" style={styles.root}>

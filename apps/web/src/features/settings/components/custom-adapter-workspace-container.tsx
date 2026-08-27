@@ -256,18 +256,19 @@ function downloadText(text: string, filename: string, contentType: string): void
   }
 }
 
-/** Records container-level failures while preserving the outer action contract. */
+/** Records durable container-level feedback while preserving the outer action contract. */
 export async function executeAdapterAction(
   label: string,
   task: () => Promise<void>,
-  onError: (message: string) => void,
+  onMessage: (message: string) => void,
   onAdminError?: () => void,
 ): Promise<void> {
   try {
     await task();
+    onMessage(`${label} complete.`);
   } catch (error) {
     if (isAdminError(error)) onAdminError?.();
-    onError(errorMessage(error, `${label} failed.`));
+    onMessage(errorMessage(error, `${label} failed.`));
     throw error;
   }
 }

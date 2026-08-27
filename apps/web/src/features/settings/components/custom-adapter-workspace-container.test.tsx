@@ -21,6 +21,7 @@ import {
   readImportedDocument,
   projectTrustedWorkspaceState,
 } from './custom-adapter-workspace-container.js';
+import { resolveWorkspaceStatusMessage } from './custom-adapter-workspace.js';
 
 const manifest = TrustedAdapterManifestSchema.parse({
   schemaVersion: 1,
@@ -89,10 +90,24 @@ describe('custom adapter workspace container mappings', () => {
     expect(messages).not.toContain('Path test complete.');
   });
 
-  it('does not emit a container success message for outer workspace actions', async () => {
+  it('records a container success message for outer workspace actions', async () => {
     const messages: string[] = [];
-    await expect(executeAdapterAction('Path test', async () => undefined, (message) => messages.push(message))).resolves.toBeUndefined();
-    expect(messages).toEqual([]);
+    await expect(executeAdapterAction('Save', async () => undefined, (message) => messages.push(message))).resolves.toBeUndefined();
+    expect(messages).toEqual(['Save complete.']);
+  });
+
+  it('keeps Save feedback when a full-ref key change remounts the child workspace', async () => {
+    const beforeRef = ref;
+    const afterRef = { ...ref, version: '1.0.1', digest: 'c'.repeat(64) };
+    const beforeKey = customAdapterWorkspaceKey({ providerId: 'provider-1', mode: 'custom-http', customRef: beforeRef });
+    const afterKey = customAdapterWorkspaceKey({ providerId: 'provider-1', mode: 'custom-http', customRef: afterRef });
+    expect(afterKey).not.toBe(beforeKey);
+
+    let containerMessage: string | null = null;
+    await executeAdapterAction('Save', async () => undefined, (message) => { containerMessage = message; });
+
+    // A key remount clears local command state, while the container state remains.
+    expect(resolveWorkspaceStatusMessage(null, containerMessage, 'Adapter workspace ready.')).toBe('Save complete.');
   });
 
   it('maps source-free current and revision DTOs into pure workspace values', () => {

@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import {
   CustomAdapterExportEnvelopeSchema,
   TrustedAdapterResponseSchema,
+  type TrustedAdapterResponse,
 } from '../packages/shared/src/internal-api.js';
 import {
   expect,
@@ -460,10 +461,11 @@ function acceptNextConfirm(page: Page): void {
 
 async function installTrustedFixture(
   page: Page,
+  request: APIRequestContext,
   workspace: ReturnType<Page['getByTestId']>,
   manifest: TrustedManifest,
   source: Buffer,
-): Promise<{ readonly ref: AdapterRef; readonly responseText: string }> {
+): Promise<{ readonly installed: TrustedAdapterResponse; readonly ref: AdapterRef }> {
   await workspace.getByTestId('trusted-js-manifest').fill(JSON.stringify(manifest, null, 2));
   await workspace.locator('input[aria-label="Trusted JavaScript source file"]').setInputFiles({
     buffer: source,
@@ -471,20 +473,27 @@ async function installTrustedFixture(
     name: 'trusted-fixture.mjs',
   });
   await expect(workspace.locator('input[aria-label="Trusted JavaScript source file"]')).toHaveAttribute('data-source-selected', 'true');
-  const responsePromise = captureResponseText(page.waitForResponse((response) =>
+  const responsePromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' && response.url().endsWith('/internal/adapters/trusted-javascript'),
-  ));
+  );
   await workspace.getByRole('button', { name: 'Install trusted adapter', exact: true }).click();
-  const { response, bodyText: responseText } = await responsePromise;
+  const response = await responsePromise;
   expect(response.status()).toBe(201);
+
+  const managementResponse = await request.get(`/internal/adapters/${encodeURIComponent(manifest.id)}`, {
+    headers: authHeaders(),
+  });
+  expect(managementResponse.status()).toBe(200);
+  const responseText = await managementResponse.text();
   expect(responseText).not.toContain('parentPort');
   expect(responseText).not.toContain(source.toString('utf8'));
+  expect(responseText).not.toContain('export const capabilities');
   const installed = TrustedAdapterResponseSchema.parse(JSON.parse(responseText));
   expect(installed.adapter.ref.adapterId).toBe(manifest.id);
   expect(installed.adapter.ref.version).toBe(manifest.version);
   expect(installed.adapter.ref.digest).toBe(manifest.sha256);
   await expect(workspace).toContainText(manifest.id);
-  return { ref: installed.adapter.ref, responseText };
+  return { installed, ref: installed.adapter.ref };
 }
 
 async function installViewportMock(page: Page): Promise<void> {
@@ -806,9 +815,9 @@ test('installs, binds, disables, unbinds, and removes a trusted adapter without 
     const workspace = dialog.getByTestId('custom-adapter-workspace');
     await expect(workspace).toHaveAttribute('data-mode', 'trusted-js');
     manifest.sha256 = createHash('sha256').update(source).digest('hex');
-    const installResult = await installTrustedFixture(page, workspace, manifest, source);
+    const installResult = await installTrustedFixture(page, request, workspace, manifest, source);
     expect(installResult.ref.digest).toBe(manifest.sha256);
-    expect(installResult.responseText).not.toContain('export const capabilities');
+    expect(installResult.installed.adapter.ref).toEqual(installResult.ref);
     await expect(page.locator('body')).not.toContainText('parentPort');
 
     const adapterSelect = workspace.getByRole('combobox', { name: 'Installed trusted adapter', exact: true });
