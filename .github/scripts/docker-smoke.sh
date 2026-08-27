@@ -763,7 +763,10 @@ done
 CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
 CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_ADAPTER_VERSION="$custom_v2" CUSTOM_ADAPTER_DIGEST="$custom_digest_v2" \
 CUSTOM_SECRET='pr6-custom-http-static-secret' \
-  compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+  compose exec --no-TTY \
+  -e CUSTOM_PROVIDER_ID -e CUSTOM_JOB_ID -e CUSTOM_ADAPTER_ID \
+  -e CUSTOM_ADAPTER_VERSION -e CUSTOM_ADAPTER_DIGEST -e CUSTOM_SECRET \
+  imagine-media node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 
@@ -1230,7 +1233,10 @@ CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
 CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_V2="$custom_v2" CUSTOM_DIGEST_V2="$custom_digest_v2" \
 TRUSTED_ADAPTER_ID="$trusted_adapter_id" TRUSTED_VERSION="$trusted_version" TRUSTED_DIGEST="$trusted_digest" \
 CUSTOM_SECRET='pr6-custom-http-static-secret' \
-  compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+  compose exec --no-TTY \
+  -e CUSTOM_PROVIDER_ID -e CUSTOM_JOB_ID -e CUSTOM_ADAPTER_ID -e CUSTOM_V2 -e CUSTOM_DIGEST_V2 \
+  -e TRUSTED_ADAPTER_ID -e TRUSTED_VERSION -e TRUSTED_DIGEST -e CUSTOM_SECRET \
+  imagine-media node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 
