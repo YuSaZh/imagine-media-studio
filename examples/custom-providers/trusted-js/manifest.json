@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "example-trusted-video",
+  "version": "1.0.0",
+  "displayName": "Example Trusted Video",
+  "sha256": "8ec67a10d351a62b305ca39f396081338e61853e6cb2aea0748ff1a8d15d255e",
+  "operations": ["video.generate"],
+  "capabilities": {
+    "providerType": "example-video-v1",
+    "models": [
+      {
+        "id": "video-model",
+        "displayName": "Video Model",
+        "capabilities": {
+          "operations": ["video.generate"],
+          "aspectRatios": ["16:9", "9:16"],
+          "durations": [4, 8],
+          "supportsProgress": true,
+          "supportsCancel": true,
+          "supportsBatchCount": false,
+          "maxBatchCount": 1
+        }
+      }
+    ]
+  },
+  "allowedHosts": ["api.provider.invalid"],
+  "requiredSecrets": ["apiKey"],
+  "resourceLimits": {
+    "timeoutMs": 5000,
+    "maxMessageBytes": 1048576,
+    "maxOutputBytes": 1048576,
+    "maxLogBytes": 65536,
+    "maxOldGenerationSizeMb": 64,
+    "maxYoungGenerationSizeMb": 16,
+    "stackSizeMb": 4
+  }
+}

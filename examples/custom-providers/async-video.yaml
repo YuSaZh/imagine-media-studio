@@ -1,0 +1,89 @@
+schemaVersion: 1
+id: example-async-video
+name: Example Async Video
+operations:
+  - video.generate
+models:
+  - id: video-model
+    displayName: Video Model
+    capabilities:
+      operations:
+        - video.generate
+      aspectRatios:
+        - 16:9
+        - 9:16
+      durations:
+        - 4
+        - 8
+      supportsProgress: true
+      supportsCancel: false
+      supportsBatchCount: false
+      maxBatchCount: 1
+submit:
+  method: POST
+  path: /v1/videos
+  auth:
+    type: api-key
+    secretRef: apiKey
+    location: header
+    name: X-API-Key
+  body:
+    type: form
+    fields:
+      model: '{{ request.modelId }}'
+      prompt: '{{ request.prompt }}'
+  expectedStatus:
+    - 202
+  extract:
+    remoteIdPath: /id
+    statusPath: /status
+    successValues:
+      - completed
+    pendingValues:
+      - queued
+      - pending
+    runningValues:
+      - running
+    failureValues:
+      - failed
+    expiredValues:
+      - expired
+poll:
+  method: GET
+  path: /v1/videos/{{ remoteJobId }}
+  expectedStatus:
+    - 200
+  extract:
+    remoteIdPath: /id
+    statusPath: /status
+    progressPath: /progress
+    resultUrlPath: /video/url
+    resultMimeType: video/mp4
+    resultType: video
+    resultIdPath: /id
+    resultExpiresAtPath: /expires_at
+    successValues:
+      - completed
+    pendingValues:
+      - queued
+      - pending
+    runningValues:
+      - running
+    failureValues:
+      - failed
+    expiredValues:
+      - expired
+connection:
+  method: GET
+  path: /health
+  expectedStatus:
+    - 200
+catalog:
+  method: GET
+  path: /v1/models
+  expectedStatus:
+    - 200
+  extract:
+    modelsPath: /data
+    modelIdPath: /id
+    modelNamePath: /name

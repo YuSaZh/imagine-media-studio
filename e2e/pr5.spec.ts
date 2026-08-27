@@ -8,7 +8,7 @@ import {
   type APIRequestContext,
   type Page,
   type TestInfo,
-} from '@playwright/test';
+} from './fixtures.js';
 
 const DESKTOP_PROJECT = 'pr1-desktop-1440x900';
 const MOBILE_PROJECT = 'pr1-mobile-390x844';

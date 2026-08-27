@@ -32,7 +32,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: Playwright PR 1, PR 3, PR 4 settings and PR 5 video/PWA
+    name: Playwright PR 1, PR 3, PR 4 settings, PR 5 video/PWA and PR 6 adapters
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -71,6 +71,12 @@ jobs:
           name: pr5-video-pwa-screenshots
           path: artifacts/visual/pr5
           retention-days: 7
+      - if: always() && hashFiles('artifacts/visual/pr6/**') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr6-adapter-screenshots-and-report
+          path: artifacts/visual/pr6
+          retention-days: 7
       - if: failure() && hashFiles('playwright-report/**') != ''
         uses: actions/upload-artifact@v6
         with:
@@ -79,7 +85,7 @@ jobs:
           retention-days: 7
 
   docker-smoke:
-    name: Single-container PR 3 and PR 5 API, video and persistence smoke
+    name: Single-container PR 3, PR 5 and PR 6 API, video, adapter and persistence smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -108,13 +114,24 @@ jobs:
           )
           echo "DATA_HOST_DIR=$runtime_dir" >> "$GITHUB_ENV"
           echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-          echo "APP_SECRET=github-actions-pr3-smoke-secret-not-for-production" >> "$GITHUB_ENV"
+          echo "APP_SECRET=github-actions-pr6-smoke-secret-not-for-production" >> "$GITHUB_ENV"
+          echo "APP_PASSWORD=github-actions-pr6-smoke-password-not-for-production" >> "$GITHUB_ENV"
           echo "PUID=$(id -u)" >> "$GITHUB_ENV"
           echo "PGID=$(id -g)" >> "$GITHUB_ENV"
           echo "IMAGINE_MEDIA_HOST_PORT=$host_port" >> "$GITHUB_ENV"
       - name: Validate and build the single service
         run: |
-          test "$(timeout --foreground 60 docker compose config --services | wc -l | tr -d ' ')" = "1"
+          compose_config_file="$RUNNER_TEMP/imagine-media-compose.json"
+          timeout --foreground 60 docker compose config --format json > "$compose_config_file"
+          COMPOSE_CONFIG_FILE="$compose_config_file" node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+
+          const config = JSON.parse(await readFile(process.env.COMPOSE_CONFIG_FILE, 'utf8'));
+          const names = Object.keys(config?.services ?? {}).sort();
+          if (names.length !== 1 || names[0] !== 'imagine-media') {
+            throw new Error(`Expected exactly one imagine-media service, received ${JSON.stringify(names)}.`);
+          }
+          NODE
           timeout --foreground 900 docker compose build
       - name: Run persistence and restart smoke test
         run: bash .github/scripts/docker-smoke.sh

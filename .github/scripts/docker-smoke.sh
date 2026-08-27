@@ -4,16 +4,42 @@ set -euo pipefail
 : "${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME must be set}"
 : "${DATA_HOST_DIR:?DATA_HOST_DIR must be set}"
 : "${IMAGINE_MEDIA_HOST_PORT:?IMAGINE_MEDIA_HOST_PORT must be set}"
+: "${APP_PASSWORD:?APP_PASSWORD must be set}"
 
 base_url="http://127.0.0.1:${IMAGINE_MEDIA_HOST_PORT}"
+smoke_tmp_dir=$(mktemp -d "${RUNNER_TEMP:-/tmp}/imagine-media-smoke.XXXXXXXX")
+
+cleanup_smoke_files() {
+  rm -rf -- "$smoke_tmp_dir"
+}
+trap cleanup_smoke_files EXIT
 
 compose() {
   timeout --foreground "${COMPOSE_TIMEOUT_SECONDS:-180}" docker compose "$@"
 }
 
-service_count=$(compose config --services | wc -l | tr -d ' ')
-test "$service_count" = "1"
-test "$(compose config --services)" = "imagine-media"
+compose_config_file="$smoke_tmp_dir/compose.json"
+compose config --format json > "$compose_config_file"
+COMPOSE_CONFIG_FILE="$compose_config_file" node --input-type=module <<'NODE'
+import { readFile } from 'node:fs/promises';
+
+const config = JSON.parse(await readFile(process.env.COMPOSE_CONFIG_FILE, 'utf8'));
+const services = config?.services;
+if (services === null || typeof services !== 'object' || Array.isArray(services)) {
+  throw new Error('Compose config has no structured services object.');
+}
+const names = Object.keys(services).sort();
+if (names.length !== 1 || names[0] !== 'imagine-media') {
+  throw new Error(`Expected exactly one imagine-media service, received ${JSON.stringify(names)}.`);
+}
+const service = services['imagine-media'];
+if (!Array.isArray(service?.ports) || service.ports.length !== 1) {
+  throw new Error('The single service must expose exactly one port mapping.');
+}
+if (!Array.isArray(service?.volumes) || service.volumes.length !== 1 || service.volumes[0]?.target !== '/data') {
+  throw new Error('The single service must mount exactly one /data volume.');
+}
+NODE
 
 compose up --detach --wait --wait-timeout 120
 
@@ -22,12 +48,19 @@ IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id ed
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+
+function withAuth(options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('authorization', authHeader);
+  return { ...options, headers };
+}
 
 async function request(path, options = {}, expectedStatus = 200) {
-  const response = await fetch(baseUrl + path, {
+  const response = await fetch(baseUrl + path, withAuth({
     ...options,
     signal: options.signal ?? AbortSignal.timeout(10_000),
-  });
+  }));
   if (response.status !== expectedStatus) {
     const text = await response.text();
     throw new Error(`${options.method ?? 'GET'} ${path}: expected ${expectedStatus}, received ${response.status}: ${text}`);
@@ -244,12 +277,19 @@ IFS=$'\t' read -r video_job_id video_asset_id < <(
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+
+function withAuth(options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('authorization', authHeader);
+  return { ...options, headers };
+}
 
 async function request(path, options = {}, expectedStatus = 200) {
-  const response = await fetch(baseUrl + path, {
+  const response = await fetch(baseUrl + path, withAuth({
     ...options,
     signal: options.signal ?? AbortSignal.timeout(10_000),
-  });
+  }));
   if (response.status !== expectedStatus) {
     await response.arrayBuffer();
     throw new Error(`${options.method ?? 'GET'} ${path}: expected ${expectedStatus}, received ${response.status}`);
@@ -488,6 +528,262 @@ if (asset.sha256 !== createHash('sha256').update(bytes).digest('hex')) {
 }
 NODE
 
+IFS=$'\t' read -r custom_provider_id custom_adapter_id custom_v1 custom_digest_v1 custom_v2 custom_digest_v2 custom_job_id trusted_provider_id trusted_adapter_id trusted_version trusted_digest < <(
+  BASE_URL="$base_url" APP_PASSWORD="$APP_PASSWORD" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+const baseUrl = process.env.BASE_URL;
+const appPassword = process.env.APP_PASSWORD ?? '';
+const customSecret = 'pr6-custom-http-static-secret';
+const fixtureDirectory = resolve(process.cwd(), 'fixtures/adapters/trusted-fixture-v1');
+const trustedManifestText = await readFile(resolve(fixtureDirectory, 'manifest.json'), 'utf8');
+const trustedSourceText = await readFile(resolve(fixtureDirectory, 'adapter.mjs'), 'utf8');
+const trustedManifest = JSON.parse(trustedManifestText);
+const trustedSource = new TextEncoder().encode(trustedSourceText);
+const authHeader = `Basic ${Buffer.from(`studio:${appPassword}`).toString('base64')}`;
+
+function withAuth(options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('authorization', authHeader);
+  return { ...options, headers };
+}
+
+async function request(path, options = {}, expectedStatus = 200) {
+  const response = await fetch(baseUrl + path, withAuth({
+    ...options,
+    signal: options.signal ?? AbortSignal.timeout(10_000),
+  }));
+  const text = await response.text();
+  assert.equal(response.status, expectedStatus, `${options.method ?? 'GET'} ${path}: expected ${expectedStatus}, received ${response.status}: ${text}`);
+  assert.equal(text.includes(customSecret), false, `${path} leaked the custom provider secret.`);
+  assert.equal(text.includes(appPassword), false, `${path} leaked the application password.`);
+  assert.equal(text.includes(trustedSourceText), false, `${path} leaked the trusted adapter source.`);
+  return { response, text };
+}
+
+async function json(path, options = {}, expectedStatus = 200) {
+  const result = await request(path, options, expectedStatus);
+  return JSON.parse(result.text);
+}
+
+function jsonOptions(value) {
+  return {
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(value),
+  };
+}
+
+const definition = JSON.parse(
+  await readFile(resolve(process.cwd(), 'fixtures/providers/custom-http/sync-image/adapter.json'), 'utf8'),
+);
+const provider = (await json('/internal/providers', {
+  method: 'POST',
+  ...jsonOptions({
+    name: 'PR6 Custom HTTP Smoke',
+    type: 'custom-http-v1',
+    baseUrl: 'https://192.0.2.1',
+    apiKey: customSecret,
+    config: {},
+  }),
+}, 201)).provider;
+assert.equal(provider.type, 'custom-http-v1');
+assert.equal(provider.hasApiKey, true);
+assert.equal(provider.baseUrl, 'https://192.0.2.1');
+const providerId = provider.id;
+const adapterPath = `/internal/providers/${encodeURIComponent(providerId)}/adapter`;
+
+const jsonEnvelope = {
+  schemaVersion: 1,
+  version: '1.0.0',
+  definition,
+};
+const imported = await json(adapterPath, {
+  method: 'PUT',
+  ...jsonOptions(jsonEnvelope),
+});
+assert.equal(imported.definition.ref.kind, 'declarative-http');
+assert.equal(imported.definition.ref.adapterId, definition.id);
+assert.equal(imported.definition.ref.version, '1.0.0');
+const customV1 = imported.definition.ref;
+
+const validated = await json(`${adapterPath}/validate`, {
+  method: 'POST',
+  ...jsonOptions({ document: definition, format: 'json' }),
+});
+assert.equal(validated.valid, true);
+assert.equal(validated.adapterId, definition.id);
+
+const exportedJsonResponse = await request(`${adapterPath}/export?format=json`);
+const exportedJson = JSON.parse(exportedJsonResponse.text);
+assert.deepEqual(Object.keys(exportedJson).sort(), ['definition', 'schemaVersion', 'version']);
+assert.equal(exportedJson.schemaVersion, 1);
+assert.equal(exportedJson.version, '1.0.0');
+assert.equal(exportedJson.definition.id, definition.id);
+
+const exportedYamlResponse = await request(`${adapterPath}/export?format=yaml`);
+assert.match(exportedYamlResponse.response.headers.get('content-type') ?? '', /^application\/yaml/);
+assert.match(exportedYamlResponse.text, /^schemaVersion:\s+1/m);
+const yamlImported = await request(adapterPath, {
+  method: 'PUT',
+  headers: { 'content-type': 'application/yaml' },
+  body: exportedYamlResponse.text,
+});
+assert.equal(JSON.parse(yamlImported.text).definition.ref.version, '1.0.0');
+
+const second = await json(`${adapterPath}?version=2.0.0`, {
+  method: 'PUT',
+  ...jsonOptions(definition),
+});
+const customV2 = second.definition.ref;
+assert.equal(customV2.adapterId, definition.id);
+assert.equal(customV2.version, '2.0.0');
+assert.equal(customV2.kind, 'declarative-http');
+assert.match(customV2.digest, /^[a-f0-9]{64}$/);
+const current = (await json(adapterPath)).definition;
+assert.deepEqual(current.ref, customV2);
+const revisions = await json(`${adapterPath}/revisions?limit=100`);
+assert.deepEqual(revisions.items.map((item) => item.ref.version).sort(), ['1.0.0', '2.0.0']);
+
+const generationRequest = {
+  operation: 'image.generate',
+  providerId,
+  modelId: 'image-model',
+  prompt: 'PR6 custom HTTP smoke',
+  inputs: [],
+  extra: { style: 'editorial' },
+};
+const preview = await json(`${adapterPath}/preview`, {
+  method: 'POST',
+  ...jsonOptions({ request: generationRequest }),
+});
+assert.equal(preview.endpoint, 'submit');
+assert.equal(preview.method, 'POST');
+assert.equal(preview.headers.Authorization, '[REDACTED]');
+assert.equal(JSON.stringify(preview).includes(customSecret), false);
+
+const dryRun = await json(`${adapterPath}/dry-run`, {
+  method: 'POST',
+  ...jsonOptions({ request: generationRequest }),
+});
+assert.equal(dryRun.network, false);
+assert.equal(dryRun.performed, false);
+assert.equal(dryRun.request.headers.Authorization, '[REDACTED]');
+
+const simulated = await json(`${adapterPath}/simulate`, {
+  method: 'POST',
+  ...jsonOptions({
+    response: { status: 200, json: { data: [{ id: 'simulated-image', b64_json: 'aGVsbG8=' }] } },
+  }),
+});
+assert.equal(simulated.state, 'completed');
+assert.equal(simulated.assets.length, 1);
+assert.equal(simulated.assets[0].resultId, 'simulated-image');
+assert.equal(Object.hasOwn(simulated.assets[0], 'source'), false);
+
+const pathTest = await json(`${adapterPath}/path-test`, {
+  method: 'POST',
+  ...jsonOptions({ path: '/data/0/id', json: { data: [{ id: 'path-result' }] } }),
+});
+assert.deepEqual(pathTest, { path: '/data/0/id', found: true, value: 'path-result' });
+
+const capabilityPreview = await json(`${adapterPath}/capabilities-preview`, {
+  method: 'POST',
+  ...jsonOptions({}),
+});
+assert.equal(capabilityPreview.capabilities.providerType, 'custom-http-v1');
+assert.equal(capabilityPreview.capabilities.models[0].id, 'image-model');
+assert.ok(capabilityPreview.capabilities.models[0].capabilities.operations.includes('image.generate'));
+
+const refreshed = await json(`/internal/providers/${encodeURIComponent(providerId)}/models/refresh`, { method: 'POST' });
+assert.ok(refreshed.items.some((model) => model.modelId === 'image-model'));
+const acceptedJob = await json('/internal/jobs', {
+  method: 'POST',
+  ...jsonOptions(generationRequest),
+}, 202);
+const customJobId = acceptedJob.job.id;
+assert.equal(typeof customJobId, 'string');
+
+const trustedProvider = (await json('/internal/providers', {
+  method: 'POST',
+  ...jsonOptions({ name: 'PR6 Trusted JS Smoke', type: 'custom-js-v1', config: {} }),
+}, 201)).provider;
+const trustedProviderId = trustedProvider.id;
+const form = new FormData();
+form.append('manifest', trustedManifestText);
+form.append('source', new Blob([trustedSource], { type: 'application/javascript' }), 'adapter.mjs');
+const installed = await json('/internal/adapters/trusted-javascript', { method: 'POST', body: form }, 201);
+const trusted = installed.adapter;
+assert.equal(trusted.ref.kind, 'trusted-javascript');
+assert.equal(trusted.ref.adapterId, trustedManifest.id);
+assert.equal(trusted.ref.version, trustedManifest.version);
+assert.equal(trusted.ref.digest, trustedManifest.sha256);
+assert.equal(Object.hasOwn(trusted, 'source'), false);
+
+const listed = await json('/internal/adapters');
+assert.ok(listed.items.some((item) => item.ref.adapterId === trusted.ref.adapterId));
+const fetched = await json(`/internal/adapters/${encodeURIComponent(trusted.ref.adapterId)}`);
+assert.deepEqual(fetched.adapter.ref, trusted.ref);
+const trustedBindingPath = `/internal/providers/${encodeURIComponent(trustedProviderId)}/adapter/trusted-javascript`;
+await json(trustedBindingPath, {
+  method: 'POST',
+  ...jsonOptions({ ref: trusted.ref }),
+}, 201);
+const binding = (await json(trustedBindingPath)).binding;
+assert.equal(binding.providerId, trustedProviderId);
+assert.deepEqual(binding.adapter.ref, trusted.ref);
+assert.equal(binding.disabled, false);
+const bindingHistory = await json(`${trustedBindingPath}/revisions?limit=100`);
+assert.ok(bindingHistory.items.some((item) => item.adapter.ref.adapterId === trusted.ref.adapterId));
+
+process.stdout.write([
+  providerId,
+  definition.id,
+  customV1.version,
+  customV1.digest,
+  customV2.version,
+  customV2.digest,
+  customJobId,
+  trustedProviderId,
+  trusted.ref.adapterId,
+  trusted.ref.version,
+  trusted.ref.digest,
+].join('\t') + '\n');
+NODE
+)
+
+for value in "$custom_provider_id" "$custom_adapter_id" "$custom_v1" "$custom_digest_v1" "$custom_v2" "$custom_digest_v2" "$custom_job_id" "$trusted_provider_id" "$trusted_adapter_id" "$trusted_version" "$trusted_digest"; do
+  test -n "$value"
+done
+
+CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
+CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_ADAPTER_VERSION="$custom_v2" CUSTOM_ADAPTER_DIGEST="$custom_digest_v2" \
+CUSTOM_SECRET='pr6-custom-http-static-secret' \
+  compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
+
+const database = new Database('/data/app.db', { readonly: true });
+const migrations = database.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((row) => row.version);
+const job = database.prepare(`
+  SELECT provider_id AS providerId, adapter_kind AS adapterKind, adapter_id AS adapterId,
+    adapter_version AS adapterVersion, adapter_digest AS adapterDigest,
+    request_json AS requestJson, provider_request_redacted_json AS redacted
+  FROM jobs WHERE id = ?
+`).get(process.env.CUSTOM_JOB_ID);
+database.close();
+
+assert.ok(migrations.includes('0004_pr6_custom_adapters.sql'));
+assert.ok(migrations.includes('0005_pr6_trusted_adapter_tombstones.sql'));
+assert.equal(job?.providerId, process.env.CUSTOM_PROVIDER_ID);
+assert.equal(job?.adapterKind, 'declarative-http');
+assert.equal(job?.adapterId, process.env.CUSTOM_ADAPTER_ID);
+assert.equal(job?.adapterVersion, process.env.CUSTOM_ADAPTER_VERSION);
+assert.equal(job?.adapterDigest, process.env.CUSTOM_ADAPTER_DIGEST);
+assert.equal(JSON.stringify(job).includes(process.env.CUSTOM_SECRET), false);
+NODE
+
 latest_event_id=$(compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
 import Database from 'better-sqlite3';
 
@@ -504,16 +800,24 @@ import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
 const assetPath = `/internal/assets/${encodeURIComponent(process.env.ASSET_ID)}`;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+
+function withAuth(options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('authorization', authHeader);
+  return { ...options, headers };
+}
+
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), 10_000);
 try {
-  const response = await fetch(baseUrl + '/internal/events', {
+  const response = await fetch(baseUrl + '/internal/events', withAuth({
     headers: {
       accept: 'text/event-stream',
       'last-event-id': process.env.LAST_EVENT_ID,
     },
     signal: controller.signal,
-  });
+  }));
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
   const liveEvent = (async () => {
@@ -539,23 +843,23 @@ try {
     }
   })();
 
-  const mutation = await fetch(baseUrl + assetPath, {
+  const mutation = await fetch(baseUrl + assetPath, withAuth({
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ favorite: false }),
     signal: AbortSignal.timeout(10_000),
-  });
+  }));
   assert.equal(mutation.status, 200);
   const event = await liveEvent;
   assert.ok(event.id > Number(process.env.LAST_EVENT_ID));
   await reader.cancel();
 
-  const restore = await fetch(baseUrl + assetPath, {
+  const restore = await fetch(baseUrl + assetPath, withAuth({
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ favorite: true }),
     signal: AbortSignal.timeout(10_000),
-  });
+  }));
   assert.equal(restore.status, 200);
 } finally {
   clearTimeout(timeout);
@@ -704,11 +1008,14 @@ ASYNC_PENDING_JOB_ID="$async_pending_job_id" ASYNC_RUNNING_JOB_ID="$async_runnin
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+const headers = new Headers({ authorization: authHeader });
 for (const [name, expectedStatus] of [
   ['ASYNC_PENDING_JOB_ID', 'remote_pending'],
   ['ASYNC_RUNNING_JOB_ID', 'remote_running'],
 ]) {
   const response = await fetch(baseUrl + `/internal/jobs/${encodeURIComponent(process.env[name])}`, {
+    headers,
     signal: AbortSignal.timeout(10_000),
   });
   assert.equal(response.status, 200);
@@ -727,15 +1034,27 @@ SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
 EDIT_ASSET_ID="$edit_asset_id" VIDEO_JOB_ID="$video_job_id" VIDEO_ASSET_ID="$video_asset_id" \
 ASYNC_PENDING_JOB_ID="$async_pending_job_id" ASYNC_RUNNING_JOB_ID="$async_running_job_id" \
   QUEUED_JOB_ID="$queued_job_id" BASE_URL="$base_url" \
+  CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
+  CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_V1="$custom_v1" CUSTOM_DIGEST_V1="$custom_digest_v1" \
+  CUSTOM_V2="$custom_v2" CUSTOM_DIGEST_V2="$custom_digest_v2" \
+  TRUSTED_PROVIDER_ID="$trusted_provider_id" TRUSTED_ADAPTER_ID="$trusted_adapter_id" \
+  TRUSTED_VERSION="$trusted_version" TRUSTED_DIGEST="$trusted_digest" \
   node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
 const MOCK_VIDEO_SHA256 = '4d240737eeba324e5b3efcdc82738ba9555386f6d383d9fa233c6fae1db47361';
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+
+function withAuth(options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('authorization', authHeader);
+  return { ...options, headers };
+}
 
 async function json(path) {
-  const response = await fetch(baseUrl + path, { signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(baseUrl + path, withAuth({ signal: AbortSignal.timeout(10_000) }));
   if (!response.ok) throw new Error(`GET ${path} failed with ${response.status}`);
   return response.json();
 }
@@ -763,11 +1082,11 @@ async function assertVideoOutput(detail) {
   assert.equal(asset.mimeType, 'video/mp4');
   assert.equal(asset.sha256, MOCK_VIDEO_SHA256);
   assert.equal(typeof asset.posterUrl, 'string');
-  const content = await fetch(baseUrl + asset.contentUrl, { signal: AbortSignal.timeout(10_000) });
+  const content = await fetch(baseUrl + asset.contentUrl, withAuth({ signal: AbortSignal.timeout(10_000) }));
   assert.equal(content.status, 200);
   const bytes = Buffer.from(await content.arrayBuffer());
   assert.equal(createHash('sha256').update(bytes).digest('hex'), MOCK_VIDEO_SHA256);
-  const poster = await fetch(baseUrl + asset.posterUrl, { signal: AbortSignal.timeout(10_000) });
+  const poster = await fetch(baseUrl + asset.posterUrl, withAuth({ signal: AbortSignal.timeout(10_000) }));
   assert.equal(poster.status, 200);
   assert.equal(poster.headers.get('content-type'), 'image/jpeg');
   assert.ok((await poster.arrayBuffer()).byteLength > 0);
@@ -794,15 +1113,15 @@ assert.equal(completedVideo.assets[0]?.id, process.env.VIDEO_ASSET_ID);
 const videoOutput = completedVideo.assets[0];
 assert.equal(videoOutput.type, 'video');
 assert.equal(videoOutput.mimeType, 'video/mp4');
-const videoRange = await fetch(baseUrl + videoOutput.contentUrl, {
+const videoRange = await fetch(baseUrl + videoOutput.contentUrl, withAuth({
   headers: { range: 'bytes=0-7' },
   signal: AbortSignal.timeout(10_000),
-});
+}));
 assert.equal(videoRange.status, 206);
 assert.equal((await videoRange.arrayBuffer()).byteLength, 8);
-const videoPoster = await fetch(baseUrl + videoOutput.posterUrl, {
+const videoPoster = await fetch(baseUrl + videoOutput.posterUrl, withAuth({
   signal: AbortSignal.timeout(10_000),
-});
+}));
 assert.equal(videoPoster.status, 200);
 assert.equal(videoPoster.headers.get('content-type'), 'image/jpeg');
 assert.ok((await videoPoster.arrayBuffer()).byteLength > 0);
@@ -842,10 +1161,10 @@ assert.ok(!defaultAssets.items.some((candidate) => candidate.id === process.env.
 const masks = await json('/internal/assets?role=mask&limit=100');
 assert.ok(masks.items.some((candidate) => candidate.id === process.env.MASK_ID));
 
-const ranged = await fetch(baseUrl + asset.contentUrl, {
+const ranged = await fetch(baseUrl + asset.contentUrl, withAuth({
   headers: { range: 'bytes=0-7' },
   signal: AbortSignal.timeout(10_000),
-});
+}));
 assert.equal(ranged.status, 206);
 assert.equal((await ranged.arrayBuffer()).byteLength, 8);
 
@@ -857,10 +1176,10 @@ const targets = new Set([
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), 15_000);
 try {
-  const response = await fetch(baseUrl + '/internal/events', {
+  const response = await fetch(baseUrl + '/internal/events', withAuth({
     headers: { accept: 'text/event-stream', 'last-event-id': '0' },
     signal: controller.signal,
-  });
+  }));
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') ?? '', /^text\/event-stream/);
   const reader = response.body.getReader();
@@ -887,4 +1206,70 @@ try {
   clearTimeout(timeout);
 }
 assert.deepEqual([...targets], [], 'SSE replay did not include persisted Job, Asset, and Collection events.');
+NODE
+
+BASE_URL="$base_url" APP_PASSWORD="$APP_PASSWORD" \
+CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
+CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_V1="$custom_v1" CUSTOM_DIGEST_V1="$custom_digest_v1" \
+CUSTOM_V2="$custom_v2" CUSTOM_DIGEST_V2="$custom_digest_v2" \
+TRUSTED_PROVIDER_ID="$trusted_provider_id" TRUSTED_ADAPTER_ID="$trusted_adapter_id" \
+TRUSTED_VERSION="$trusted_version" TRUSTED_DIGEST="$trusted_digest" \
+  node .github/scripts/pr6-adapter-lifecycle.mjs
+
+test ! -e "$DATA_HOST_DIR/adapters/$trusted_adapter_id"
+
+compose restart imagine-media
+compose up --detach --wait --wait-timeout 120
+
+CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
+CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_V2="$custom_v2" CUSTOM_DIGEST_V2="$custom_digest_v2" \
+TRUSTED_ADAPTER_ID="$trusted_adapter_id" TRUSTED_VERSION="$trusted_version" TRUSTED_DIGEST="$trusted_digest" \
+CUSTOM_SECRET='pr6-custom-http-static-secret' \
+  compose exec --no-TTY imagine-media node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
+
+const database = new Database('/data/app.db', { readonly: true });
+const migrations = database.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map((row) => row.version);
+const tombstone = database.prepare('SELECT adapter_id AS adapterId, version, digest FROM trusted_adapter_tombstones WHERE adapter_id = ?').get(process.env.TRUSTED_ADAPTER_ID);
+const installation = database.prepare('SELECT adapter_id FROM trusted_adapter_installations WHERE adapter_id = ?').get(process.env.TRUSTED_ADAPTER_ID);
+const job = database.prepare('SELECT provider_id AS providerId, adapter_kind AS adapterKind, adapter_id AS adapterId, adapter_version AS adapterVersion, adapter_digest AS adapterDigest, provider_request_redacted_json AS redacted FROM jobs WHERE id = ?').get(process.env.CUSTOM_JOB_ID);
+database.close();
+
+assert.ok(migrations.includes('0005_pr6_trusted_adapter_tombstones.sql'));
+assert.deepEqual(tombstone, { adapterId: process.env.TRUSTED_ADAPTER_ID, version: process.env.TRUSTED_VERSION, digest: process.env.TRUSTED_DIGEST });
+assert.equal(installation, undefined);
+assert.equal(job?.providerId, process.env.CUSTOM_PROVIDER_ID);
+assert.equal(job?.adapterKind, 'declarative-http');
+assert.equal(job?.adapterId, process.env.CUSTOM_ADAPTER_ID);
+assert.equal(job?.adapterVersion, process.env.CUSTOM_V2);
+assert.equal(job?.adapterDigest, process.env.CUSTOM_DIGEST_V2);
+assert.equal(JSON.stringify(job).includes(process.env.CUSTOM_SECRET), false);
+NODE
+
+BASE_URL="$base_url" APP_PASSWORD="$APP_PASSWORD" TRUSTED_ADAPTER_ID="$trusted_adapter_id" \
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+
+const response = await fetch(`${process.env.BASE_URL}/internal/adapters/${encodeURIComponent(process.env.TRUSTED_ADAPTER_ID)}`, {
+  headers: { authorization: `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD}`).toString('base64')}` },
+  signal: AbortSignal.timeout(10_000),
+});
+assert.equal(response.status, 404);
+assert.equal((await response.text()).includes(process.env.APP_PASSWORD), false);
+NODE
+
+compose_logs_file="$smoke_tmp_dir/compose.log"
+compose logs --no-color > "$compose_logs_file"
+COMPOSE_LOGS_FILE="$compose_logs_file" CUSTOM_SECRET='pr6-custom-http-static-secret' APP_PASSWORD="$APP_PASSWORD" \
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+const logs = await readFile(process.env.COMPOSE_LOGS_FILE, 'utf8');
+const source = await readFile(resolve(process.cwd(), 'fixtures/adapters/trusted-fixture-v1/adapter.mjs'), 'utf8');
+for (const forbidden of [process.env.CUSTOM_SECRET, process.env.APP_PASSWORD, source]) {
+  assert.equal(logs.includes(forbidden), false, 'Compose logs contain a provider secret, app password, or trusted source.');
+}
 NODE

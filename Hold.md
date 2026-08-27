@@ -4,6 +4,13 @@ This file records non-blocking work that cannot currently be proven or completed
 
 ## Open
 
+### PR 6 GitHub Actions incident evidence
+
+- **Affects:** PR 6 remote verification evidence.
+- **Incident windows:** [GitHub incident `y1t7p9fzrlj2`](https://www.githubstatus.com/incidents/y1t7p9fzrlj2) reports that on 2026-08-26 from 15:02 to 15:45 UTC Actions jobs failed to start; delayed starts continued until 17:40 UTC. [GitHub incident `kfspvrz14xr0`](https://www.githubstatus.com/incidents/kfspvrz14xr0) reports Actions workflow runs triggered by pull requests from 22:56 UTC on 2026-08-26, with full recovery beginning at 23:58 UTC on 2026-08-26.
+- **Repository impact:** PR 6 commits had been pushed, but their associated Actions runs were not generated (`failed-to-trigger`), so no PR 6 run or job result is available to cite.
+- **Current handling:** Keep the PR 6 matrix limited to local checks and placeholders. After the incident windows have passed, trigger a fresh verification run and replace the placeholders; remove this hold after remote acceptance is recorded.
+
 ### Authenticated Grok Imagine reference package
 
 - **Affects:** PR 1 final visual classification and PR 7 cross-device polish.
@@ -22,7 +29,7 @@ This file records non-blocking work that cannot currently be proven or completed
 - **Status:** The production entry chunk remains above Vite's 500 kB advisory threshold (571.55 kB in the final PR 5 remote quality build); the PR 3 editor route is already split.
 - **Current handling:** Defer broader route/vendor splitting to PR 7 and keep the warning non-blocking for PR 5.
 
-### Provider terminal cleanup compensation
+### PR 8 provider-output cleanup reconciliation
 
 - **Affects:** PR 8 media consistency and repair.
 - **Status:** Provider result manifests are cleared after successful materialization and normal terminal paths perform best-effort cleanup. A process crash after the terminal database commit but before filesystem cleanup can leave temporary provider-result files that are not represented by a durable cleanup queue.
@@ -33,12 +40,6 @@ This file records non-blocking work that cannot currently be proven or completed
 - **Affects:** PR 4 live model refresh and future large Provider catalogs.
 - **Status:** OpenAI, Gemini, and xAI refresh their live model catalog through the safe Provider transport, but the current refresh consumes one bounded response page. Providers with paginated catalogs larger than the first page require profile-specific pagination support.
 - **Current handling:** Keep manual model creation available and add pagination when an official Provider fixture demonstrates a multi-page catalog.
-
-### Advanced Provider diagnostics and import
-
-- **Affects:** PR 6 custom Provider management.
-- **Status:** PR 4 provides profile selection, Base URL, write-only API key/custom headers, configuration JSON, connection test, live model refresh, and manual Capability overrides. Declarative import, redacted request preview, dry run, simulated response, and advanced debugging belong to the PR 6 custom Adapter workflow.
-- **Current handling:** Implement these controls with the declarative/JavaScript Adapter boundary in PR 6 rather than exposing incomplete controls in PR 4.
 
 ### Static settings controls
 

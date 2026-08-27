@@ -70,6 +70,23 @@ All other PR 3 work is clean-room project code:
 
 `maskPreprocess.ts`, `canvasImage.ts`, `dataUrl.ts`, and `clipboard.ts` are reference-only scenario inputs, not copy sources. Provider request logic in `imageApiShared.ts` remains deferred to PR 4. `transparentImage.ts` is outside PR 3.
 
+## PR 6 custom Provider provenance
+
+Audit date: 2026-08-27 (Asia/Tokyo)
+
+The PR 6 custom HTTP/Trusted JavaScript implementation, examples, tests, and
+documentation are clean-room project work. No third-party source code, UI,
+fixture payload, asset, or actual Provider implementation was copied or
+adapted. The existing `fixtures/providers/custom-http` and
+`apps/server/src/providers/custom-js/fixtures` files are local contract
+fixtures; they are not imported from a Provider or donor project.
+
+The files under [`examples/custom-providers`](../../examples/custom-providers)
+contain only relative paths, reserved placeholder hosts, and secret names
+without values. They do not identify a real endpoint or contain a production
+credential. The donor repositories listed above remain reference-only for PR
+6, and no new attribution or MIT notice is required for this work.
+
 ## Reference audit: `ima2-gen`
 
 No source migration is authorized. The following files identify architecture worth comparing with local designs:

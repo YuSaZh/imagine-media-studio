@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0, PR 1, PR 2, PR 3, PR 4, and PR 5 are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, and the protocol-fixture-verified image and video Provider profiles described in [`PLAN.MD`](./PLAN.MD).
+**PR 0, PR 1, PR 2, PR 3, PR 4, and PR 5 are complete. PR 6 implementation complete; remote verification pending.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, and the custom Provider management workflow described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -27,6 +27,8 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - OpenAI Images/Responses, Gemini Native/Interactions, and xAI Imagine image profiles with capability-driven model catalogs
 - Bounded SSRF-safe Provider HTTP transport with response limits, timeouts, and server-only credentials
 - Durable JobRunner stage retries with Provider `retry-after` handling
+- Declarative custom HTTP adapters with bounded JSON/YAML parsing, JSON/form/multipart bodies, path/status/result extraction, request schemas, capability previews, dry runs, redacted previews, simulation, and path tests
+- Administrator-installed Trusted JavaScript adapters with immutable manifest/source digests, worker execution, exact host allowlists, bounded resource/output limits, and SafeHttpPort-only network access
 - Local dependency installation, lint, typecheck, and unit checks
 - GitHub Actions quality/build, E2E, screenshot artifact, and single-container Docker smoke verification
 
@@ -35,6 +37,7 @@ PR 4 image and PR 5 video adapters are verified against official-protocol fixtur
 PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), PR 2 evidence in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md), PR 3 evidence in [`docs/architecture/pr3-verification.md`](./docs/architecture/pr3-verification.md), and PR 4 evidence in [`docs/architecture/pr4-verification.md`](./docs/architecture/pr4-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 PR 3 desktop/mobile screenshots and visual review are in [`artifacts/visual/pr3`](./artifacts/visual/pr3) and [`artifacts/visual/pr3/visual-diff-report.md`](./artifacts/visual/pr3/visual-diff-report.md).
 PR 5 video, restart, media-delivery, and PWA evidence is recorded in [`docs/architecture/pr5-verification.md`](./docs/architecture/pr5-verification.md).
+PR 6 custom Provider examples and the feature/security acceptance matrix are in [`examples/custom-providers`](./examples/custom-providers) and [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md). Local parser, manifest, and source-policy checks cover those examples. The PR 6 GitHub Actions run records are currently placeholders because the two specific incidents recorded in [`Hold.md`](./Hold.md) prevented run generation; this README does not claim remote CI completion.
 
 ## Local Safety
 
@@ -46,6 +49,24 @@ For deployment on another host, create the bind-mounted data directory as the ru
 mkdir -p data
 PUID=$(id -u) PGID=$(id -g) docker compose up -d
 ```
+
+## Custom Provider usage
+
+Open Settings -> Providers -> Manage adapter for a `Custom HTTP Adapter` or
+`Trusted JavaScript Adapter` Provider. The ready-to-import declarations are in
+[`examples/custom-providers`](./examples/custom-providers). Configure the
+Provider Base URL separately and enter the write-only secret named by
+`secretRef`/`requiredSecrets`; example files never contain secret values or
+actual Provider URLs. Run validation, capability preview, redacted request
+preview, Dry Run, simulation, and path tests before saving a revision.
+
+Trusted JavaScript installation is administrator-only and is explicitly trusted
+server-side code, not a sandbox. Review the exact source digest, host allowlist,
+secret names, and resource limits before installation. The worker exposes only
+the host-injected `SafeHttpPort`; dynamic imports, package installation, direct
+network globals, process access, and unbounded output are rejected or bounded.
+All Provider credentials stay server-side, encrypted at rest, excluded from
+browser DTOs, logs, PWA caches, and exported configuration.
 
 ## License
 

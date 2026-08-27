@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "example-sync-image",
+  "name": "Example Sync Image",
+  "operations": ["image.generate"],
+  "models": [
+    {
+      "id": "image-model",
+      "displayName": "Image Model",
+      "capabilities": {
+        "operations": ["image.generate"],
+        "supportsNegativePrompt": true,
+        "supportsBatchCount": false,
+        "maxBatchCount": 1
+      },
+      "requestSchema": {
+        "type": "object",
+        "properties": {
+          "style": {
+            "type": "string",
+            "enum": ["editorial", "photoreal"],
+            "maxLength": 32
+          }
+        },
+        "required": ["style"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "submit": {
+    "method": "POST",
+    "path": "/v1/images",
+    "auth": {
+      "type": "bearer",
+      "secretRef": "apiKey",
+      "location": "header"
+    },
+    "body": {
+      "type": "json",
+      "value": {
+        "model": "{{ request.modelId }}",
+        "prompt": "{{ request.prompt }}",
+        "style": "{{ request.extra.style }}"
+      }
+    },
+    "expectedStatus": [200],
+    "extract": {
+      "resultBase64Path": "/data/0/b64_json",
+      "resultMimeType": "image/png",
+      "resultType": "image",
+      "resultIdPath": "/data/0/id"
+    }
+  }
+}

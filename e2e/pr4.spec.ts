@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.js';
 
 test.describe('PR4 Provider settings', () => {
   test('configures a profile, reports a safe connection failure, and manages a manual model', async ({ page }) => {
