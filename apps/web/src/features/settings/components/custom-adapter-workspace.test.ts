@@ -14,8 +14,10 @@ import {
   hasForbiddenAdapterFields,
   isAdapterRevisionDisabled,
   isFileImportSelectionDisabled,
+  mapCustomHttpPathTestToPayload,
   mapCustomHttpDraftToPayload,
   redactCustomHttpPreview,
+  runWorkspaceAction,
   settleLatestImport,
   validateAdapterImportSecurity,
   validateCustomHttpDocument,
@@ -227,6 +229,50 @@ describe('CustomAdapterWorkspace SSR contract', () => {
 });
 
 describe('CustomAdapterWorkspace mapping and validation', () => {
+  it('maps path tests to the strict response-document contract', () => {
+    const payload = mapCustomHttpPathTestToPayload({
+      ...DEFAULT_CUSTOM_HTTP_DRAFT,
+      baseUrl: 'https://api.example.test',
+      document: '{"id":"adapter-definition"}',
+      format: 'yaml',
+      version: '9.9.9',
+      path: '/data/0/id',
+      pathTestJson: '{"data":[{"id":"path-result"}]}',
+    }, 'provider-1');
+
+    expect(payload).toEqual({
+      providerId: 'provider-1',
+      path: '/data/0/id',
+      json: { data: [{ id: 'path-result' }] },
+    });
+    expect(payload).not.toHaveProperty('format');
+    expect(payload).not.toHaveProperty('document');
+    expect(payload).not.toHaveProperty('baseUrl');
+    expect(payload).not.toHaveProperty('version');
+  });
+
+  it('reports synchronous schema failures as failures and emits one success message', async () => {
+    const failureMessages: string[] = [];
+    let requestStarted = false;
+    await runWorkspaceAction(() => {
+      const payload = mapCustomHttpPathTestToPayload({
+        path: '/data/0/id',
+        pathTestJson: '{invalid-json',
+      });
+      requestStarted = true;
+      return payload;
+    }, 'Path test', (message) => failureMessages.push(message));
+    expect(requestStarted).toBe(false);
+    expect(failureMessages).toEqual(['Path test JSON must be valid JSON.']);
+    expect(failureMessages).not.toContain('Path test complete.');
+
+    const successMessages: string[] = [];
+    await runWorkspaceAction(() => {
+      requestStarted = true;
+    }, 'Path test', (message) => successMessages.push(message));
+    expect(successMessages).toEqual(['Path test complete.']);
+  });
+
   it('applies imported document, format, and envelope version in one draft value', () => {
     const draft = applyImportedAdapterDocument({
       ...DEFAULT_CUSTOM_HTTP_DRAFT,

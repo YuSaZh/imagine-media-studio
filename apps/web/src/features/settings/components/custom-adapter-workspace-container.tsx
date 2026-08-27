@@ -256,6 +256,22 @@ function downloadText(text: string, filename: string, contentType: string): void
   }
 }
 
+/** Records container-level failures while preserving the outer action contract. */
+export async function executeAdapterAction(
+  label: string,
+  task: () => Promise<void>,
+  onError: (message: string) => void,
+  onAdminError?: () => void,
+): Promise<void> {
+  try {
+    await task();
+  } catch (error) {
+    if (isAdminError(error)) onAdminError?.();
+    onError(errorMessage(error, `${label} failed.`));
+    throw error;
+  }
+}
+
 export function CustomAdapterWorkspaceContainer({
   confirm: confirmAction,
   fixtureMode,
@@ -395,11 +411,7 @@ export function CustomAdapterWorkspaceContainer({
     setPendingAction(label);
     setMessage(null);
     try {
-      await task();
-      setMessage(`${label} complete.`);
-    } catch (error) {
-      if (isAdminError(error)) setAdminAvailable(false);
-      setMessage(errorMessage(error, `${label} failed.`));
+      await executeAdapterAction(label, task, setMessage, () => setAdminAvailable(false));
     } finally {
       setPendingAction(null);
     }
@@ -413,8 +425,7 @@ export function CustomAdapterWorkspaceContainer({
       await validate.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}), ...(payload.request === undefined ? {} : { request: payload.request as never }) } });
     }),
     onPreview: (payload) => execute('Preview', async () => {
-      const result = await preview.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}), ...(payload.request === undefined ? {} : { request: payload.request as never }) } });
-      setMessage(result.url ? 'Preview complete.' : 'Preview complete.');
+      await preview.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}), ...(payload.request === undefined ? {} : { request: payload.request as never }) } });
     }),
     onDryRun: (payload) => execute('Dry run', async () => {
       await dryRun.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}), ...(payload.request === undefined ? {} : { request: payload.request as never }) } });
@@ -423,7 +434,7 @@ export function CustomAdapterWorkspaceContainer({
       await simulate.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, response: payload.response } as never });
     }),
     onPathTest: (payload) => execute('Path test', async () => {
-      await pathTest.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, path: payload.path, json: payload.json } as never });
+      await pathTest.mutateAsync({ providerId: provider.id, request: { path: payload.path, json: payload.json } });
     }),
     onCapabilitiesPreview: (payload) => execute('Capability preview', async () => {
       await capabilities.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format } });

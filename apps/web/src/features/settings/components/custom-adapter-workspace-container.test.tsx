@@ -13,6 +13,7 @@ import {
 import {
   CustomAdapterWorkspaceContainer,
   customAdapterWorkspaceKey,
+  executeAdapterAction,
   mapCustomDefinitionToDraft,
   mapCustomRevisionToSummary,
   mapTrustedAdapterToSummary,
@@ -74,6 +75,26 @@ const binding = {
 } as TrustedAdapterBindingDto;
 
 describe('custom adapter workspace container mappings', () => {
+  it('rethrows pre-request failures after recording the container error', async () => {
+    const messages: string[] = [];
+    const schemaError = new Error('Path test JSON must be valid JSON.');
+    const requestStarted = false;
+
+    await expect(executeAdapterAction('Path test', async () => {
+      throw schemaError;
+    }, (message) => messages.push(message))).rejects.toBe(schemaError);
+
+    expect(requestStarted).toBe(false);
+    expect(messages).toEqual(['Path test JSON must be valid JSON.']);
+    expect(messages).not.toContain('Path test complete.');
+  });
+
+  it('does not emit a container success message for outer workspace actions', async () => {
+    const messages: string[] = [];
+    await expect(executeAdapterAction('Path test', async () => undefined, (message) => messages.push(message))).resolves.toBeUndefined();
+    expect(messages).toEqual([]);
+  });
+
   it('maps source-free current and revision DTOs into pure workspace values', () => {
     expect(mapCustomDefinitionToDraft(customDefinition).document).toContain('custom-fixture');
     expect(mapCustomRevisionToSummary(customDefinition)).toMatchObject({ adapterId: 'custom-fixture', current: true });

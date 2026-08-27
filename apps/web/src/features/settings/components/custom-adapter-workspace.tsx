@@ -11,7 +11,9 @@ import {
   assertSafeCustomFields,
   isCredentialLikeMetadataKey,
   isStrictRestrictedRequestSchema,
+  BoundedJsonValueSchema,
   TrustedAdapterManifestSchema,
+  type BoundedJsonValue,
 } from '@imagine/shared';
 import { isAlias, isMap, isSeq, parseDocument as parseYamlDocument } from 'yaml';
 import {
@@ -149,10 +151,11 @@ export interface CustomHttpSimulationPayload extends CustomHttpDocumentPayload {
   readonly response: { readonly status: number; readonly json: unknown };
 }
 
-export interface CustomHttpPathTestPayload extends CustomHttpDocumentPayload {
-  readonly version?: string;
+/** Path tests inspect a response document, not an adapter definition. */
+export interface CustomHttpPathTestPayload {
+  readonly providerId?: string;
   readonly path: string;
-  readonly json: unknown;
+  readonly json: BoundedJsonValue;
 }
 
 export interface TrustedJsInstallPayload {
@@ -1067,6 +1070,23 @@ export function mapCustomHttpDraftToPayload(
   };
 }
 
+/** Builds only the fields accepted by the path-test endpoint. */
+export function mapCustomHttpPathTestToPayload(
+  draft: Partial<CustomHttpDraft>,
+  providerId?: string,
+): CustomHttpPathTestPayload {
+  const normalized = { ...DEFAULT_CUSTOM_HTTP_DRAFT, ...draft };
+  const path = normalized.path;
+  if (!path.startsWith('/') || path.includes('\\') || /~(?![01])/u.test(path)) {
+    throw new Error('Path must be an RFC 6901 JSON Pointer.');
+  }
+  return {
+    ...(providerId?.trim() ? { providerId: providerId.trim() } : {}),
+    path,
+    json: BoundedJsonValueSchema.parse(parseJsonText(normalized.pathTestJson, 'Path test JSON')),
+  };
+}
+
 export function validateCustomHttpDraft(
   draft: Partial<CustomHttpDraft>,
   providerId?: string,
@@ -1186,6 +1206,20 @@ function actionFromProps(props: CustomAdapterWorkspaceProps, key: ActionKey): Ac
   const nested = props.actions?.[key];
   const direct = props[key];
   return (nested ?? direct) as unknown as ActionHandler | undefined;
+}
+
+/** Keeps action feedback at one outer workspace boundary. */
+export async function runWorkspaceAction(
+  action: () => unknown | Promise<unknown>,
+  label: string,
+  onMessage: (message: string) => void,
+): Promise<void> {
+  try {
+    const result = await action();
+    onMessage(result === false ? 'Canceled.' : `${label} complete.`);
+  } catch (error) {
+    onMessage(error instanceof Error ? error.message : `${label} failed.`);
+  }
 }
 
 function isImportedAdapterDocument(value: unknown): value is ImportedAdapterDocument {
@@ -1521,11 +1555,7 @@ function CustomHttpEditor({
     return { ...payload, response: { status, json } } satisfies CustomHttpSimulationPayload;
   };
   const pathTest = () => {
-    const payload = mapCustomHttpDraftToPayload(draft, providerId);
-    if (!draft.path.startsWith('/') || draft.path.includes('\\') || /~(?![01])/u.test(draft.path)) {
-      throw new Error('Path must be an RFC 6901 JSON Pointer.');
-    }
-    return { ...payload, path: draft.path, json: parseJsonText(draft.pathTestJson, 'Path test JSON') } satisfies CustomHttpPathTestPayload;
+    return mapCustomHttpPathTestToPayload(draft, providerId);
   };
   return (
     <>
@@ -1916,15 +1946,7 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
     setBusyAction(key);
     setCommandMessage(null);
     try {
-      const payload = payloadFactory();
-      const result = await action(payload as never);
-      if (result === false) {
-        setCommandMessage('Canceled.');
-        return;
-      }
-      setCommandMessage(`${label} complete.`);
-    } catch (error) {
-      setCommandMessage(error instanceof Error ? error.message : `${label} failed.`);
+      await runWorkspaceAction(() => action(payloadFactory() as never), label, setCommandMessage);
     } finally {
       setBusyAction(null);
     }
@@ -1936,14 +1958,7 @@ export function CustomAdapterWorkspace(props: CustomAdapterWorkspaceProps) {
     setBusyAction(key);
     setCommandMessage(null);
     try {
-      const result = await action(payloadFactory ? payloadFactory() as never : undefined as never);
-      if (result === false) {
-        setCommandMessage('Canceled.');
-        return;
-      }
-      setCommandMessage(`${label} complete.`);
-    } catch (error) {
-      setCommandMessage(error instanceof Error ? error.message : `${label} failed.`);
+      await runWorkspaceAction(() => action(payloadFactory ? payloadFactory() as never : undefined as never), label, setCommandMessage);
     } finally {
       setBusyAction(null);
     }

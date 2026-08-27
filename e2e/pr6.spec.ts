@@ -127,6 +127,11 @@ interface CleanupTask {
   readonly run: () => Promise<void>;
 }
 
+interface CapturedResponse {
+  readonly response: Response;
+  readonly bodyText: string;
+}
+
 function executionKey(testInfo: TestInfo): string {
   return `${testInfo.project.name}-retry-${testInfo.retry}`;
 }
@@ -137,6 +142,13 @@ function scopedProviderName(baseName: string, testInfo: TestInfo): string {
 
 function scopedTrustedAdapterId(baseId: string, testInfo: TestInfo): string {
   return `${baseId}-${testInfo.project.name}-r${testInfo.retry}`;
+}
+
+function captureResponseText(responsePromise: Promise<Response>): Promise<CapturedResponse> {
+  return responsePromise.then(async (response) => ({
+    bodyText: await response.text(),
+    response,
+  }));
 }
 
 async function finalizeTestCleanup(
@@ -428,18 +440,18 @@ async function runWorkspaceAction(
   endpoint: string,
   completion: string,
   method = 'POST',
-): Promise<Response> {
+): Promise<CapturedResponse> {
   const expectedPath = endpoint === 'adapter'
     ? `/internal/providers/${encodeURIComponent(providerId)}/adapter`
     : `/internal/providers/${encodeURIComponent(providerId)}/adapter/${endpoint}`;
-  const responsePromise = page.waitForResponse((response) =>
+  const responsePromise = captureResponseText(page.waitForResponse((response) =>
     response.request().method() === method && new URL(response.url()).pathname === expectedPath,
-  );
+  ));
   await workspace.getByRole('button', { name: action, exact: true }).click();
-  const response = await responsePromise;
+  const { response, bodyText } = await responsePromise;
   expect(response.status()).toBe(200);
   await expect(workspace.locator('[aria-label="Adapter command feedback"]')).toContainText(completion);
-  return response;
+  return { bodyText, response };
 }
 
 function acceptNextConfirm(page: Page): void {
@@ -459,13 +471,12 @@ async function installTrustedFixture(
     name: 'trusted-fixture.mjs',
   });
   await expect(workspace.locator('input[aria-label="Trusted JavaScript source file"]')).toHaveAttribute('data-source-selected', 'true');
-  const responsePromise = page.waitForResponse((response) =>
+  const responsePromise = captureResponseText(page.waitForResponse((response) =>
     response.request().method() === 'POST' && response.url().endsWith('/internal/adapters/trusted-javascript'),
-  );
+  ));
   await workspace.getByRole('button', { name: 'Install trusted adapter', exact: true }).click();
-  const response = await responsePromise;
+  const { response, bodyText: responseText } = await responsePromise;
   expect(response.status()).toBe(201);
-  const responseText = await response.text();
   expect(responseText).not.toContain('parentPort');
   expect(responseText).not.toContain(source.toString('utf8'));
   const installed = TrustedAdapterResponseSchema.parse(JSON.parse(responseText));
@@ -522,13 +533,13 @@ test('exposes both PR6 custom Provider profiles and opens Manage after creation'
     await profile.selectOption('custom-http-v1');
     await editor.getByLabel('Base URL (required)', { exact: true }).fill('https://api.example.test/v1');
     await editor.getByLabel('API key', { exact: true }).fill(API_SECRET);
-    const createResponsePromise = page.waitForResponse((response) =>
+    const createResponsePromise = captureResponseText(page.waitForResponse((response) =>
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/internal/providers',
-    );
+    ));
     await editor.getByRole('button', { name: 'Save provider', exact: true }).click();
-    const createResponse = await createResponsePromise;
+    const { response: createResponse, bodyText: createResponseText } = await createResponsePromise;
     expect(createResponse.status()).toBe(201);
-    const created = await createResponse.json() as { readonly provider: ProviderRecord };
+    const created = JSON.parse(createResponseText) as { readonly provider: ProviderRecord };
     providerId = created.provider.id;
 
     const workspace = page.getByTestId('custom-adapter-workspace');
@@ -695,7 +706,7 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
     await expect(workspace.locator('section[aria-labelledby="adapter-capabilities-heading"]')).toContainText('pr6-image-model');
 
     const jsonSaveResponse = await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
-    const jsonSaved = await jsonSaveResponse.json() as AdapterDefinitionResponse;
+    const jsonSaved = JSON.parse(jsonSaveResponse.bodyText) as AdapterDefinitionResponse;
     expect(jsonSaved.definition.ref.digest).toBe(fixture.initialRef.digest);
     expect(jsonSaved.definition.ref.version).toBe('1.0.1');
     await expect(workspace.locator('section[aria-labelledby="adapter-revisions-heading"]')).toContainText('1.0.1 /');
@@ -710,7 +721,7 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
     await expect(workspace.getByRole('button', { name: 'YAML', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(versionField).toHaveValue('1.0.0');
     const yamlSaveResponse = await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
-    const yamlSaved = await yamlSaveResponse.json() as AdapterDefinitionResponse;
+    const yamlSaved = JSON.parse(yamlSaveResponse.bodyText) as AdapterDefinitionResponse;
     expect(yamlSaved.definition.ref.digest).toBe(fixture.initialRef.digest);
     expect(yamlSaved.definition.ref.version).toBe('1.0.0');
     const revisions = workspace.locator('section[aria-labelledby="adapter-revisions-heading"]');
