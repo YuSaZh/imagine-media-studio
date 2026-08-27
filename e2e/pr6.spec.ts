@@ -122,6 +122,50 @@ interface HttpFixture {
   readonly provider: ProviderRecord;
 }
 
+interface CleanupTask {
+  readonly label: string;
+  readonly run: () => Promise<void>;
+}
+
+function executionKey(testInfo: TestInfo): string {
+  return `${testInfo.project.name}-retry-${testInfo.retry}`;
+}
+
+function scopedProviderName(baseName: string, testInfo: TestInfo): string {
+  return `${baseName} [${executionKey(testInfo)}]`;
+}
+
+function scopedTrustedAdapterId(baseId: string, testInfo: TestInfo): string {
+  return `${baseId}-${testInfo.project.name}-r${testInfo.retry}`;
+}
+
+async function finalizeTestCleanup(
+  testFailed: boolean,
+  testError: unknown,
+  tasks: readonly CleanupTask[],
+): Promise<void> {
+  const cleanupErrors: Error[] = [];
+  for (const task of tasks) {
+    try {
+      await task.run();
+    } catch (error) {
+      cleanupErrors.push(new Error(`Cleanup failed: ${task.label}`, { cause: error }));
+    }
+  }
+
+  if (testFailed) {
+    if (cleanupErrors.length === 0) throw testError;
+    throw new AggregateError(
+      [testError, ...cleanupErrors],
+      'The PR6 test failed and one or more cleanup tasks also failed.',
+      { cause: testError },
+    );
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, 'One or more PR6 cleanup tasks failed.');
+  }
+}
+
 function authHeaders(): Readonly<Record<string, string>> {
   return { Authorization: basicAuthorizationHeader() };
 }
@@ -219,13 +263,14 @@ function canonicalJson(value: unknown): string {
 
 async function prepareHttpFixture(
   request: APIRequestContext,
+  testInfo: TestInfo,
 ): Promise<HttpFixture> {
   let provider: ProviderRecord | null = null;
   try {
     provider = await createProvider(
       request,
       'custom-http-v1',
-      HTTP_PROVIDER_NAME,
+      scopedProviderName(HTTP_PROVIDER_NAME, testInfo),
       'https://api.example.test/v1',
     );
     const initialRef = await putCustomSpec(request, provider.id, '1.0.0');
@@ -249,13 +294,25 @@ async function prepareHttpFixture(
     }
     return { initialRef, jsonEnvelope, provider, yamlEnvelope };
   } catch (error) {
-    if (provider !== null) await removeProvider(request, provider.id).catch(() => undefined);
-    throw error;
+    await finalizeTestCleanup(true, error, [{
+      label: 'remove partially prepared HTTP provider',
+      run: async () => {
+        if (provider !== null) await removeProvider(request, provider.id);
+      },
+    }]);
+    throw error; // Unreachable: finalizeTestCleanup rethrows the setup failure.
   }
 }
 
 async function removeProvider(request: APIRequestContext, providerId: string): Promise<void> {
   const response = await request.delete(`/internal/providers/${encodeURIComponent(providerId)}`, {
+    headers: authHeaders(),
+  });
+  expect([204, 404]).toContain(response.status());
+}
+
+async function removeTrustedAdapter(request: APIRequestContext, adapterId: string): Promise<void> {
+  const response = await request.delete(`/internal/adapters/${encodeURIComponent(adapterId)}`, {
     headers: authHeaders(),
   });
   expect([204, 404]).toContain(response.status());
@@ -447,7 +504,7 @@ async function installViewportMock(page: Page): Promise<void> {
   });
 }
 
-test('exposes both PR6 custom Provider profiles and opens Manage after creation', async ({ page, request }) => {
+test('exposes both PR6 custom Provider profiles and opens Manage after creation', async ({ page, request }, testInfo) => {
   await gotoProviders(page);
   await page.getByRole('button', { name: 'Add provider', exact: true }).click();
   const editor = page.getByRole('dialog');
@@ -456,8 +513,10 @@ test('exposes both PR6 custom Provider profiles and opens Manage after creation'
   await expect(profile.locator('option[value="custom-js-v1"]')).toHaveCount(1);
   await expect(profile.locator('option[value="custom-http-v1"]')).toHaveText('Custom HTTP Adapter');
   await expect(profile.locator('option[value="custom-js-v1"]')).toHaveText('Trusted JavaScript Adapter');
-  const providerName = PROFILE_PROVIDER_NAME;
+  const providerName = scopedProviderName(PROFILE_PROVIDER_NAME, testInfo);
   let providerId: string | null = null;
+  let testFailed = false;
+  let testError: unknown;
   try {
     await editor.getByLabel('Name', { exact: true }).fill(providerName);
     await profile.selectOption('custom-http-v1');
@@ -480,9 +539,16 @@ test('exposes both PR6 custom Provider profiles and opens Manage after creation'
     await expect(page.locator('body')).not.toContainText(API_SECRET);
     await page.getByRole('dialog').locator('.custom-adapter-dialog-close').click();
     await expect(page.getByTestId('custom-adapter-workspace')).toBeHidden();
-  } finally {
-    if (providerId !== null) await removeProvider(request, providerId).catch(() => undefined);
+  } catch (error) {
+    testFailed = true;
+    testError = error;
   }
+  await finalizeTestCleanup(testFailed, testError, [{
+    label: 'remove UI-created custom provider',
+    run: async () => {
+      if (providerId !== null) await removeProvider(request, providerId);
+    },
+  }]);
 });
 
 test('keeps the custom adapter workspace usable across desktop, tablet, and mobile viewports', async ({
@@ -493,9 +559,11 @@ test('keeps the custom adapter workspace usable across desktop, tablet, and mobi
   const provider = await createProvider(
     request,
     'custom-http-v1',
-    RESPONSIVE_PROVIDER_NAME,
+    scopedProviderName(RESPONSIVE_PROVIDER_NAME, testInfo),
     'https://api.example.test/v1',
   );
+  let testFailed = false;
+  let testError: unknown;
   try {
     await putCustomSpec(request, provider.id, '1.0.0');
     await gotoProviders(page);
@@ -549,10 +617,14 @@ test('keeps the custom adapter workspace usable across desktop, tablet, and mobi
     await reopenedDialog.locator('.custom-adapter-dialog-footer-close').click();
     await expect(reopenedDialog).toBeHidden();
     await expect(manage).toBeFocused();
-  } finally {
-    await page.context().setOffline(false);
-    await removeProvider(request, provider.id);
+  } catch (error) {
+    testFailed = true;
+    testError = error;
   }
+  await finalizeTestCleanup(testFailed, testError, [
+    { label: 'restore browser network state', run: () => page.context().setOffline(false) },
+    { label: 'remove responsive custom provider', run: () => removeProvider(request, provider.id) },
+  ]);
 });
 
 test('manages JSON/YAML revisions, safe previews, simulation tools, and exact history', async ({
@@ -560,7 +632,9 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
   request,
 }, testInfo) => {
   test.skip(!FULL_HTTP_PROJECTS.has(testInfo.project.name), 'The complete HTTP management flow runs on desktop and mobile representatives.');
-  const fixture = await prepareHttpFixture(request);
+  const fixture = await prepareHttpFixture(request, testInfo);
+  let testFailed = false;
+  let testError: unknown;
   try {
     await gotoProviders(page);
     const { dialog } = await openWorkspace(page, fixture.provider);
@@ -681,10 +755,17 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
     await expect(reopenedWorkspace.locator('[data-state="admin-unavailable"]')).toBeHidden();
     await expect(reopenedWorkspace.getByRole('button', { name: 'Validate', exact: true })).toBeEnabled();
     await capturePr6Screenshot(page, testInfo, 'http-management');
-  } finally {
-    await page.unroute(`**/internal/providers/${fixture.provider.id}/adapter/validate`).catch(() => undefined);
-    await removeProvider(request, fixture.provider.id);
+  } catch (error) {
+    testFailed = true;
+    testError = error;
   }
+  await finalizeTestCleanup(testFailed, testError, [
+    {
+      label: 'remove HTTP validation route override',
+      run: () => page.unroute(`**/internal/providers/${fixture.provider.id}/adapter/validate`),
+    },
+    { label: 'remove HTTP management provider', run: () => removeProvider(request, fixture.provider.id) },
+  ]);
 });
 
 test('installs, binds, disables, unbinds, and removes a trusted adapter without exposing source', async ({
@@ -694,9 +775,16 @@ test('installs, binds, disables, unbinds, and removes a trusted adapter without 
   test.skip(!TRUSTED_PROJECTS.has(testInfo.project.name), 'Trusted JavaScript lifecycle runs on desktop, tablet, and mobile representatives.');
   const source = await readFile(SOURCE_PATH);
   const manifest = JSON.parse(await readFile(MANIFEST_PATH, 'utf8')) as TrustedManifest;
-  manifest.id = TRUSTED_ADAPTER_ID;
-  manifest.displayName = TRUSTED_DISPLAY_NAME;
-  const provider = await createProvider(request, 'custom-js-v1', TRUSTED_PROVIDER_NAME, null);
+  manifest.id = scopedTrustedAdapterId(TRUSTED_ADAPTER_ID, testInfo);
+  manifest.displayName = scopedProviderName(TRUSTED_DISPLAY_NAME, testInfo);
+  const provider = await createProvider(
+    request,
+    'custom-js-v1',
+    scopedProviderName(TRUSTED_PROVIDER_NAME, testInfo),
+    null,
+  );
+  let testFailed = false;
+  let testError: unknown;
   try {
     await gotoProviders(page);
     const { dialog } = await openWorkspace(page, provider);
@@ -749,8 +837,12 @@ test('installs, binds, disables, unbinds, and removes a trusted adapter without 
     expect(globalListText).not.toContain('export const capabilities');
     const removed = await request.get(`/internal/adapters/${encodeURIComponent(manifest.id)}`, { headers: authHeaders() });
     expect(removed.status()).toBe(404);
-  } finally {
-    await request.delete(`/internal/adapters/${encodeURIComponent(manifest.id)}`, { headers: authHeaders() }).catch(() => undefined);
-    await removeProvider(request, provider.id);
+  } catch (error) {
+    testFailed = true;
+    testError = error;
   }
+  await finalizeTestCleanup(testFailed, testError, [
+    { label: 'remove trusted provider', run: () => removeProvider(request, provider.id) },
+    { label: 'remove trusted adapter', run: () => removeTrustedAdapter(request, manifest.id) },
+  ]);
 });
