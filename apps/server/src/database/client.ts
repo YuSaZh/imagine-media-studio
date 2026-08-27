@@ -68,11 +68,20 @@ export function createDatabase(
   migrationsDirectory?: string,
 ): DatabaseClient {
   const sqlite = new Database(databasePath);
-  sqlite.pragma('foreign_keys = ON');
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('synchronous = NORMAL');
-  sqlite.pragma('busy_timeout = 5000');
-  applyMigrations(sqlite, migrationsDirectory);
+  try {
+    sqlite.pragma('foreign_keys = ON');
+    sqlite.pragma('journal_mode = WAL');
+    sqlite.pragma('synchronous = NORMAL');
+    sqlite.pragma('busy_timeout = 5000');
+    applyMigrations(sqlite, migrationsDirectory);
+  } catch (error) {
+    try {
+      sqlite.close();
+    } catch {
+      // Preserve the initialization failure when cleanup itself fails.
+    }
+    throw error;
+  }
 
   return {
     orm: drizzle(sqlite, { schema }),

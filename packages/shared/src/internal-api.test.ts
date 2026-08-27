@@ -15,6 +15,31 @@ import {
   SettingsPatchSchema,
   ProviderTypeSchema,
   CustomAdapterRefSchema,
+  AdapterFormatQuerySchema,
+  EmptyQuerySchema,
+  ProviderIdValueSchema,
+  AdapterIdParamsSchema,
+  ProviderAdapterParamsSchema,
+  CustomAdapterRefQuerySchema,
+  CustomAdapterRevisionListQuerySchema,
+  CustomAdapterExportQuerySchema,
+  CustomAdapterImportEnvelopeSchema,
+  CustomAdapterImportRequestSchema,
+  CustomAdapterPreviewRequestSchema,
+  CustomAdapterDryRunRequestSchema,
+  CustomAdapterSimulateResponseSchema,
+  CustomAdapterSimulateRequestSchema,
+  CustomAdapterPathTestRequestSchema,
+  CustomAdapterPathTestResponseSchema,
+  CustomAdapterCapabilityPreviewSchema,
+  CustomAdapterDefinitionDtoSchema,
+  TrustedAdapterManifestSchema,
+  TrustedAdapterManagementDtoSchema,
+  TrustedAdapterBindRequestSchema,
+  AdapterErrorResponseSchema,
+  MAX_ADAPTER_RESPONSE_BYTES,
+  CustomAdapterExtractedResponseSchema,
+  CustomAdapterSimulationResultSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
@@ -228,5 +253,275 @@ describe('internal API schemas', () => {
         occurredAt: '2026-08-25T00:00:00.000Z',
       }).id,
     ).toBe(1);
+  });
+  it('keeps adapter route params and format queries strict and bounded', () => {
+    expect(ProviderAdapterParamsSchema.parse({ providerId: 'provider-1', adapterId: 'custom-video' })).toEqual({
+      providerId: 'provider-1',
+      adapterId: 'custom-video',
+    });
+    expect(AdapterIdParamsSchema.safeParse({ adapterId: 'x'.repeat(64) }).success).toBe(false);
+    expect(ProviderAdapterParamsSchema.safeParse({ providerId: 'provider-1', adapterId: 'custom-video', source: 'forbidden' }).success).toBe(false);
+    expect(AdapterFormatQuerySchema.parse({})).toEqual({ format: 'json' });
+    expect(AdapterFormatQuerySchema.parse({ format: 'yaml' }).format).toBe('yaml');
+    expect(AdapterFormatQuerySchema.safeParse({ format: 'toml' }).success).toBe(false);
+    expect(AdapterFormatQuerySchema.safeParse({ format: 'json', adminEnabled: true }).success).toBe(false);
+  });
+
+  it('accepts bounded raw import documents and only the exact export envelope', () => {
+    const envelope = {
+      schemaVersion: 1 as const,
+      version: '1.0.0',
+      definition: { schemaVersion: 1, id: 'custom-video' },
+    };
+    expect(CustomAdapterImportEnvelopeSchema.parse(envelope)).toEqual(envelope);
+    expect(CustomAdapterImportRequestSchema.parse({
+      providerId: 'provider-1',
+      format: 'yaml',
+      document: 'schemaVersion: 1\nid: custom-video\n',
+    }).format).toBe('yaml');
+    expect(CustomAdapterImportEnvelopeSchema.safeParse({ ...envelope, source: 'adapter.mjs' }).success).toBe(false);
+    expect(CustomAdapterImportEnvelopeSchema.safeParse({ ...envelope, adminEnabled: true }).success).toBe(false);
+    expect(CustomAdapterImportEnvelopeSchema.safeParse({ ...envelope, definition: { value: 'x'.repeat(4_097) } }).success).toBe(false);
+    expect(CustomAdapterImportRequestSchema.safeParse({
+      providerId: 'provider-1',
+      document: new Uint8Array([1, 2, 3]),
+    }).success).toBe(false);
+    const inherited = Object.create({ polluted: true }) as Record<string, unknown>;
+    inherited.id = 'custom-video';
+    expect(CustomAdapterImportRequestSchema.safeParse({ providerId: 'provider-1', document: inherited }).success).toBe(false);
+  });
+
+  it('keeps preview and dry-run requests free of server-only context and binary inputs', () => {
+    const request = {
+      operation: 'image.generate' as const,
+      providerId: 'provider-1',
+      modelId: 'model-1',
+      prompt: 'A red kite',
+      inputs: [{ assetId: 'asset-1', role: 'source' as const }],
+    };
+    const parsed = CustomAdapterPreviewRequestSchema.parse({
+      providerId: 'provider-1',
+      endpoint: 'submit',
+      baseUrl: 'https://api.example.test/v1',
+      request,
+    });
+    expect(parsed.request?.inputs).toEqual([{ assetId: 'asset-1', role: 'source' }]);
+    expect(CustomAdapterDryRunRequestSchema.parse({ providerId: 'provider-1', request })).toEqual({
+      providerId: 'provider-1',
+      request: { ...request, inputs: [{ assetId: 'asset-1', role: 'source' }] },
+    });
+    for (const key of ['adminEnabled', 'secrets', 'secretValues', 'inputs', 'source']) {
+      expect(CustomAdapterPreviewRequestSchema.safeParse({ providerId: 'provider-1', request, [key]: key === 'inputs' ? [] : true }).success).toBe(false);
+    }
+    expect(CustomAdapterPreviewRequestSchema.safeParse({
+      providerId: 'provider-1',
+      request: { ...request, extra: { payload: { bytes: 'not allowed' } } },
+    }).success).toBe(false);
+    expect(CustomAdapterPreviewRequestSchema.safeParse({
+      providerId: 'provider-1',
+      request: { ...request, extra: { payload: 'x'.repeat(MAX_ADAPTER_RESPONSE_BYTES + 1) } },
+    }).success).toBe(false);
+  });
+
+  it('bounds simulated responses and rejects ambiguous transport aliases', () => {
+    const response = {
+      status: 200,
+      headers: { 'content-type': 'application/json', 'x-trace': ['one', 'two'] },
+      json: { request_id: 'remote-1', status: 'done' },
+    };
+    expect(CustomAdapterSimulateResponseSchema.parse(response)).toEqual(response);
+    expect(CustomAdapterSimulateRequestSchema.parse({
+      providerId: 'provider-1',
+      endpoint: 'poll',
+      phase: 'poll',
+      response,
+    }).phase).toBe('poll');
+    expect(CustomAdapterSimulateResponseSchema.safeParse({ ...response, status: 99 }).success).toBe(false);
+    expect(CustomAdapterSimulateResponseSchema.safeParse({ ...response, statusCode: 200 }).success).toBe(false);
+    expect(CustomAdapterSimulateResponseSchema.safeParse({ ...response, body: {} }).success).toBe(false);
+    expect(CustomAdapterSimulateResponseSchema.safeParse({ status: 200 }).success).toBe(false);
+    expect(CustomAdapterSimulateResponseSchema.safeParse({
+      ...response,
+      headers: { 'x-bad': 'line\nvalue' },
+    }).success).toBe(false);
+    expect(CustomAdapterSimulateResponseSchema.safeParse({
+      ...response,
+      json: Array.from({ length: 513 }, () => true),
+    }).success).toBe(false);
+    expect(CustomAdapterSimulateResponseSchema.safeParse({
+      status: 200,
+      text: 'x'.repeat(MAX_ADAPTER_RESPONSE_BYTES + 1),
+    }).success).toBe(false);
+  });
+
+  it('requires non-empty RFC 6901 paths and round-trips path-test DTOs', () => {
+    const input = {
+      providerId: 'provider-1',
+      path: '/a~1b/0',
+      json: { 'a/b': ['value'] },
+    };
+    expect(CustomAdapterPathTestRequestSchema.parse(input)).toEqual(input);
+    expect(CustomAdapterPathTestResponseSchema.parse({ path: '/a~1b/0', found: true, value: 'value' })).toEqual({
+      path: '/a~1b/0',
+      found: true,
+      value: 'value',
+    });
+    expect(CustomAdapterPathTestRequestSchema.safeParse({ ...input, path: '' }).success).toBe(false);
+    expect(CustomAdapterPathTestRequestSchema.safeParse({ ...input, path: '/bad~2path' }).success).toBe(false);
+    expect(CustomAdapterPathTestRequestSchema.safeParse({ ...input, path: '/bad\\path' }).success).toBe(false);
+    expect(CustomAdapterPathTestRequestSchema.safeParse({ providerId: 'provider-1', path: '/value' }).success).toBe(false);
+  });
+
+  it('keeps definition, capability, trusted management, and error DTOs source-free', () => {
+    const ref = {
+      kind: 'declarative-http' as const,
+      adapterId: 'custom-video',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    const definition = {
+      providerId: 'provider-1',
+      ref,
+      definition: { schemaVersion: 1, id: 'custom-video' },
+      isCurrent: true,
+      disabled: false,
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-25T00:00:00.000Z',
+    };
+    expect(CustomAdapterDefinitionDtoSchema.parse(definition)).toEqual(definition);
+    expect(CustomAdapterDefinitionDtoSchema.safeParse({ ...definition, source: 'adapter.mjs' }).success).toBe(false);
+    const capabilities = {
+      providerType: 'custom-http-v1',
+      models: [{
+        id: 'model-1',
+        displayName: 'Model 1',
+        capabilities: { operations: ['image.generate'] },
+      }],
+    };
+    expect(CustomAdapterCapabilityPreviewSchema.parse({ capabilities })).toEqual({ capabilities });
+    const manifest = {
+      schemaVersion: 1 as const,
+      id: 'trusted-js-fixture',
+      version: '1.0.0',
+      displayName: 'Trusted JavaScript fixture',
+      sha256: 'b'.repeat(64),
+      operations: ['image.generate' as const],
+      capabilities,
+      allowedHosts: ['api.example.com'],
+      requiredSecrets: [],
+      resourceLimits: {
+        timeoutMs: 5_000,
+        maxMessageBytes: 1_048_576,
+        maxOutputBytes: 1_048_576,
+        maxLogBytes: 65_536,
+        maxOldGenerationSizeMb: 64,
+        maxYoungGenerationSizeMb: 16,
+        stackSizeMb: 4,
+      },
+    };
+    const trusted = {
+      manifest,
+      ref: { kind: 'trusted-javascript' as const, adapterId: manifest.id, version: manifest.version, digest: manifest.sha256 },
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-25T00:00:00.000Z',
+    };
+    expect(TrustedAdapterManifestSchema.parse(manifest)).toEqual(manifest);
+    expect(TrustedAdapterManagementDtoSchema.parse(trusted)).toEqual(trusted);
+    expect(TrustedAdapterManagementDtoSchema.safeParse({ ...trusted, source: 'adapter.mjs' }).success).toBe(false);
+    expect(TrustedAdapterBindRequestSchema.parse({ providerId: 'provider-1', ref: trusted.ref })).toEqual({
+      providerId: 'provider-1',
+      ref: trusted.ref,
+    });
+    expect(TrustedAdapterBindRequestSchema.safeParse({ providerId: 'provider-1', ref }).success).toBe(false);
+    expect(AdapterErrorResponseSchema.parse({ error: 'adapter_not_found', message: 'missing' })).toEqual({
+      error: 'adapter_not_found',
+      message: 'missing',
+    });
+    expect(AdapterErrorResponseSchema.safeParse({ error: 'unknown_adapter_code' }).success).toBe(false);
+    expect(AdapterErrorResponseSchema.safeParse({ error: 'storage_error', source: 'secret' }).success).toBe(false);
+  });
+
+  it('hardens route query and multipart ProviderId values', () => {
+    expect(EmptyQuerySchema.parse({})).toEqual({});
+    expect(EmptyQuerySchema.safeParse({ unexpected: true }).success).toBe(false);
+    expect(EmptyQuerySchema.safeParse(JSON.parse('{"__proto__":{"polluted":true}}')).success).toBe(false);
+    expect(ProviderIdValueSchema.parse('  provider-1  ')).toBe('provider-1');
+    expect(ProviderIdValueSchema.safeParse('').success).toBe(false);
+    expect(ProviderIdValueSchema.safeParse('provider\nid').success).toBe(false);
+    expect(ProviderIdValueSchema.safeParse('x'.repeat(256)).success).toBe(false);
+  });
+
+  it('requires complete historical refs and bounds revision lists/export queries', () => {
+    const ref = {
+      kind: 'declarative-http' as const,
+      adapterId: 'custom-video',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    expect(CustomAdapterRefQuerySchema.parse(ref)).toEqual(ref);
+    expect(CustomAdapterRevisionListQuerySchema.parse({ limit: '20', ...ref })).toEqual({ limit: 20, ...ref });
+    expect(CustomAdapterRevisionListQuerySchema.parse({}).limit).toBe(50);
+    expect(CustomAdapterExportQuerySchema.parse({ format: 'yaml', ...ref })).toEqual({ format: 'yaml', ...ref });
+    expect(CustomAdapterExportQuerySchema.parse({ format: 'json' })).toEqual({ format: 'json' });
+    for (const key of ['kind', 'adapterId', 'version', 'digest']) {
+      const partial = { [key]: ref[key as keyof typeof ref] };
+      expect(CustomAdapterRevisionListQuerySchema.safeParse(partial).success).toBe(false);
+      expect(CustomAdapterExportQuerySchema.safeParse(partial).success).toBe(false);
+    }
+    expect(CustomAdapterRevisionListQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
+    expect(CustomAdapterExportQuerySchema.safeParse({ ...ref, format: 'toml' }).success).toBe(false);
+    expect(CustomAdapterExportQuerySchema.safeParse({ ...ref, source: 'adapter.mjs' }).success).toBe(false);
+  });
+
+  it('validates extracted simulation output as a safe success/pending/failed union', () => {
+    const success = {
+      state: 'completed' as const,
+      assets: [{
+        type: 'image' as const,
+        mimeType: 'image/png',
+        url: 'https://cdn.example.test/result.png',
+        resultId: 'result-1',
+      }],
+    };
+    const pending = {
+      state: 'pending' as const,
+      remoteJobId: 'remote-1',
+      progress: 42,
+      status: 'running',
+      resultExpiresAt: '2026-08-25T00:00:00.000Z',
+    };
+    const failed = {
+      state: 'failed' as const,
+      error: {
+        code: 'upstream_failed',
+        kind: 'transient' as const,
+        message: 'The upstream request failed.',
+        retryable: true,
+        retryAfterMs: 1_000,
+        statusCode: 503,
+      },
+    };
+    expect(CustomAdapterExtractedResponseSchema.parse(success)).toEqual(success);
+    expect(CustomAdapterExtractedResponseSchema.parse(pending)).toEqual(pending);
+    expect(CustomAdapterSimulationResultSchema.parse(failed)).toEqual(failed);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({ ...success, source: 'secret' }).success).toBe(false);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({ ...success, secrets: { apiKey: 'secret' } }).success).toBe(false);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({ ...success, body: { raw: true } }).success).toBe(false);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({
+      ...success,
+      assets: [{ ...success.assets[0], source: 'url' }],
+    }).success).toBe(false);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({
+      ...success,
+      assets: [{ ...success.assets[0], url: 'https://cdn.example.test/result.png?token=secret' }],
+    }).success).toBe(false);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({
+      state: 'failed',
+      error: { ...failed.error, statusCode: 99 },
+    }).success).toBe(false);
+    expect(CustomAdapterExtractedResponseSchema.safeParse({
+      state: 'completed',
+      assets: [{ type: 'image', mimeType: 'image/png', base64: 'x'.repeat(MAX_ADAPTER_RESPONSE_BYTES + 1) }],
+    }).success).toBe(false);
   });
 });

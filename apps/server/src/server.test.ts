@@ -113,6 +113,31 @@ function multipartUpload(
   };
 }
 
+function multipartTrustedAdapter(
+  manifest: Readonly<Record<string, unknown>>,
+  source: Buffer,
+  providerId?: string,
+) {
+  const boundary = '----imagine-trusted-adapter-test-boundary';
+  const chunks: Buffer[] = [
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="source"; filename="adapter.mjs"\r\nContent-Type: application/javascript\r\n\r\n`,
+    ),
+    source,
+    Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="manifest"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${JSON.stringify(manifest)}\r\n`),
+  ];
+  if (providerId !== undefined) {
+    chunks.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="providerId"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${providerId}\r\n`,
+    ));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return {
+    body: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.app.close()));
   await Promise.all(
@@ -167,14 +192,14 @@ async function createTestServer(
   return server;
 }
 
-async function reopenTestServer(dataDir: string): Promise<ImagineServer> {
+async function reopenTestServer(dataDir: string, appPassword: string | null = null): Promise<ImagineServer> {
   const server = await createServer({
     config: {
       allowHttpMediaDownloads: false,
       allowInsecureProviderHttp: false,
       allowPrivateNetworkAccess: false,
       appPort: 3030,
-      appPassword: null,
+      appPassword,
       appSecret: 'test-app-secret-with-at-least-32-characters',
       dataDir,
       logLevel: 'silent',
@@ -727,11 +752,25 @@ describe('Imagine server PR 0 skeleton', () => {
     const allowed = await server.app.inject({
       method: 'PATCH',
       url: '/internal/settings',
+      headers: { host: 'studio.local', origin: 'http://studio.local' },
+      payload: { values: { mode: 'image' } },
+    });
+    const equivalentDefaultPort = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
+      headers: { host: 'studio.local:80', origin: 'http://studio.local' },
+      payload: { values: { mode: 'image' } },
+    });
+    const mismatchedScheme = await server.app.inject({
+      method: 'PATCH',
+      url: '/internal/settings',
       headers: { host: 'studio.local', origin: 'https://studio.local' },
       payload: { values: { mode: 'image' } },
     });
     expect(denied.statusCode).toBe(403);
     expect(allowed.statusCode).toBe(200);
+    expect(equivalentDefaultPort.statusCode).toBe(200);
+    expect(mismatchedScheme.statusCode).toBe(403);
   });
 
   it('maps unique-name conflicts and missing Job mutations to stable responses', async () => {
@@ -946,6 +985,69 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(basic.statusCode).toBe(200);
   });
 
+  it('keeps auth public paths exact and hardens browser writes against CSRF', async () => {
+    const server = await createTestServer(false, true, false, 'test-password');
+    const childPath = await server.app.inject({
+      method: 'GET',
+      url: '/internal/auth/status/child',
+    });
+    const logoutUnauthenticated = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/logout',
+    });
+    const health = await server.app.inject({ method: 'GET', url: '/internal/health' });
+    const login = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/login',
+      payload: { password: 'test-password' },
+    });
+    const cookie = login.headers['set-cookie'];
+    const cookieHeader = Array.isArray(cookie) ? cookie[0]! : cookie!;
+    const missingOrigin = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/logout',
+      headers: { cookie: cookieHeader },
+    });
+    const fetchMetadataWithoutOrigin = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/logout',
+      headers: { 'sec-fetch-site': 'same-origin', cookie: cookieHeader },
+    });
+    const crossSite = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/login',
+      headers: { 'sec-fetch-site': 'cross-site' },
+      payload: { password: 'test-password' },
+    });
+    const basic = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/logout',
+      headers: {
+        authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}`,
+      },
+    });
+    const sameOrigin = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/logout',
+      headers: {
+        cookie: cookieHeader,
+        host: 'studio.local',
+        origin: 'http://studio.local',
+      },
+    });
+
+    expect(childPath.statusCode).toBe(401);
+    expect(logoutUnauthenticated.statusCode).toBe(401);
+    expect(health.statusCode).toBe(200);
+    expect(login.statusCode).toBe(200);
+    expect(missingOrigin.statusCode).toBe(403);
+    expect(missingOrigin.json<{ error: string }>().error).toBe('origin_required');
+    expect(fetchMetadataWithoutOrigin.statusCode).toBe(403);
+    expect(crossSite.statusCode).toBe(403);
+    expect(basic.statusCode).toBe(204);
+    expect(sameOrigin.statusCode).toBe(204);
+  });
+
   it('wires custom adapter definitions, scoped HTTP, and the worker runtime', async () => {
     const targets: string[] = [];
     const providerHttpExecutor: ProviderHttpExecutor = async (target) => {
@@ -1025,6 +1127,193 @@ describe('Imagine server PR 0 skeleton', () => {
     await expect(server.adapterStore.install({ manifest: {}, source: '' })).rejects.toThrow(
       'Administrator authorization is required for adapter management.',
     );
+  });
+
+  it('integrates authenticated declarative and trusted adapter management across restart', async () => {
+    const noPassword = await createTestServer(false, false);
+    const denied = await noPassword.app.inject({ method: 'GET', url: '/internal/adapters' });
+    expect(denied.statusCode).toBe(403);
+    await noPassword.app.close();
+    servers.splice(servers.indexOf(noPassword), 1);
+
+    const server = await createTestServer(false, false, false, 'test-password');
+    const dataDir = temporaryDirectories.at(-1)!;
+    const admin = {
+      authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}`,
+    };
+    const login = await server.app.inject({
+      method: 'POST',
+      url: '/internal/auth/login',
+      payload: { password: 'test-password' },
+    });
+    expect(login.statusCode).toBe(200);
+    const rawCookie = login.headers['set-cookie'];
+    const cookie = Array.isArray(rawCookie) ? rawCookie[0]! : rawCookie!;
+    const sameOrigin = {
+      cookie,
+      host: 'studio.local',
+      origin: 'http://studio.local',
+    };
+    const customProvider = server.providers.create({
+      baseUrl: 'https://8.8.8.8:8443',
+      name: 'Management HTTP Provider',
+      type: 'custom-http-v1',
+    });
+    const revision = await customHttpRevision();
+    const jsonImport = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter`,
+      headers: { ...admin, 'content-type': 'application/json' },
+      payload: {
+        definition: revision.definition,
+        schemaVersion: 1,
+        version: revision.ref.version,
+      },
+    });
+    expect(jsonImport.statusCode).toBe(200);
+
+    const legacyVersionQuery = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter?version=${revision.ref.version}`,
+      headers: { ...admin, 'content-type': 'application/json' },
+      payload: {
+        definition: revision.definition,
+        schemaVersion: 1,
+        version: revision.ref.version,
+      },
+    });
+    const bareSpec = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter`,
+      headers: { ...admin, 'content-type': 'application/json' },
+      payload: revision.definition,
+    });
+    expect(legacyVersionQuery.statusCode).toBe(400);
+    expect(bareSpec.statusCode).toBe(400);
+
+    const yamlExport = await server.app.inject({
+      method: 'GET',
+      url: `/internal/providers/${customProvider.id}/adapter/export?format=yaml`,
+      headers: sameOrigin,
+    });
+    expect(yamlExport.statusCode).toBe(200);
+    expect(yamlExport.headers['content-type']).toContain('application/yaml');
+    expect(yamlExport.body).not.toContain('Management HTTP Provider');
+    const yamlImport = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter`,
+      headers: { ...sameOrigin, 'content-type': 'application/yaml' },
+      payload: yamlExport.body,
+    });
+    expect(yamlImport.statusCode).toBe(200);
+
+    const request = createMockGenerationRequest({
+      extra: { style: 'clean' },
+      modelId: 'image-model',
+      providerId: customProvider.id,
+    });
+    const preview = await server.app.inject({
+      method: 'POST',
+      url: `/internal/providers/${customProvider.id}/adapter/preview`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: { request },
+    });
+    const dryRun = await server.app.inject({
+      method: 'POST',
+      url: `/internal/providers/${customProvider.id}/adapter/dry-run`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: { request },
+    });
+    const pathTest = await server.app.inject({
+      method: 'POST',
+      url: `/internal/providers/${customProvider.id}/adapter/path-test`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: { json: { data: [{ id: 'result-id' }] }, path: '/data/0/id' },
+    });
+    const simulated = await server.app.inject({
+      method: 'POST',
+      url: `/internal/providers/${customProvider.id}/adapter/simulate`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: {
+        response: { json: { data: [{ b64_json: 'aGVsbG8=', id: 'result-id' }] }, status: 200 },
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(dryRun.statusCode).toBe(200);
+    expect(dryRun.json<{ network: boolean; performed: boolean }>()).toMatchObject({ network: false, performed: false });
+    expect(pathTest.statusCode).toBe(200);
+    expect(simulated.statusCode).toBe(200);
+    for (const response of [yamlExport, preview, dryRun, pathTest, simulated]) {
+      expect(response.body).not.toContain('custom-secret');
+    }
+
+    const unsupported = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter`,
+      headers: { ...sameOrigin, 'content-type': 'text/plain' },
+      payload: '{}',
+    });
+    const oversized = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter`,
+      headers: { ...sameOrigin, 'content-type': 'application/yaml' },
+      payload: 'x'.repeat(128 * 1024 + 1),
+    });
+    expect(unsupported.statusCode).toBe(415);
+    expect(oversized.statusCode).toBe(413);
+
+    const trusted = await trustedJavaScriptRevision();
+    const trustedProvider = server.providers.create({
+      name: 'Management Trusted Provider',
+      type: 'custom-js-v1',
+    });
+    const trustedPayload = multipartTrustedAdapter(trusted.manifest, trusted.source);
+    const installed = await server.app.inject({
+      method: 'POST',
+      url: '/internal/adapters/trusted-javascript',
+      headers: { ...sameOrigin, 'content-type': trustedPayload.contentType },
+      payload: trustedPayload.body,
+    });
+    expect(installed.statusCode).toBe(201);
+    expect(installed.body).not.toContain(trusted.source.toString('utf8'));
+    const listed = await server.app.inject({ method: 'GET', url: '/internal/adapters', headers: sameOrigin });
+    const fetched = await server.app.inject({
+      method: 'GET',
+      url: `/internal/adapters/${trusted.ref.adapterId}`,
+      headers: sameOrigin,
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(fetched.statusCode).toBe(200);
+    expect(listed.body).not.toContain(trusted.source.toString('utf8'));
+    expect(fetched.body).not.toContain(trusted.source.toString('utf8'));
+
+    const bound = await server.app.inject({
+      method: 'POST',
+      url: `/internal/providers/${trustedProvider.id}/adapter/trusted-javascript`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: { ref: trusted.ref },
+    });
+    expect(bound.statusCode).toBe(201);
+
+    await server.app.close();
+    servers.splice(servers.indexOf(server), 1);
+    const reopened = await reopenTestServer(dataDir, 'test-password');
+    const restored = await reopened.app.inject({ method: 'GET', url: '/internal/adapters', headers: admin });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.body).toContain(trusted.ref.adapterId);
+    expect(reopened.adapterDefinitions.delete(trustedProvider.id, trusted.ref)).toBe(true);
+    const removed = await reopened.app.inject({
+      method: 'DELETE',
+      url: `/internal/adapters/${trusted.ref.adapterId}`,
+      headers: admin,
+    });
+    expect(removed.statusCode).toBe(204);
+    const missing = await reopened.app.inject({
+      method: 'GET',
+      url: `/internal/adapters/${trusted.ref.adapterId}`,
+      headers: admin,
+    });
+    expect(missing.statusCode).toBe(404);
   });
 
   it('closes the runner, worker host, store, and database in order', async () => {

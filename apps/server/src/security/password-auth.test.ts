@@ -29,6 +29,8 @@ describe('PasswordAuth', () => {
     const enabled = new PasswordAuth({ appSecret: '0123456789abcdef', password: 'secret' });
     const basic = Buffer.from('studio:secret').toString('base64');
     expect(enabled.authenticated(request({ authorization: `Basic ${basic}` }))).toBe(true);
+    expect(enabled.authenticated(request({ authorization: `basic ${basic}` }))).toBe(true);
+    expect(enabled.authenticated(request({ authorization: `BASIC ${basic}` }))).toBe(true);
     expect(enabled.authenticated(request({ authorization: 'Basic invalid' }))).toBe(false);
 
     const disabled = new PasswordAuth({ appSecret: '0123456789abcdef', password: null });

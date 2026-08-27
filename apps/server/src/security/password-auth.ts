@@ -37,7 +37,7 @@ function parseCookies(header: string | undefined): Readonly<Record<string, strin
 }
 
 function basicPassword(header: string | undefined): string | null {
-  if (!header?.startsWith('Basic ')) return null;
+  if (!header || !/^Basic /iu.test(header)) return null;
   try {
     const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
     const separator = decoded.indexOf(':');

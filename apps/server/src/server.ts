@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 
 import { AdapterStore } from './adapters/index.js';
 import {
@@ -13,7 +13,7 @@ import {
 import type { AppConfig } from './config.js';
 import { ProviderAdapterDefinitionRepository } from './database/adapter-definitions.js';
 import { AssetRepository } from './database/assets.js';
-import { createDatabase } from './database/client.js';
+import { createDatabase, type DatabaseClient } from './database/client.js';
 import { CollectionRepository } from './database/collections.js';
 import { ChangeEventRepository } from './database/events.js';
 import { JobRepository } from './database/jobs.js';
@@ -39,7 +39,13 @@ import { ProviderInputLoader } from './providers/provider-input-loader.js';
 import { ProviderService } from './providers/provider-service.js';
 import { registerInternalRoutes } from './routes/internal.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerAdapterRoutes } from './routes/adapters.js';
 import { registerEventRoutes } from './routes/events.js';
+import {
+  registerErrorHandler,
+  registerRawDocumentParsers,
+  SERVER_BODY_LIMIT,
+} from './routes/error.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerResourceRoutes } from './routes/resources.js';
 import { NetworkPolicy } from './security/network-policy.js';
@@ -47,6 +53,8 @@ import { RemoteMediaDownloader } from './security/remote-download.js';
 import { SafeHttpTransport } from './security/safe-http-transport.js';
 import { SecretVault } from './security/secret-vault.js';
 import { PasswordAuth } from './security/password-auth.js';
+import { CustomAdapterService } from './services/custom-adapter-service.js';
+import { TrustedAdapterService } from './services/trusted-adapter-service.js';
 import { ensureStorage, getStoragePaths } from './storage/paths.js';
 
 export interface CreateServerOptions {
@@ -61,17 +69,50 @@ export interface CreateServerOptions {
 /** Internal adapter management view; runtime source stays behind runtimeReader. */
 export type AdapterStoreManagement = Pick<AdapterStore, 'close' | 'get' | 'install' | 'list' | 'remove'>;
 
+export type CustomAdapterServiceManagement = Pick<
+  CustomAdapterService,
+  | 'capabilities'
+  | 'delete'
+  | 'disable'
+  | 'dryRun'
+  | 'export'
+  | 'get'
+  | 'preview'
+  | 'replace'
+  | 'simulateResponse'
+  | 'testPath'
+  | 'validate'
+>;
+
+export type TrustedAdapterServiceManagement = Pick<
+  TrustedAdapterService,
+  'bind' | 'close' | 'get' | 'install' | 'list' | 'remove'
+>;
+
 export interface ImagineServer {
   app: FastifyInstance;
   adapterDefinitions: ProviderAdapterDefinitionRepository;
   adapterStore: AdapterStoreManagement;
+  customAdapterService: CustomAdapterServiceManagement;
   adapterWorkerHost: Pick<AdapterWorkerHost, 'close'>;
   jobs: JobRepository;
   assets: AssetRepository;
   collections: CollectionRepository;
   providers: ProviderService;
   settings: SettingsRepository;
+  trustedAdapterService: TrustedAdapterServiceManagement;
   runner: JobRunner;
+}
+
+const PUBLIC_INTERNAL_PATHS = new Set([
+  '/internal/health',
+  '/internal/auth/status',
+  '/internal/auth/login',
+]);
+
+function hasHeaderValue(value: string | string[] | undefined, expected: string): boolean {
+  const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  return values.some((item) => item.trim().toLowerCase() === expected);
 }
 
 function effectivePort(url: URL): number {
@@ -121,11 +162,108 @@ async function closeInOrder(
   }
 }
 
+interface ResourceLedger {
+  database?: DatabaseClient;
+  adapterStore?: AdapterStore;
+  adapterWorkerHost?: AdapterWorkerHost;
+  trustedAdapterService?: TrustedAdapterService;
+  runner?: JobRunner;
+  databaseClosed: boolean;
+  closePromise?: Promise<void>;
+}
+
+function closeCreatedResources(ledger: ResourceLedger): Promise<void> {
+  if (ledger.closePromise !== undefined) return ledger.closePromise;
+  const steps: Array<() => Promise<void> | void> = [];
+  if (ledger.runner !== undefined) steps.push(() => ledger.runner!.stop());
+  if (ledger.adapterWorkerHost !== undefined) steps.push(() => ledger.adapterWorkerHost!.close());
+  if (ledger.trustedAdapterService !== undefined) {
+    steps.push(() => ledger.trustedAdapterService!.close());
+  } else if (ledger.adapterStore !== undefined) {
+    steps.push(() => ledger.adapterStore!.close());
+  }
+  if (ledger.database !== undefined) {
+    const database = ledger.database;
+    steps.push(() => {
+      if (!ledger.databaseClosed) {
+        database.sqlite.close();
+        ledger.databaseClosed = true;
+      }
+    });
+  }
+  ledger.closePromise = closeInOrder(steps);
+  return ledger.closePromise;
+}
+
+type OriginProtocol = 'http:' | 'https:';
+
+interface NormalizedOrigin {
+  readonly protocol: OriginProtocol;
+  readonly hostname: string;
+  readonly port: number;
+}
+
+function defaultOriginPort(protocol: OriginProtocol): number {
+  return protocol === 'https:' ? 443 : 80;
+}
+
+function originProtocol(value: unknown): OriginProtocol | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.endsWith(':') ? value.toLowerCase() : `${value.toLowerCase()}:`;
+  return normalized === 'http:' || normalized === 'https:'
+    ? normalized
+    : null;
+}
+
+function normalizeOriginUrl(value: string): NormalizedOrigin | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  const protocol = originProtocol(parsed.protocol);
+  if (
+    protocol === null ||
+    parsed.username !== '' ||
+    parsed.password !== '' ||
+    parsed.pathname !== '/' ||
+    parsed.search !== '' ||
+    parsed.hash !== ''
+  ) {
+    return null;
+  }
+  const port = parsed.port === '' ? defaultOriginPort(protocol) : Number(parsed.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535 || parsed.hostname === '') return null;
+  return { hostname: parsed.hostname.toLowerCase(), port, protocol };
+}
+
+function requestOrigin(request: FastifyRequest): NormalizedOrigin | null {
+  const protocol = originProtocol(request.protocol);
+  const host = request.host;
+  if (protocol === null || typeof host !== 'string' || host === '') return null;
+  return normalizeOriginUrl(`${protocol}//${host}`);
+}
+
+function isSameOriginWrite(request: FastifyRequest, origin: string): boolean {
+  const expected = requestOrigin(request);
+  const actual = normalizeOriginUrl(origin);
+  return expected !== null && actual !== null &&
+    expected.protocol === actual.protocol &&
+    expected.hostname === actual.hostname &&
+    expected.port === actual.port;
+}
+
 export async function createServer(options: CreateServerOptions): Promise<ImagineServer> {
   const storage = getStoragePaths(options.config.dataDir);
-  await ensureStorage(storage);
+  const ledger: ResourceLedger = { databaseClosed: false };
+  let app: FastifyInstance | undefined;
 
-  const database = createDatabase(storage.database, options.migrationsDirectory);
+  try {
+    await ensureStorage(storage);
+
+    const database = createDatabase(storage.database, options.migrationsDirectory);
+    ledger.database = database;
   const jobs = new JobRepository(database.orm);
   const assets = new AssetRepository(database.orm);
   const settings = new SettingsRepository(database.orm);
@@ -167,11 +305,31 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     adminEnabled: passwordAuth.required,
     assertAdmin: () => undefined,
   });
+  ledger.adapterStore = adapterStore;
   const adapterWorkerHost = new AdapterWorkerHost(
     adapterStore.runtimeReader(),
     createSafeHttpPort(providerHttp),
     options.adapterWorkerFactory,
   );
+  ledger.adapterWorkerHost = adapterWorkerHost;
+  const customAdapterService = new CustomAdapterService({
+    providers: providerRepository,
+    adapterDefinitions,
+    authorization: {
+      adminEnabled: passwordAuth.required,
+      assertAdmin: () => undefined,
+    },
+    outbox,
+  });
+  const trustedAdapterService = new TrustedAdapterService({
+    adminEnabled: passwordAuth.required,
+    store: adapterStore,
+    adapterDefinitions,
+    providers: providerRepository,
+    jobs,
+    outbox,
+  });
+  ledger.trustedAdapterService = trustedAdapterService;
   const providerRegistry = new ProviderRegistry(providerRepository, vault, {
     adapterDefinitions,
     adapterWorkerHost,
@@ -228,26 +386,17 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     }),
     inputLoader,
   });
-  const app = Fastify({
+  ledger.runner = runner;
+  app = Fastify({
+    bodyLimit: SERVER_BODY_LIMIT,
     logger: options.logger ?? { level: options.config.logLevel },
   });
-  let databaseClosed = false;
-
   app.addHook('onClose', async () => {
-    await closeInOrder([
-      () => runner.stop(),
-      () => adapterWorkerHost.close(),
-      () => adapterStore.close(),
-      () => {
-        if (!databaseClosed) {
-          database.sqlite.close();
-          databaseClosed = true;
-        }
-      },
-    ]);
+    await closeCreatedResources(ledger);
   });
+  registerRawDocumentParsers(app);
+  registerErrorHandler(app);
 
-  try {
     await app.register(fastifyMultipart, {
       limits: {
         files: 1,
@@ -263,19 +412,43 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       const pathname = new URL(request.url, 'http://localhost').pathname;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         const origin = request.headers.origin;
-        const host = request.headers.host;
-        if (origin && host) {
-          let originHost: string;
-          try {
-            originHost = new URL(origin).host;
-          } catch {
+        const fetchSite = request.headers['sec-fetch-site'];
+        const fetchMode = request.headers['sec-fetch-mode'];
+        const fetchDest = request.headers['sec-fetch-dest'];
+        const hasCookie = request.headers.cookie !== undefined;
+        const hasFetchMetadata = fetchSite !== undefined || fetchMode !== undefined || fetchDest !== undefined;
+        const authorization = request.headers.authorization;
+        const hasExplicitBasic = typeof authorization === 'string' && /^Basic\s+\S+$/iu.test(authorization);
+        const nonBrowserBasic = hasExplicitBasic && !hasCookie && !hasFetchMetadata;
+
+        if (hasHeaderValue(fetchSite, 'cross-site')) {
+          return reply.code(403).send({
+            error: 'cross_origin_write_denied',
+            message: 'Cross-site writes are not allowed.',
+          });
+        }
+        if (origin === undefined) {
+          if (!nonBrowserBasic && (hasCookie || hasFetchMetadata)) {
+            return reply.code(403).send({
+              error: 'origin_required',
+              message: 'An Origin header is required for browser writes.',
+            });
+          }
+        } else if (typeof origin !== 'string') {
+          return reply.code(403).send({ error: 'invalid_origin' });
+        } else {
+          if (normalizeOriginUrl(origin) === null || requestOrigin(request) === null) {
             return reply.code(403).send({ error: 'invalid_origin' });
           }
-          if (originHost !== host) return reply.code(403).send({ error: 'cross_origin_write_denied' });
+          if (!isSameOriginWrite(request, origin)) {
+            return reply.code(403).send({
+              error: 'cross_origin_write_denied',
+              message: 'Cross-origin writes are not allowed.',
+            });
+          }
         }
       }
-      const publicInternalPath =
-        pathname === '/internal/health' || pathname.startsWith('/internal/auth/');
+      const publicInternalPath = PUBLIC_INTERNAL_PATHS.has(pathname);
       if (
         passwordAuth.required &&
         /^\/internal(?:\/|$)/.test(pathname) &&
@@ -322,6 +495,10 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     }
     outbox.flush();
     await registerAuthRoutes(app, passwordAuth);
+    await registerAdapterRoutes(app, {
+      custom: customAdapterService,
+      trusted: trustedAdapterService,
+    });
     await registerInternalRoutes(app, {
       mockProviderEnabled: options.config.mockProviderEnabled,
     });
@@ -371,21 +548,24 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     if (options.startRunner ?? true) {
       await runner.start();
     }
+
+    return {
+      app,
+      adapterDefinitions,
+      adapterStore,
+      customAdapterService,
+      adapterWorkerHost,
+      jobs,
+      assets,
+      collections,
+      providers: providerService,
+      settings,
+      trustedAdapterService,
+      runner,
+    };
   } catch (error) {
-    await app.close().catch(() => undefined);
+    if (app !== undefined) await app.close().catch(() => undefined);
+    await closeCreatedResources(ledger).catch(() => undefined);
     throw error;
   }
-
-  return {
-    app,
-    adapterDefinitions,
-    adapterStore,
-    adapterWorkerHost,
-    jobs,
-    assets,
-    collections,
-    providers: providerService,
-    settings,
-    runner,
-  };
 }

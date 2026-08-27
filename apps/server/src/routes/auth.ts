@@ -1,9 +1,7 @@
+import { AuthLoginSchema } from '@imagine/shared';
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 
 import type { PasswordAuth } from '../security/password-auth.js';
-
-const LoginSchema = z.object({ password: z.string().min(1).max(1024) }).strict();
 
 export async function registerAuthRoutes(
   app: FastifyInstance,
@@ -15,8 +13,14 @@ export async function registerAuthRoutes(
   }));
 
   app.post('/internal/auth/login', async (request, reply) => {
-    const input = LoginSchema.safeParse(request.body);
-    if (!input.success || !auth.verifyPassword(input.data.password)) {
+    const input = AuthLoginSchema.safeParse(request.body);
+    if (!input.success) {
+      return reply.code(400).send({
+        error: 'invalid_request',
+        message: 'The request does not match the internal API contract.',
+      });
+    }
+    if (!auth.verifyPassword(input.data.password)) {
       return reply.code(401).send({
         error: 'invalid_app_password',
         message: 'The application password is incorrect.',
@@ -27,6 +31,12 @@ export async function registerAuthRoutes(
   });
 
   app.post('/internal/auth/logout', async (request, reply) => {
+    if (request.body !== undefined) {
+      return reply.code(400).send({
+        error: 'invalid_request',
+        message: 'Logout requests must not include a body.',
+      });
+    }
     reply.header('set-cookie', auth.clearCookie(request.protocol === 'https'));
     return reply.code(204).send();
   });
