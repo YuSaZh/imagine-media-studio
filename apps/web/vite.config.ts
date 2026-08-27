@@ -2,6 +2,10 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+import {
+  createDerivedMediaRuntimeCaching,
+} from './src/pwa-media-cache.js';
+
 export default defineConfig({
   plugins: [
     react(),
@@ -66,32 +70,7 @@ export default defineConfig({
         globPatterns: ['**/*.{css,html,js,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/internal(?:\/|$)/],
-        runtimeCaching: [
-          {
-            urlPattern: ({ request, sameOrigin, url }) => {
-              if (!sameOrigin || request.method !== 'GET' || url.search !== '') return false;
-              if (
-                request.headers.has('authorization') ||
-                request.headers.has('proxy-authorization') ||
-                request.headers.has('cookie') ||
-                request.headers.has('range')
-              ) {
-                return false;
-              }
-              return /^\/internal\/assets\/[^/]+\/(?:thumbnail|poster)$/u.test(url.pathname);
-            },
-            handler: 'CacheFirst',
-            method: 'GET',
-            options: {
-              cacheName: 'imagine-derived-media-v1',
-              cacheableResponse: { statuses: [200] },
-              expiration: {
-                maxAgeSeconds: 7 * 24 * 60 * 60,
-                maxEntries: 100,
-              },
-            },
-          },
-        ],
+        runtimeCaching: [createDerivedMediaRuntimeCaching()],
       },
     }),
   ],

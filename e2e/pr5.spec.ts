@@ -9,6 +9,7 @@ import {
   type Page,
   type TestInfo,
 } from './fixtures.js';
+import { E2E_PASSWORD } from './runtime.js';
 
 const DESKTOP_PROJECT = 'pr1-desktop-1440x900';
 const MOBILE_PROJECT = 'pr1-mobile-390x844';
@@ -340,12 +341,22 @@ test('generates Mock text, image, and reference videos with durable media delive
   const serviceWorker = await request.get(serviceWorkerUrl!);
   expect(serviceWorker.ok()).toBeTruthy();
   const serviceWorkerSource = await serviceWorker.text();
+  expect(serviceWorkerSource).toContain('imagine-derived-media-v2');
   expect(serviceWorkerSource).toContain('imagine-derived-media-v1');
+  expect(serviceWorkerSource).toContain('NetworkFirst');
+  expect(serviceWorkerSource).toContain('no-store');
+  expect(serviceWorkerSource).not.toContain('networkTimeoutSeconds');
   expect(serviceWorkerSource).not.toContain('mock-media/');
   expect(serviceWorkerSource).not.toContain('.mp4');
 
-  const cacheProbe = await page.evaluate(async ({ contentUrl, posterUrl }) => {
-    const cache = await caches.open('imagine-derived-media-v1');
+  const sessionCookies = await page.context().cookies();
+  expect(sessionCookies.some(({ name }) => name === 'imagine_session')).toBe(true);
+  const cacheProbe = await page.evaluate(async (posterUrl) => {
+    await Promise.all([
+      caches.delete('imagine-derived-media-v2'),
+      caches.delete('imagine-derived-media-v1'),
+    ]);
+    const cache = await caches.open('imagine-derived-media-v2');
     const absolutePoster = new URL(posterUrl, location.origin).href;
     await cache.delete(absolutePoster);
     const authProbeResponse = await fetch(posterUrl, {
@@ -355,8 +366,9 @@ test('generates Mock text, image, and reference videos with durable media delive
     const queryPosterUrl = `${posterUrl}?cache-probe=${crypto.randomUUID()}`;
     const queryResponse = await fetch(queryPosterUrl);
     const queryPosterCached = (await cache.match(queryPosterUrl)) !== undefined;
-    const posterResponse = await fetch(posterUrl);
-    const rangeResponse = await fetch(contentUrl, { headers: { Range: 'bytes=0-7' } });
+    const rangePosterResponse = await fetch(posterUrl, { headers: { Range: 'bytes=0-7' } });
+    const rangePosterCached = (await cache.match(absolutePoster)) !== undefined;
+    const posterResponse = await fetch(posterUrl, { credentials: 'same-origin' });
     return {
       authProbeCached,
       authProbeStatus: authProbeResponse.status,
@@ -364,20 +376,22 @@ test('generates Mock text, image, and reference videos with durable media delive
       queryPosterUrl,
       queryPosterCached,
       queryPosterStatus: queryResponse.status,
-      rangeStatus: rangeResponse.status,
+      rangePosterCached,
+      rangePosterStatus: rangePosterResponse.status,
     };
-  }, { contentUrl: output.contentUrl, posterUrl: output.posterUrl! });
+  }, output.posterUrl!);
   expect(cacheProbe.posterStatus).toBe(200);
-  expect(cacheProbe.rangeStatus).toBe(206);
   expect(cacheProbe.authProbeStatus).toBe(200);
   expect(cacheProbe.authProbeCached).toBe(false);
   expect(cacheProbe.queryPosterStatus).toBe(200);
   expect(cacheProbe.queryPosterCached).toBe(false);
+  expect(cacheProbe.rangePosterStatus).toBe(206);
+  expect(cacheProbe.rangePosterCached).toBe(false);
   await expect.poll(async () => page.evaluate(async (posterUrl) => {
-    const cache = await caches.open('imagine-derived-media-v1');
+    const cache = await caches.open('imagine-derived-media-v2');
     return (await cache.match(new URL(posterUrl, location.origin).href)) !== undefined;
   }, output.posterUrl!)).toBe(true);
-  const cacheContents = await page.evaluate(async ({ contentUrl, queryPosterUrl }) => {
+  const cacheContents = await page.evaluate(async ({ contentUrl, posterUrl, queryPosterUrl }) => {
     const entries: string[] = [];
     for (const cacheName of await caches.keys()) {
       const cache = await caches.open(cacheName);
@@ -385,26 +399,100 @@ test('generates Mock text, image, and reference videos with durable media delive
     }
     return {
       contentCached: entries.includes(new URL(contentUrl, location.origin).href),
+      posterCached: entries.includes(new URL(posterUrl, location.origin).href),
       queryPosterCached: entries.includes(new URL(queryPosterUrl, location.origin).href),
     };
-  }, { contentUrl: output.contentUrl, queryPosterUrl: cacheProbe.queryPosterUrl });
+  }, {
+    contentUrl: output.contentUrl,
+    posterUrl: output.posterUrl!,
+    queryPosterUrl: cacheProbe.queryPosterUrl,
+  });
   expect(cacheContents.contentCached).toBe(false);
+  expect(cacheContents.posterCached).toBe(true);
   expect(cacheContents.queryPosterCached).toBe(false);
 
   await page.context().setOffline(true);
   try {
-    const offlineContent = await page.evaluate(async (contentUrl) => {
+    const offlineMedia = await page.evaluate(async ({ contentUrl, posterUrl }) => {
+      const posterResponse = await fetch(posterUrl, { credentials: 'same-origin' });
+      const posterBytes = await posterResponse.arrayBuffer();
       try {
         const response = await fetch(contentUrl);
-        return { ok: true, status: response.status };
+        return {
+          content: { ok: true, status: response.status },
+          poster: { bytes: posterBytes.byteLength, ok: posterResponse.ok, status: posterResponse.status },
+        };
       } catch {
-        return { ok: false, status: null };
+        return {
+          content: { ok: false, status: null },
+          poster: { bytes: posterBytes.byteLength, ok: posterResponse.ok, status: posterResponse.status },
+        };
       }
-    }, output.contentUrl);
-    expect(offlineContent).toEqual({ ok: false, status: null });
+    }, { contentUrl: output.contentUrl, posterUrl: output.posterUrl! });
+    expect(offlineMedia.content).toEqual({ ok: false, status: null });
+    expect(offlineMedia.poster).toEqual({
+      bytes: expect.any(Number),
+      ok: true,
+      status: 200,
+    });
+    expect(offlineMedia.poster.bytes).toBeGreaterThan(0);
   } finally {
     await page.context().setOffline(false);
   }
+
+  await page.context().clearCookies();
+  const unauthorizedPoster = await page.evaluate(async (posterUrl) => {
+    const response = await fetch(posterUrl, { credentials: 'same-origin' });
+    const absolutePoster = new URL(posterUrl, location.origin).href;
+    const cacheNames = await caches.keys();
+    const cached = async (cacheName: string) => cacheNames.includes(cacheName) &&
+      (await (await caches.open(cacheName)).match(absolutePoster)) !== undefined;
+    return {
+      legacyCached: await cached('imagine-derived-media-v1'),
+      cacheNames,
+      ok: response.ok,
+      status: response.status,
+      v2Cached: await cached('imagine-derived-media-v2'),
+    };
+  }, output.posterUrl!);
+  expect(unauthorizedPoster).toMatchObject({
+    legacyCached: false,
+    ok: false,
+    status: 401,
+    v2Cached: false,
+  });
+  expect(unauthorizedPoster.cacheNames).not.toContain('imagine-derived-media-v2');
+  expect(unauthorizedPoster.cacheNames).not.toContain('imagine-derived-media-v1');
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Unlock', exact: true })).toBeVisible();
+  const staleSessionUrls = await page.evaluate(async () => {
+    const entries = [
+      ['imagine-derived-media-v2', '/internal/assets/stale-session-v2/poster'],
+      ['imagine-derived-media-v1', '/internal/assets/stale-session-v1/poster'],
+    ] as const;
+    const urls: string[] = [];
+    for (const [cacheName, path] of entries) {
+      const url = new URL(path, location.origin).href;
+      const cache = await caches.open(cacheName);
+      await cache.put(url, new Response(new Uint8Array([1, 2, 3]), {
+        headers: { 'Content-Type': 'image/jpeg' },
+        status: 200,
+      }));
+      urls.push(url);
+    }
+    return urls;
+  });
+  await page.locator('input[name="password"]').fill(E2E_PASSWORD);
+  await page.getByRole('button', { name: 'Unlock workspace', exact: true }).click();
+  await expect(page.locator('.app-shell')).toBeVisible();
+  await expect.poll(async () => page.evaluate(async (urls) => {
+    const [v2Url, legacyUrl] = urls;
+    return {
+      legacyCached: (await caches.match(legacyUrl!, { cacheName: 'imagine-derived-media-v1' })) !== undefined,
+      v2Cached: (await caches.match(v2Url!, { cacheName: 'imagine-derived-media-v2' })) !== undefined,
+    };
+  }, staleSessionUrls)).toEqual({ legacyCached: false, v2Cached: false });
 
   const artifactDirectory = resolve('artifacts/visual/pr5');
   await mkdir(artifactDirectory, { recursive: true });

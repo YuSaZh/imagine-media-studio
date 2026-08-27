@@ -77,6 +77,7 @@ import {
   type TrustedAdapterManifest,
 } from '@imagine/shared';
 import { readExportedYamlEnvelopeVersion } from './adapter-document.js';
+import { clearDerivedMediaRuntimeCache } from '../pwa-media-cache.js';
 
 interface Parser<T> {
   parse(value: unknown): T;
@@ -126,7 +127,7 @@ export function subscribeToAuthRequired(listener: AuthRequiredListener): () => v
   return () => authRequiredListeners.delete(listener);
 }
 
-function publishAuthRequired(path: string, status: number): void {
+async function publishAuthRequired(path: string, status: number): Promise<void> {
   if (
     status !== 401 ||
     path === '/internal/auth/status' ||
@@ -134,7 +135,14 @@ function publishAuthRequired(path: string, status: number): void {
   ) {
     return;
   }
-  for (const listener of authRequiredListeners) listener();
+  try {
+    await clearDerivedMediaRuntimeCache();
+  } catch {
+    // The original 401 remains authoritative; login retries cleanup before
+    // asking the server to create a replacement session.
+  } finally {
+    for (const listener of authRequiredListeners) listener();
+  }
 }
 
 export class InternalApiError extends Error {
@@ -290,7 +298,7 @@ async function requestJson<T>(
     credentials: 'same-origin',
     headers,
   });
-  publishAuthRequired(path, response.status);
+  await publishAuthRequired(path, response.status);
   const contentType = response.headers.get('content-type') ?? '';
   const body: unknown = contentType.toLowerCase().includes('application/json')
     ? await readJsonSafely(response)
@@ -313,7 +321,7 @@ async function requestEmpty(path: string, init: RequestInit): Promise<void> {
     credentials: 'same-origin',
     headers: { Accept: 'application/json', ...init.headers },
   });
-  publishAuthRequired(path, response.status);
+  await publishAuthRequired(path, response.status);
   if (!response.ok) {
     let code = 'internal_api_error';
     let message = `Internal API request failed with status ${response.status}.`;
@@ -339,7 +347,7 @@ async function requestExport(
     credentials: 'same-origin',
     headers,
   });
-  publishAuthRequired(path, response.status);
+  await publishAuthRequired(path, response.status);
   if (!response.ok) {
     const body = await readJsonSafely(response);
     const error = typeof body === 'object' && body !== null && 'error' in body
@@ -527,17 +535,26 @@ function requestSignal(options: InternalRequestOptions): Pick<RequestInit, 'sign
 }
 
 export const internalClient = {
-  getAuthStatus: async () =>
-    requestJson('/internal/auth/status', AuthStatusSchema),
+  getAuthStatus: async () => {
+    const status = await requestJson('/internal/auth/status', AuthStatusSchema);
+    if (status.required && !status.authenticated) await clearDerivedMediaRuntimeCache();
+    return status;
+  },
   login: async (password: string) => {
     const input = AuthLoginSchema.parse({ password });
-    return requestJson('/internal/auth/login', AuthStatusSchema, {
+    await clearDerivedMediaRuntimeCache();
+    const status = await requestJson('/internal/auth/login', AuthStatusSchema, {
       method: 'POST',
       body: jsonBody(input),
     });
+    await clearDerivedMediaRuntimeCache();
+    return status;
   },
-  logout: async () =>
-    requestEmpty('/internal/auth/logout', { method: 'POST' }),
+  logout: async () => {
+    await clearDerivedMediaRuntimeCache();
+    await requestEmpty('/internal/auth/logout', { method: 'POST' });
+    await clearDerivedMediaRuntimeCache();
+  },
   getSettings: async () =>
     requestJson('/internal/settings', SettingsResponseSchema),
   patchSettings: async (values: Readonly<Record<string, JsonValue>>) =>

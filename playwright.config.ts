@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 import {
-  basicAuthorizationHeader,
   E2E_BASE_URL,
   E2E_DATA_DIR,
   E2E_PASSWORD,
@@ -32,7 +31,6 @@ export default defineConfig({
   use: {
     baseURL,
     ...localLaunchOptions,
-    extraHTTPHeaders: { Authorization: basicAuthorizationHeader() },
     storageState: E2E_STORAGE_STATE,
     trace: 'on-first-retry',
   },

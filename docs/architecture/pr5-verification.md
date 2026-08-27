@@ -29,8 +29,10 @@ The `mock-video-v1` Provider remains the deterministic executable test path. It 
 
 - Video outputs are materialized as managed `video/mp4` Assets with a generated `image/jpeg` poster. The browser Viewer uses a native `<video controls playsinline poster>` element and exposes a same-origin download link.
 - Asset delivery supports `HEAD`, byte-range `206`, stale `If-Range` fallback to `200`, unsatisfiable `416`, and poster delivery. Full video content is never a Service Worker runtime-cache target.
-- Workbox precaches the application shell and uses one bounded runtime rule only for successful same-origin `GET` requests to `/internal/assets/:id/thumbnail` or `/internal/assets/:id/poster`. Query-bearing, Authorization-bearing, Cookie-bearing, Range, Provider, complete-content, and MP4 requests are excluded.
-- Browser Cache Storage checks verify poster caching, exclusion of credential/query probes, exclusion of full video content, and failure of an offline full-video fetch. PWA cache rules do not contain Provider credentials or external Provider URLs.
+- Workbox precaches the application shell and uses one bounded `NetworkFirst` v2 runtime rule only for successful same-origin `GET` requests to `/internal/assets/:id/thumbnail` or `/internal/assets/:id/poster`. It has no network timeout, and its network fetch uses `cache: no-store`; query-bearing, Authorization-bearing, Range, URL-credential-bearing, Provider, complete-content, and MP4 requests are excluded. The route does not treat a Cookie header as observable authorization state.
+- Cookie-authenticated thumbnails and Posters are cached only after an online `200`. A direct media `401` is returned without cache fallback while a self-contained Workbox hook deletes v2 and legacy v1 with failure-tolerant cleanup. The web client also deletes both cache generations when authentication is absent, before and after every login or logout request, and before publishing a protected API `401`. Authentication transitions fail closed when their required lifecycle cleanup fails. Basic authentication remains isolated to non-browser test/API contexts and is never used to populate the browser cache.
+- Browser Cache Storage checks verify online and offline Poster hits, exclusion of Authorization/query/Range probes, exclusion of full video content, a direct cookie-less Poster `401` that removes both cache generations, and deletion of v2/v1 sentinels across replacement login. PWA cache rules do not contain Provider credentials or external Provider URLs.
+- This acceptance uses a known recent Poster URL in an already-controlled app. Persisting a bounded Gallery metadata snapshot and reconstructing that Gallery during a cold offline launch remains PR 7 scope; PR 5 does not claim that workflow.
 
 ## Security And Data Boundary
 
@@ -47,13 +49,17 @@ Only development-host checks allowed by [AGENTS.md](../../AGENTS.md) were run. N
 |---|---|---|
 | `pnpm lint` | Pass | Full repository ESLint run completed without errors. |
 | `pnpm typecheck` | Pass | All workspace typecheck projects completed successfully. |
-| `pnpm test` | Pass | 72 test files / 546 tests passed, including video Provider, JobRunner, media, route, and UI unit coverage. |
+| `pnpm test` | Pass | 93 test files / 788 tests passed, including the v2 runtime policy, serialized 401 hook, authentication lifecycle, video Provider, JobRunner, media, route, and UI unit coverage. |
+| `pnpm build` | Pass | The full workspace production build completed, and the generated Service Worker contains the bounded v2 `NetworkFirst` rule without a network timeout. |
+| `pnpm exec playwright test --list` | Pass | 80 browser tests were collected without starting the Playwright web server. |
 | `bash -n .github/scripts/docker-smoke.sh` | Pass | Docker smoke script parsed successfully. |
 | `git diff --check` | Pass | No whitespace errors in the final documentation and implementation diff. |
 
-Build, Playwright, and Docker smoke are intentionally accepted from GitHub Actions rather than the development host.
+Playwright execution and Docker smoke remain GitHub Actions-only. No application server, Playwright browser/server, Docker build, or Compose runtime was started locally.
 
 ## Remote Acceptance
+
+The run below validates the original PR 5 delivery baseline. The v2 `NetworkFirst` session-isolation hardening has new unit and browser acceptance coverage in this checkout and requires the next GitHub Actions run before it is treated as remotely closed.
 
 GitHub Actions run [32952151047](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32952151047) completed all three final jobs successfully:
 
@@ -77,4 +83,4 @@ These remote checks validate the local Mock and protocol/transport boundaries. T
 - The production entry chunk remains above the Vite advisory threshold; the 571.55 kB value is recorded from the final remote quality build. Broader route/vendor splitting remains assigned to PR 7.
 - Dynamic Provider catalogs currently consume one bounded response page. Provider-specific pagination remains open for catalogs larger than the first page.
 - The authenticated Grok Imagine reference package remains unavailable. Strict Grok Imagine L3/L4 visual classification is not claimed.
-- Declarative custom Provider import, dry run, redacted request previews, and advanced diagnostics remain PR 6 scope. Broader cross-device PWA polish remains PR 7 scope, and terminal provider-result cleanup reconciliation remains later media consistency work.
+- Declarative custom Provider import, dry run, redacted request previews, and advanced diagnostics remain PR 6 scope. Broader cross-device PWA polish and cold offline Gallery snapshot reconstruction remain PR 7 scope, and terminal provider-result cleanup reconciliation remains later media consistency work.

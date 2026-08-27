@@ -20,7 +20,7 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - `openai-videos-v1-compatible`, `gemini-veo-operation-v1`, `gemini-omni-interactions-video-v1`, and `xai-imagine-video-v1` video profiles
 - Durable video polling with provider deadlines and result expiry, cancel/retry handling, and SQLite restart recovery
 - Native video viewing with controls, inline playback, poster delivery, download, and HTTP Range support
-- Workbox runtime caching limited to same-origin successful poster/thumbnail responses; complete videos, Provider URLs, and credential-bearing requests are excluded
+- Workbox `NetworkFirst` v2 runtime caching limited to same-origin successful poster/thumbnail responses, with direct media `401` cache eviction; complete videos, Provider URLs, URL credentials, query/Range, and Authorization-bearing requests are excluded
 - Central bounded durable result manifests for Provider outputs, with server-only credentials and no secret media URLs
 - Optional application-password session gate
 - One Docker service and one `/data` volume
@@ -37,11 +37,12 @@ PR 4 image and PR 5 video adapters are verified against official-protocol fixtur
 PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), PR 2 evidence in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md), PR 3 evidence in [`docs/architecture/pr3-verification.md`](./docs/architecture/pr3-verification.md), and PR 4 evidence in [`docs/architecture/pr4-verification.md`](./docs/architecture/pr4-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 PR 3 desktop/mobile screenshots and visual review are in [`artifacts/visual/pr3`](./artifacts/visual/pr3) and [`artifacts/visual/pr3/visual-diff-report.md`](./artifacts/visual/pr3/visual-diff-report.md).
 PR 5 video, restart, media-delivery, and PWA evidence is recorded in [`docs/architecture/pr5-verification.md`](./docs/architecture/pr5-verification.md).
+PR 5 offline media acceptance covers a known recent Poster while the installed app is already controlled by its Service Worker. A cold offline launch that reconstructs Gallery metadata and its recent-media snapshot remains PR 7 scope and is not claimed here.
 PR 6 custom Provider examples and the feature/security acceptance matrix are in [`examples/custom-providers`](./examples/custom-providers) and [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md). Local parser, manifest, and source-policy checks cover those examples. The PR 6 GitHub Actions run records are currently placeholders because the two specific incidents recorded in [`Hold.md`](./Hold.md) prevented run generation; this README does not claim remote CI completion.
 
 ## Local Safety
 
-This repository is developed on a host with existing services. Local checks are limited to dependency installation, lint, typecheck, and unit tests. Production builds, Playwright/E2E, the application server, and Docker/Compose smoke run in GitHub Actions; do not start them on the development host. Never stop, restart, rename, or inspect secrets from existing host services.
+This repository is developed on a host with existing services. Local checks are limited to dependency installation, lint, typecheck, unit tests, and production builds that do not start a service. Playwright/E2E, the application server, and Docker/Compose smoke run in GitHub Actions; do not start them on the development host. Never stop, restart, rename, or inspect secrets from existing host services.
 
 For deployment on another host, create the bind-mounted data directory as the runtime user and pass that user's numeric IDs when they differ from `1000:1000`:
 

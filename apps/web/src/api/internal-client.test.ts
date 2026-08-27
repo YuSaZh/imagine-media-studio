@@ -10,11 +10,14 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('internalClient', () => {
   it('publishes payload-free auth-required events for protected 401 responses only', async () => {
     const listener = vi.fn();
+    const deleteCache = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal('caches', { delete: deleteCache });
     const unsubscribe = subscribeToAuthRequired(listener);
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(
@@ -27,6 +30,9 @@ describe('internalClient', () => {
       await expect(internalClient.listAssets()).rejects.toBeInstanceOf(InternalApiError);
       expect(listener).toHaveBeenCalledOnce();
       expect(listener).toHaveBeenCalledWith();
+      expect(deleteCache).toHaveBeenCalledTimes(2);
+      expect(deleteCache).toHaveBeenNthCalledWith(1, 'imagine-derived-media-v2');
+      expect(deleteCache).toHaveBeenNthCalledWith(2, 'imagine-derived-media-v1');
 
       listener.mockClear();
       await expect(internalClient.getAuthStatus()).rejects.toBeInstanceOf(InternalApiError);
@@ -38,6 +44,8 @@ describe('internalClient', () => {
   });
 
   it('checks status, logs in with same-origin credentials, and logs out', async () => {
+    const deleteCache = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal('caches', { delete: deleteCache });
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ authenticated: false, required: true }), {
@@ -79,6 +87,111 @@ describe('internalClient', () => {
       '/internal/auth/logout',
       expect.objectContaining({ credentials: 'same-origin', method: 'POST' }),
     ]);
+    expect(deleteCache).toHaveBeenCalledTimes(10);
+    for (let index = 0; index < 10; index += 2) {
+      expect(deleteCache).toHaveBeenNthCalledWith(index + 1, 'imagine-derived-media-v2');
+      expect(deleteCache).toHaveBeenNthCalledWith(index + 2, 'imagine-derived-media-v1');
+    }
+  });
+
+  it('preserves derived media while the existing cookie session remains authenticated', async () => {
+    const deleteCache = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal('caches', { delete: deleteCache });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: true, required: true }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }),
+    );
+
+    await expect(internalClient.getAuthStatus()).resolves.toEqual({
+      authenticated: true,
+      required: true,
+    });
+    expect(deleteCache).not.toHaveBeenCalled();
+  });
+
+  it('does not change the server session when the old media cache cannot be cleared', async () => {
+    const cacheFailure = new Error('cache storage unavailable');
+    vi.stubGlobal('caches', { delete: vi.fn().mockRejectedValue(cacheFailure) });
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    await expect(internalClient.login('local-password')).rejects.toBe(cacheFailure);
+    await expect(internalClient.logout()).rejects.toBe(cacheFailure);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed post-login cleanup after the server creates the session', async () => {
+    const postLoginFailure = new Error('post-login cache cleanup failed');
+    const deleteCache = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(postLoginFailure)
+      .mockResolvedValueOnce(false);
+    vi.stubGlobal('caches', { delete: deleteCache });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: true, required: true }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }),
+    );
+
+    await expect(internalClient.login('local-password')).rejects.toBe(postLoginFailure);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(deleteCache).toHaveBeenCalledTimes(4);
+  });
+
+  it('reports a failed post-logout cleanup after the server clears the session', async () => {
+    const postLogoutFailure = new Error('post-logout cache cleanup failed');
+    const deleteCache = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(postLogoutFailure)
+      .mockResolvedValueOnce(false);
+    vi.stubGlobal('caches', { delete: deleteCache });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+
+    await expect(internalClient.logout()).rejects.toBe(postLogoutFailure);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(deleteCache).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps the protected 401 and publishes auth-required if cleanup fails', async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeToAuthRequired(listener);
+    vi.stubGlobal('caches', { delete: vi.fn().mockRejectedValue(new Error('cache failure')) });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'authentication_required' }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 401,
+      }),
+    );
+
+    try {
+      await expect(internalClient.listAssets()).rejects.toMatchObject({ status: 401 });
+      expect(listener).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('fails closed when unauthenticated status cannot clear prior-session media', async () => {
+    const cacheFailure = new Error('status cache cleanup failed');
+    const deleteCache = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(cacheFailure);
+    vi.stubGlobal('caches', { delete: deleteCache });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: false, required: true }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }),
+    );
+
+    await expect(internalClient.getAuthStatus()).rejects.toBe(cacheFailure);
+    expect(deleteCache).toHaveBeenCalledTimes(2);
   });
 
   it('encodes query parameters and parses strict responses', async () => {
