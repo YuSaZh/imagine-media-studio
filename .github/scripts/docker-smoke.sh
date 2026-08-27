@@ -53,6 +53,7 @@ const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''
 function withAuth(options = {}) {
   const headers = new Headers(options.headers);
   headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
   return { ...options, headers };
 }
 
@@ -282,6 +283,7 @@ const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''
 function withAuth(options = {}) {
   const headers = new Headers(options.headers);
   headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
   return { ...options, headers };
 }
 
@@ -547,6 +549,7 @@ const authHeader = `Basic ${Buffer.from(`studio:${appPassword}`).toString('base6
 function withAuth(options = {}) {
   const headers = new Headers(options.headers);
   headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
   return { ...options, headers };
 }
 
@@ -805,6 +808,7 @@ const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''
 function withAuth(options = {}) {
   const headers = new Headers(options.headers);
   headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
   return { ...options, headers };
 }
 
@@ -1050,6 +1054,7 @@ const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''
 function withAuth(options = {}) {
   const headers = new Headers(options.headers);
   headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
   return { ...options, headers };
 }
 
