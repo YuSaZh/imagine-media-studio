@@ -8,6 +8,7 @@ import {
   E2E_PASSWORD,
   E2E_STORAGE_STATE,
 } from './runtime.js';
+import { waitForServer } from './readiness.js';
 
 const VISUAL_VIEWPORTS = [
   'desktop-1920x1080',
@@ -19,21 +20,6 @@ const VISUAL_VIEWPORTS = [
   'mobile-390x844',
   'mobile-360x800',
 ] as const;
-
-async function waitForServer(context: Awaited<ReturnType<typeof playwrightRequest.newContext>>): Promise<void> {
-  let lastStatus = 'unavailable';
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    try {
-      const response = await context.get('/internal/auth/status');
-      lastStatus = String(response.status());
-      if (response.ok()) return;
-    } catch {
-      // webServer can still be starting; keep the bounded readiness loop.
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-  }
-  throw new Error(`The Playwright webServer did not become ready (last status ${lastStatus}).`);
-}
 
 async function writeVisualReport(): Promise<void> {
   const directory = resolve('artifacts/visual/pr6');

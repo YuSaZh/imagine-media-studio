@@ -34,6 +34,7 @@ jobs:
   e2e:
     name: Playwright PR 1, PR 3, PR 4 settings, PR 5 video/PWA and PR 6 adapters
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v5
