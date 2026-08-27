@@ -60,6 +60,43 @@ export const providerAdapterDefinitions = sqliteTable(
       .on(table.providerId)
       .where(sql`${table.isCurrent} = 1`),
     index('provider_adapter_definitions_provider_idx').on(table.providerId),
+    index('provider_adapter_definitions_adapter_idx').on(
+      table.adapterId,
+      table.kind,
+      table.isCurrent,
+      table.disabled,
+    ),
+  ],
+);
+
+/**
+ * Permanent tombstones for administrator-removed trusted adapter ids. The
+ * id, rather than a revision digest, is the lifecycle key because AdapterStore
+ * has exactly one immutable directory per id.
+ */
+export const trustedAdapterTombstones = sqliteTable('trusted_adapter_tombstones', {
+  adapterId: text('adapter_id').primaryKey(),
+  version: text('version').notNull(),
+  digest: text('digest').notNull(),
+  removedAt: integer('removed_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+/**
+ * Durable lifecycle metadata for one immutable trusted adapter directory.
+ * Source, manifest metadata, and credentials intentionally stay outside this
+ * table; the filesystem remains the runtime source of truth.
+ */
+export const trustedAdapterInstallations = sqliteTable(
+  'trusted_adapter_installations',
+  {
+    adapterId: text('adapter_id').primaryKey(),
+    version: text('version').notNull(),
+    digest: text('digest').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('trusted_adapter_installations_updated_idx').on(table.updatedAt, table.adapterId),
   ],
 );
 
@@ -139,6 +176,9 @@ export const jobs = sqliteTable(
     index('jobs_provider_model_idx').on(table.providerId, table.modelId),
     index('jobs_retry_of_idx').on(table.retryOfJobId),
     index('jobs_root_idx').on(table.rootJobId),
+    index('jobs_adapter_retained_idx')
+      .on(table.adapterId, table.deletedAt)
+      .where(sql`${table.adapterId} IS NOT NULL AND ${table.deletedAt} IS NULL`),
   ],
 );
 

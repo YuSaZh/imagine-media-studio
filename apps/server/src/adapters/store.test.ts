@@ -2,7 +2,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AdapterAuthorizationError,
@@ -105,6 +105,55 @@ describe('adapter manifest and source policy', () => {
         }],
       },
     }))).toThrow(AdapterManifestError);
+  });
+
+  it('keeps trusted manifest metadata credential-free while allowing request schema field names', () => {
+    const capabilities = (customFields: unknown) => ({
+      providerType: 'fixture',
+      models: [{
+        id: 'model',
+        displayName: 'Model',
+        capabilities: { operations: ['image.generate'], customFields },
+      }],
+    });
+    const requestSchema = {
+      type: 'object',
+      properties: { apiKey: { type: 'string' } },
+      required: [],
+      additionalProperties: false,
+    };
+    expect(parseAdapterManifest(manifest(source(), { capabilities: capabilities(requestSchema) })).capabilities.models[0]!.capabilities.customFields).toEqual(requestSchema);
+    for (const customFields of [
+      { apiKey: 'static-secret' },
+      { nested: { authorization: 'static-secret' } },
+      { description: '{{ secret.apiKey }}' },
+      {
+        type: 'object',
+        properties: { apiKey: { type: 'string', enum: ['static-secret'] } },
+        required: [],
+        additionalProperties: false,
+      },
+    ]) {
+      expect(() => parseAdapterManifest(manifest(source(), { capabilities: capabilities(customFields) }))).toThrow(AdapterManifestError);
+    }
+    for (const template of [
+      '{{ secret.apiKey | urlencode }}',
+      '{{ secret.apiKey.foo }}',
+      '{{ secret["apiKey"] }}',
+      '{{ secret [ "apiKey" ] }}',
+      '{{ secret\u00a0.apiKey }}',
+      '{{\u00a0secret\u2003.apiKey }}',
+      '{{ secret.apiKey',
+      '{{ request.prompt {{ secret.apiKey }}',
+      '{{ secret\u00e9.apiKey }}',
+    ]) {
+      expect(() => parseAdapterManifest(manifest(source(), {
+        capabilities: capabilities({ description: template }),
+      }))).toThrow(AdapterManifestError);
+    }
+    expect(() => parseAdapterManifest(manifest(source(), {
+      capabilities: capabilities({ description: '{{ secretary.value }}' }),
+    }))).not.toThrow();
   });
 
   it('rejects source imports and runtime escape tokens as best-effort policy', () => {
@@ -220,6 +269,25 @@ describe('AdapterStore', () => {
     await store.install({ manifest: manifest(), source: source() });
     await chmod(join(root, 'fixture-adapter', 'adapter.mjs'), 0o644);
     await expect(store.get('fixture-adapter')).rejects.toThrow(AdapterStoreError);
+  });
+
+  it('removes a renamed target when the post-rename root fsync fails', async () => {
+    const root = await newRoot();
+    const store = new AdapterStore(root, adminAuthorization());
+    const syncDirectory = vi.spyOn(
+      store as unknown as { syncDirectory(path: string): Promise<void> },
+      'syncDirectory',
+    );
+    let rootSyncs = 0;
+    syncDirectory.mockImplementation(async (path: string) => {
+      if (path === root && ++rootSyncs === 1) throw new Error('injected root fsync failure');
+    });
+    await expect(store.install({ manifest: manifest(), source: source() })).rejects.toThrow(AdapterStoreError);
+    await expect(lstat(join(root, 'fixture-adapter'))).rejects.toThrow();
+    await expect(readdir(join(root, '.staging'))).resolves.toEqual([]);
+    await expect(store.install({ manifest: manifest(), source: source() })).resolves.toMatchObject({
+      manifest: { id: 'fixture-adapter' },
+    });
   });
 
   it('fails closed when no owner authorization port is supplied', () => {

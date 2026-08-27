@@ -8,6 +8,7 @@ export {
   MAX_MANIFEST_BYTES,
   parseAdapterManifest,
   parseBoundedManifestJson,
+  assertSafeManifestCustomFields,
   validateAdapterExports,
   validateAdapterSource,
   type AdapterCapabilities,

@@ -23,6 +23,38 @@ const SAFE_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SECRET_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9:_-]{0,63}$/u;
 const HOST_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
+const REQUEST_SCHEMA_KEYS = new Set([
+  'type',
+  'properties',
+  'required',
+  'additionalProperties',
+  'enum',
+  'min',
+  'max',
+  'minLength',
+  'maxLength',
+]);
+const REQUEST_SCHEMA_TYPES = new Set(['object', 'string', 'number', 'integer', 'boolean']);
+const CREDENTIAL_METADATA_WORDS = new Set([
+  'access',
+  'api',
+  'apikey',
+  'auth',
+  'authorization',
+  'cookie',
+  'credential',
+  'credentials',
+  'header',
+  'headers',
+  'idempotency',
+  'key',
+  'oauth',
+  'password',
+  'secret',
+  'signature',
+  'sig',
+  'token',
+]);
 
 const OPERATIONS = [
   'image.generate',
@@ -189,6 +221,144 @@ function assertBoundedJson(value: unknown, depth = 0, seen = new Set<object>()):
   seen.delete(value);
 }
 
+function metadataKeyWords(key: string): readonly string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/gu, '$1_$2')
+    .split(/[^A-Za-z0-9]+/u)
+    .filter((word) => word.length > 0)
+    .map((word) => word.toLowerCase());
+}
+
+function isCredentialMetadataKey(key: string): boolean {
+  return metadataKeyWords(key).some((word) => CREDENTIAL_METADATA_WORDS.has(word));
+}
+
+function startsWithSecretNamespace(expression: string): boolean {
+  const trimmed = expression.trimStart();
+  if (!trimmed.startsWith('secret')) return false;
+  const boundary = [...trimmed.slice('secret'.length)][0];
+  if (boundary === undefined) return true;
+  // Keep ordinary roots such as `secretary` distinct. Non-ASCII identifier
+  // characters are rejected conservatively because the adapter template
+  // grammar only permits ASCII identifiers.
+  if (/^[A-Za-z0-9_$]/u.test(boundary)) return false;
+  return true;
+}
+
+function containsSecretTemplate(value: string): boolean {
+  let offset = 0;
+  while (offset < value.length) {
+    const open = value.indexOf('{{', offset);
+    if (open < 0) return false;
+    const expressionStart = open + 2;
+    const close = value.indexOf('}}', expressionStart);
+    const expression = value.slice(expressionStart, close < 0 ? value.length : close);
+    if (startsWithSecretNamespace(expression)) return true;
+    if (close < 0) return false;
+    // Advance past the opening marker rather than the closing marker so a
+    // malformed outer token cannot hide a nested secret expression.
+    offset = open + 2;
+  }
+  return false;
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+}
+
+function isStructuredRequestSchema(value: unknown, depth = 0): boolean {
+  if (!isPlainRecord(value) || depth > 12) return false;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !REQUEST_SCHEMA_KEYS.has(key))) return false;
+  if (typeof value.type !== 'string' || !REQUEST_SCHEMA_TYPES.has(value.type)) return false;
+  const properties = value.properties;
+  if (value.type === 'object') {
+    if (value.additionalProperties !== false || !isPlainRecord(properties)) return false;
+    const required = value.required;
+    if (required !== undefined && (!Array.isArray(required) || required.some((key) => typeof key !== 'string') || new Set(required).size !== required.length || required.some((key) => !Object.hasOwn(properties, key)))) return false;
+    return Object.values(properties).every((child) => isStructuredRequestSchema(child, depth + 1));
+  }
+  if (properties !== undefined || value.required !== undefined || value.additionalProperties !== undefined) return false;
+  if (value.enum !== undefined && (!Array.isArray(value.enum) || value.enum.some((item) =>
+    (value.type === 'string' && typeof item !== 'string') ||
+    ((value.type === 'number' || value.type === 'integer') && typeof item !== 'number') ||
+    (value.type === 'boolean' && typeof item !== 'boolean')))) return false;
+  if (value.type === 'string' && (value.min !== undefined || value.max !== undefined)) return false;
+  if (value.type !== 'string' && (value.minLength !== undefined || value.maxLength !== undefined)) return false;
+  if (value.type !== 'number' && value.type !== 'integer' && (value.min !== undefined || value.max !== undefined)) return false;
+  if (value.type === 'integer' && Array.isArray(value.enum) && value.enum.some((item) => !Number.isSafeInteger(item))) return false;
+  if (typeof value.min === 'number' && typeof value.max === 'number' && value.max < value.min) return false;
+  if (typeof value.minLength === 'number' && typeof value.maxLength === 'number' && value.maxLength < value.minLength) return false;
+  return true;
+}
+
+function assertStructuredRequestSchemaCredentialValues(value: Readonly<Record<string, unknown>>): void {
+  const properties = value.properties;
+  if (value.type !== 'object' || !isPlainRecord(properties)) return;
+  for (const [name, child] of Object.entries(properties)) {
+    if (isCredentialMetadataKey(name) && isPlainRecord(child) && child.enum !== undefined) {
+      throw new AdapterManifestError('Manifest request schema contains a credential value.');
+    }
+    if (isPlainRecord(child) && child.type === 'object') assertStructuredRequestSchemaCredentialValues(child);
+  }
+}
+
+function assertNoManifestSecretTemplates(value: unknown, depth = 0, seen = new Set<object>()): void {
+  if (depth > 12) throw new AdapterManifestError('Manifest customFields are too deeply nested.');
+  if (typeof value === 'string') {
+    if (containsSecretTemplate(value)) throw new AdapterManifestError('Manifest customFields may not contain secret templates.');
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  if (seen.has(value)) throw new AdapterManifestError('Manifest customFields contain a cycle.');
+  seen.add(value);
+  for (const child of Object.values(value)) assertNoManifestSecretTemplates(child, depth + 1, seen);
+  seen.delete(value);
+}
+
+/**
+ * Manifest capability metadata is sent to the worker/browser boundary. A
+ * strict request schema may use credential-like field names as property names,
+ * but free-form metadata may not contain credential values or templates.
+ */
+export function assertSafeManifestCustomFields(value: unknown): void {
+  if (!isPlainRecord(value)) throw new AdapterManifestError('Manifest customFields must be a JSON object.');
+  assertNoManifestSecretTemplates(value);
+  if (isStructuredRequestSchema(value)) {
+    assertStructuredRequestSchemaCredentialValues(value);
+    return;
+  }
+  const seen = new Set<object>();
+  const visit = (node: unknown, credentialScope = false, depth = 0): void => {
+    if (depth > 12) throw new AdapterManifestError('Manifest customFields are too deeply nested.');
+    if (typeof node === 'string') {
+      if (credentialScope && node.length > 0) throw new AdapterManifestError('Manifest customFields contain a credential value.');
+      return;
+    }
+    if (node === null || typeof node === 'boolean' || typeof node === 'number') {
+      if (credentialScope && node !== null) throw new AdapterManifestError('Manifest customFields contain a credential value.');
+      return;
+    }
+    if (!isPlainRecord(node) && !Array.isArray(node)) throw new AdapterManifestError('Manifest customFields contain an unsupported value.');
+    if (seen.has(node)) throw new AdapterManifestError('Manifest customFields contain a cycle.');
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child, credentialScope, depth + 1);
+    } else {
+      for (const [key, child] of Object.entries(node)) {
+        const credential = isCredentialMetadataKey(key);
+        if (credential && child !== null && (typeof child === 'string' || typeof child === 'number' || typeof child === 'boolean')) {
+          throw new AdapterManifestError('Manifest customFields contain a credential value.');
+        }
+        visit(child, credentialScope || credential, depth + 1);
+      }
+    }
+    seen.delete(node);
+  };
+  visit(value);
+}
+
 export function parseAdapterManifest(value: unknown): AdapterManifest {
   assertBoundedJson(value);
   let serialized: string;
@@ -220,6 +390,9 @@ export function parseAdapterManifest(value: unknown): AdapterManifest {
     modelIds.add(model.id);
     for (const operation of model.capabilities.operations) {
       if (!declaredOperations.has(operation)) throw new AdapterManifestError('Model capabilities must be declared by operations.');
+    }
+    if (model.capabilities.customFields !== undefined) {
+      assertSafeManifestCustomFields(model.capabilities.customFields);
     }
   }
   if (requiredSecrets.some((name) => {

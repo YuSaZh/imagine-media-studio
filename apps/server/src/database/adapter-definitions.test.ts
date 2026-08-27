@@ -408,4 +408,149 @@ describe('ProviderAdapterDefinitionRepository', () => {
     expect(jobs.get(corruptRef.id)?.adapterRef).toBeNull();
     expect(jobs.get(corruptBudget.id)?.adapterRef).toBeNull();
   });
+
+  it('commits trusted installation metadata, an optional binding, and lifecycle events in one transaction', async () => {
+    const database = await createTestDatabase();
+    const provider = new ProviderRepository(database.orm).create({ name: 'Trusted atomic', type: 'custom-js-v1' });
+    const definitions = new ProviderAdapterDefinitionRepository(database.orm);
+    const ref = {
+      kind: 'trusted-javascript' as const,
+      adapterId: 'trusted-atomic',
+      version: '1.0.0',
+      digest: 'e'.repeat(64),
+    };
+    const now = new Date('2026-08-27T03:00:00.000Z');
+    const result = definitions.installTrustedAdapter({ ref, providerId: provider.id, now });
+    expect(result.installation).toMatchObject({ adapterId: ref.adapterId, version: ref.version, digest: ref.digest });
+    expect(result.installation.createdAt.getTime()).toBe(now.getTime());
+    expect(result.installation.updatedAt.getTime()).toBe(now.getTime());
+    expect(result.definition?.ref).toEqual(ref);
+    expect(result.events.map((event) => event.eventType)).toEqual([
+      'trusted_adapter.installed',
+      'provider_adapter_definition.created',
+    ]);
+    expect(definitions.getCurrent(provider.id)?.ref).toEqual(ref);
+    expect(definitions.getTrustedAdapterInstallation(ref.adapterId)).toEqual(result.installation);
+  });
+
+  it('rolls back installation, binding, and events when a lifecycle event transaction aborts', async () => {
+    const database = await createTestDatabase();
+    const provider = new ProviderRepository(database.orm).create({ name: 'Trusted rollback', type: 'custom-js-v1' });
+    const definitions = new ProviderAdapterDefinitionRepository(database.orm);
+    const ref = {
+      kind: 'trusted-javascript' as const,
+      adapterId: 'trusted-transaction-rollback',
+      version: '1.0.0',
+      digest: 'f'.repeat(64),
+    };
+    database.sqlite.exec(`
+      CREATE TRIGGER fail_trusted_transaction_event
+      BEFORE INSERT ON change_events
+      WHEN NEW.aggregate_type = 'trusted_adapter'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected trusted event failure');
+      END;
+    `);
+    expect(() => definitions.installTrustedAdapter({ ref, providerId: provider.id })).toThrow();
+    expect(definitions.getTrustedAdapterInstallation(ref.adapterId)).toBeNull();
+    expect(definitions.listByAdapterId(ref.adapterId)).toEqual([]);
+    expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM change_events WHERE aggregate_type = 'trusted_adapter'").get()).toEqual({ count: 0 });
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM provider_adapter_definitions WHERE provider_id = ?').get(provider.id)).toEqual({ count: 0 });
+  });
+
+  it('atomically tombstones trusted ids, rejects retained refs, and blocks trigger-level reuse', async () => {
+    const database = await createTestDatabase();
+    const provider = new ProviderRepository(database.orm).create({ name: 'Trusted', type: 'custom-js-v1' });
+    const definitions = new ProviderAdapterDefinitionRepository(database.orm);
+    const ref = {
+      kind: 'trusted-javascript' as const,
+      adapterId: 'trusted-tombstone',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    definitions.create(provider.id, { ref });
+    expect(() => definitions.tombstone(ref)).toThrow(expect.objectContaining({ code: 'referenced_definitions' }));
+    expect(definitions.getTombstone(ref.adapterId)).toBeNull();
+    expect(definitions.delete(provider.id, ref)).toBe(true);
+
+    const insertJob = database.sqlite.prepare(`
+      INSERT INTO jobs (
+        id, operation, provider_id, model_id, prompt, request_json, status, stage,
+        idempotency_key, created_at, updated_at,
+        adapter_kind, adapter_id, adapter_version, adapter_digest
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertJob.run(
+      'trusted-tombstone-job',
+      'image.generate',
+      provider.id,
+      'model',
+      'prompt',
+      '{}',
+      'completed',
+      'completed',
+      'trusted-tombstone-key',
+      Date.now(),
+      Date.now(),
+      ref.kind,
+      ref.adapterId,
+      ref.version,
+      ref.digest,
+    );
+    expect(() => definitions.tombstone(ref)).toThrow(expect.objectContaining({ code: 'referenced_jobs' }));
+    database.sqlite.prepare('DELETE FROM jobs WHERE id = ?').run('trusted-tombstone-job');
+
+    const installation = definitions.installTrustedAdapter({ ref });
+    expect(installation.installation).toMatchObject({
+      adapterId: ref.adapterId,
+      version: ref.version,
+      digest: ref.digest,
+    });
+    expect(definitions.getTrustedAdapterInstallation(ref.adapterId)).toEqual(installation.installation);
+    expect(() => database.sqlite.prepare(
+      'UPDATE trusted_adapter_installations SET version = ? WHERE adapter_id = ?',
+    ).run('2.0.0', ref.adapterId)).toThrow(/immutable/);
+    const first = definitions.tombstone(ref);
+    const second = definitions.tombstone(ref);
+    expect(second).toEqual(first);
+    expect(definitions.getTombstone(ref.adapterId)).toEqual(first);
+    expect(definitions.getTrustedAdapterInstallation(ref.adapterId)).toBeNull();
+    expect(database.sqlite.prepare("SELECT event_type, payload_json FROM change_events WHERE aggregate_type = 'trusted_adapter'").all()).toEqual([{
+      event_type: 'trusted_adapter.installed',
+      payload_json: JSON.stringify({ adapterId: ref.adapterId, digest: ref.digest, kind: ref.kind, version: ref.version }),
+    }, {
+      event_type: 'trusted_adapter.tombstoned',
+      payload_json: JSON.stringify({ adapterId: ref.adapterId, digest: ref.digest, kind: ref.kind, version: ref.version }),
+    }]);
+
+    expect(() => definitions.create(provider.id, { ref })).toThrow(expect.objectContaining({ code: 'tombstoned' }));
+    expect(() => database.sqlite.prepare(`
+      INSERT INTO provider_adapter_definitions (
+        provider_id, kind, adapter_id, version, digest, definition_json,
+        is_current, disabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, ?, ?)
+    `).run(provider.id, ref.kind, ref.adapterId, ref.version, ref.digest, Date.now(), Date.now())).toThrow(/tombstoned/);
+    expect(() => insertJob.run(
+      'trusted-tombstone-job-2',
+      'image.generate',
+      provider.id,
+      'model',
+      'prompt',
+      '{}',
+      'completed',
+      'completed',
+      'trusted-tombstone-key-2',
+      Date.now(),
+      Date.now(),
+      ref.kind,
+      ref.adapterId,
+      ref.version,
+      ref.digest,
+    )).toThrow(/tombstoned/);
+    expect(() => database.sqlite.prepare(`
+      INSERT INTO trusted_adapter_installations (
+        adapter_id, version, digest, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(ref.adapterId, ref.version, ref.digest, Date.now(), Date.now())).toThrow(/tombstoned/);
+  });
 });

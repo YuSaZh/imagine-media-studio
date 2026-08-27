@@ -134,6 +134,7 @@ export class AdapterStore {
     await mkdir(staging, { recursive: false, mode: 0o700 });
     await this.ensureDirectory(staging, 'Adapter staging directory');
     let committed = false;
+    let renamed = false;
     try {
       await this.assertNotPresent(target);
       await this.writeSecureFile(join(staging, MANIFEST_FILENAME), JSON.stringify(manifest), MAX_MANIFEST_BYTES);
@@ -147,10 +148,20 @@ export class AdapterStore {
         }
         throw error;
       }
+      renamed = true;
+      try {
+        await this.syncDirectory(this.root);
+      } catch {
+        // A successful rename is visible even when the parent directory fsync
+        // fails. Remove that target before surfacing the durability failure so
+        // a retry cannot observe an orphaned adapter id.
+        await this.removeCommittedTarget(target);
+        throw new AdapterStoreError('Adapter install could not be durably committed.');
+      }
       committed = true;
-      await this.syncDirectory(this.root);
       return { manifest };
     } finally {
+      if (!committed && renamed) await this.removeCommittedTarget(target);
       if (!committed) await this.removeStagingDirectory(staging);
     }
   }
@@ -350,6 +361,20 @@ export class AdapterStore {
       await rm(path, { recursive: true, force: true });
     } catch {
       // A failed cleanup never replaces the install error; staging is outside the active adapter path.
+    }
+  }
+
+  private async removeCommittedTarget(path: string): Promise<void> {
+    try {
+      await rm(path, { recursive: true, force: true });
+    } catch {
+      // The original install error is more useful than cleanup details; the
+      // target is checked again by the next management operation.
+    }
+    try {
+      await this.syncDirectory(this.root);
+    } catch {
+      // Best effort: a failed fsync cannot restore the target safely.
     }
   }
 

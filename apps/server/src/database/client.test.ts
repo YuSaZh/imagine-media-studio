@@ -31,6 +31,7 @@ describe('SQLite initialization', () => {
       { version: '0002_pr4_runtime_safety.sql' },
       { version: '0003_pr5_video_runtime.sql' },
       { version: '0004_pr6_custom_adapters.sql' },
+      { version: '0005_pr6_trusted_adapter_tombstones.sql' },
     ]);
     expect(first.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
     expect(first.sqlite.pragma('journal_mode', { simple: true })).toBe('wal');
@@ -41,7 +42,35 @@ describe('SQLite initialization', () => {
     const second = createDatabase(databasePath, migrationsDirectory);
     expect(
       second.sqlite.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get(),
-    ).toEqual({ count: 5 });
+    ).toEqual({ count: 6 });
+    const definitionIndexes = second.sqlite
+      .prepare("PRAGMA index_list('provider_adapter_definitions')")
+      .all() as Array<{ readonly name: string }>;
+    expect(definitionIndexes.map((index) => index.name)).toContain(
+      'provider_adapter_definitions_adapter_idx',
+    );
+    const jobIndexes = second.sqlite
+      .prepare("PRAGMA index_list('jobs')")
+      .all() as Array<{ readonly name: string }>;
+    expect(jobIndexes.map((index) => index.name)).toContain('jobs_adapter_retained_idx');
+    const definitionPlan = second.sqlite
+      .prepare(
+        'EXPLAIN QUERY PLAN SELECT * FROM provider_adapter_definitions WHERE adapter_id = ?',
+      )
+      .all('adapter') as Array<{ readonly detail: string }>;
+    expect(definitionPlan.some(({ detail }) =>
+      detail.includes('SEARCH') && detail.includes('provider_adapter_definitions_adapter_idx')),
+    ).toBe(true);
+    expect(definitionPlan.every(({ detail }) => !detail.includes('SCAN provider_adapter_definitions'))).toBe(true);
+    const retainedJobPlan = second.sqlite
+      .prepare(
+        'EXPLAIN QUERY PLAN SELECT id FROM jobs WHERE adapter_id = ? AND deleted_at IS NULL',
+      )
+      .all('adapter') as Array<{ readonly detail: string }>;
+    expect(retainedJobPlan.some(({ detail }) =>
+      detail.includes('SEARCH') && detail.includes('jobs_adapter_retained_idx')),
+    ).toBe(true);
+    expect(retainedJobPlan.every(({ detail }) => !detail.includes('SCAN jobs'))).toBe(true);
     second.sqlite.close();
   });
 
@@ -108,6 +137,7 @@ describe('SQLite initialization', () => {
       { version: '0002_pr4_runtime_safety.sql' },
       { version: '0003_pr5_video_runtime.sql' },
       { version: '0004_pr6_custom_adapters.sql' },
+      { version: '0005_pr6_trusted_adapter_tombstones.sql' },
     ]);
     expect(
       upgraded.sqlite
@@ -135,6 +165,16 @@ describe('SQLite initialization', () => {
         .prepare('SELECT root_job_id, submit_attempt FROM jobs WHERE id = ?')
         .get('legacy-job'),
     ).toEqual({ root_job_id: 'legacy-job', submit_attempt: 0 });
+    expect(
+      (upgraded.sqlite
+        .prepare("PRAGMA index_list('provider_adapter_definitions')")
+        .all() as Array<{ readonly name: string }>).map((index) => index.name),
+    ).toContain('provider_adapter_definitions_adapter_idx');
+    expect(
+      (upgraded.sqlite
+        .prepare("PRAGMA index_list('jobs')")
+        .all() as Array<{ readonly name: string }>).map((index) => index.name),
+    ).toContain('jobs_adapter_retained_idx');
     expect(() =>
       upgraded.sqlite
         .prepare(
@@ -159,5 +199,17 @@ describe('SQLite initialization', () => {
       upgraded.sqlite.prepare('SELECT job_id FROM assets WHERE id = ?').get('legacy-asset'),
     ).toEqual({ job_id: null });
     upgraded.sqlite.close();
+    const reopened = createDatabase(databasePath, migrationsDirectory);
+    expect(
+      (reopened.sqlite
+        .prepare("PRAGMA index_list('provider_adapter_definitions')")
+        .all() as Array<{ readonly name: string }>).map((index) => index.name),
+    ).toContain('provider_adapter_definitions_adapter_idx');
+    expect(
+      (reopened.sqlite
+        .prepare("PRAGMA index_list('jobs')")
+        .all() as Array<{ readonly name: string }>).map((index) => index.name),
+    ).toContain('jobs_adapter_retained_idx');
+    reopened.sqlite.close();
   });
 });

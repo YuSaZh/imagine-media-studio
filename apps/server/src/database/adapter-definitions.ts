@@ -5,7 +5,7 @@ import {
   CustomAdapterRefSchema,
   type CustomAdapterRef,
 } from '@imagine/shared';
-import { and, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 
 import {
   canonicalDeclarativeSpec,
@@ -15,8 +15,15 @@ import {
 } from '../providers/custom-http/index.js';
 import { assertSafeCustomFields } from '../providers/custom-http/capabilities.js';
 import type { AppDatabase } from './client.js';
-import { toChangeEventValues } from './events.js';
-import { changeEvents, jobs, providers, providerAdapterDefinitions } from './schema.js';
+import { mapChangeEventRow, toChangeEventValues, type ChangeEventRecord } from './events.js';
+import {
+  changeEvents,
+  jobs,
+  providers,
+  providerAdapterDefinitions,
+  trustedAdapterInstallations,
+  trustedAdapterTombstones,
+} from './schema.js';
 
 export const MAX_ADAPTER_DEFINITION_BYTES = 128 * 1024;
 
@@ -29,6 +36,35 @@ export interface ProviderAdapterDefinitionRecord {
   readonly disabled: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+export interface TrustedAdapterTombstoneRecord {
+  readonly adapterId: string;
+  readonly version: string;
+  readonly digest: string;
+  readonly removedAt: Date;
+}
+
+export interface TrustedAdapterInstallationRecord {
+  readonly adapterId: string;
+  readonly version: string;
+  readonly digest: string;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+export interface TrustedAdapterInstallationInput {
+  readonly ref: CustomAdapterRef;
+  readonly providerId?: string;
+  readonly now?: Date;
+  readonly createdAt?: Date;
+  readonly updatedAt?: Date;
+}
+
+export interface TrustedAdapterInstallResult {
+  readonly installation: TrustedAdapterInstallationRecord;
+  readonly definition: ProviderAdapterDefinitionRecord | null;
+  readonly events: readonly ChangeEventRecord[];
 }
 
 export interface PutProviderAdapterDefinitionInput {
@@ -49,6 +85,8 @@ export class ProviderAdapterDefinitionError extends Error {
       | 'already_exists'
       | 'not_found'
       | 'referenced_jobs'
+      | 'referenced_definitions'
+      | 'tombstoned'
       | 'persisted_invalid',
     message: string,
   ) {
@@ -165,12 +203,26 @@ function assertRawDefinitionSize(value: unknown): string {
 const STATIC_CREDENTIAL_HEADER = /^(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|(?:x[-_])?api[-_]?key|access[-_]?token|oauth[-_]?token|auth(?:[-_]?token)?|credential|signature|password|secret|token|x[-_]?(?:amz|goog|ms)[-_])/iu;
 const CREDENTIAL_FIELD_NAME = /(?:^|[-_.])(?:token|key|api[-_.]?key|authorization|auth|cookie|password|secret|credential|credentials|signature|sig|access[-_.]?token|oauth[-_.]?token|idempotency[-_.]?key|headers?)(?:$|[-_.])/iu;
 
-function isCredentialLikeFieldName(value: string): boolean {
+export function isCredentialLikeFieldName(value: string): boolean {
   return CREDENTIAL_FIELD_NAME.test(value) || isCredentialLikeQueryName(value);
 }
 
-function assertNoStaticCredentialLiterals(value: unknown): void {
+/**
+ * Applies the same credential placement policy to drafts and persisted
+ * definitions. It intentionally returns no transformed value so management
+ * callers can validate before compiling or persisting a draft.
+ */
+export function assertNoStaticCredentialLiterals(value: unknown): void {
   const inspectPayload = (node: unknown): void => {
+    if (typeof node === 'string') {
+      if (isSecretTemplate(node)) {
+        throw new ProviderAdapterDefinitionError(
+          'invalid_definition',
+          'Secrets may only be used through the adapter authentication secret reference.',
+        );
+      }
+      return;
+    }
     if (Array.isArray(node)) {
       for (const item of node) inspectPayload(item);
       return;
@@ -191,9 +243,28 @@ function assertNoStaticCredentialLiterals(value: unknown): void {
       for (const item of node) visit(item);
       return;
     }
+    if (typeof node === 'string') {
+      if (isSecretTemplate(node)) {
+        throw new ProviderAdapterDefinitionError(
+          'invalid_definition',
+          'Secrets may only be used through the adapter authentication secret reference.',
+        );
+      }
+      return;
+    }
     if (node === null || typeof node !== 'object') return;
     for (const [key, child] of Object.entries(node)) {
       if (key === 'body') inspectPayload(child);
+      if (key === 'customFields') {
+        try {
+          assertSafeCustomFields(child);
+        } catch {
+          throw new ProviderAdapterDefinitionError(
+            'invalid_definition',
+            'Custom field metadata must not contain static credential values or secret templates.',
+          );
+        }
+      }
       if (key === 'files' && Array.isArray(child)) {
         for (const file of child) {
           if (file !== null && typeof file === 'object' && !Array.isArray(file)) {
@@ -339,6 +410,41 @@ function persistedRecord(row: typeof providerAdapterDefinitions.$inferSelect): P
   };
 }
 
+function persistedTombstone(
+  row: typeof trustedAdapterTombstones.$inferSelect,
+): TrustedAdapterTombstoneRecord {
+  return {
+    adapterId: row.adapterId,
+    version: row.version,
+    digest: row.digest,
+    removedAt: row.removedAt,
+  };
+}
+
+function persistedInstallation(
+  row: typeof trustedAdapterInstallations.$inferSelect,
+): TrustedAdapterInstallationRecord {
+  return {
+    adapterId: row.adapterId,
+    version: row.version,
+    digest: row.digest,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function cloneDate(value: Date): Date {
+  return new Date(value.getTime());
+}
+
+function transactionDate(value: Date | undefined): Date {
+  const result = value === undefined ? new Date() : cloneDate(value);
+  if (!Number.isFinite(result.getTime())) {
+    throw new ProviderAdapterDefinitionError('persisted_invalid', 'Adapter lifecycle timestamp is invalid.');
+  }
+  return result;
+}
+
 function exactRefCondition(ref: CustomAdapterRef) {
   return and(
     eq(providerAdapterDefinitions.kind, ref.kind),
@@ -407,6 +513,163 @@ function eventPayload(providerId: string, ref: CustomAdapterRef): Record<string,
   };
 }
 
+function appendEvent(
+  transaction: AppDatabase,
+  input: Parameters<typeof toChangeEventValues>[0],
+): ChangeEventRecord {
+  const result = transaction.insert(changeEvents).values(toChangeEventValues(input)).run();
+  const row = transaction
+    .select()
+    .from(changeEvents)
+    .where(eq(changeEvents.id, Number(result.lastInsertRowid)))
+    .get();
+  if (row === undefined) {
+    throw new ProviderAdapterDefinitionError('persisted_invalid', 'Adapter lifecycle event was not stored.');
+  }
+  return mapChangeEventRow(row);
+}
+
+function trustedBindingInTransaction(
+  transaction: AppDatabase,
+  providerId: string,
+  ref: CustomAdapterRef,
+  now: Date,
+): { readonly record: ProviderAdapterDefinitionRecord; readonly event: ChangeEventRecord } {
+  const provider = transaction
+    .select({ id: providers.id, type: providers.type })
+    .from(providers)
+    .where(eq(providers.id, providerId))
+    .get();
+  if (provider === undefined) {
+    throw new ProviderAdapterDefinitionError('provider_not_found', 'Provider was not found.');
+  }
+  if (provider.type !== 'custom-js-v1' || ref.kind !== 'trusted-javascript') {
+    throw new ProviderAdapterDefinitionError(
+      'invalid_reference',
+      'Adapter reference kind is not valid for this Provider.',
+    );
+  }
+
+  const current = transaction
+    .select()
+    .from(providerAdapterDefinitions)
+    .where(and(eq(providerAdapterDefinitions.providerId, providerId), eq(providerAdapterDefinitions.isCurrent, true)))
+    .get();
+  if (current !== undefined && current.adapterId === ref.adapterId && (
+    current.kind !== ref.kind || current.version !== ref.version || current.digest !== ref.digest
+  )) {
+    throw new ProviderAdapterDefinitionError(
+      'already_exists',
+      'Trusted adapter ids are immutable across revisions.',
+    );
+  }
+
+  const existing = transaction
+    .select()
+    .from(providerAdapterDefinitions)
+    .where(and(eq(providerAdapterDefinitions.providerId, providerId), exactRefCondition(ref)))
+    .get();
+  if (existing !== undefined && existing.definitionJson !== null) {
+    throw new ProviderAdapterDefinitionError('persisted_invalid', 'Stored trusted adapter definition is invalid.');
+  }
+
+  transaction
+    .update(providerAdapterDefinitions)
+    .set({ isCurrent: false, updatedAt: now })
+    .where(and(eq(providerAdapterDefinitions.providerId, providerId), eq(providerAdapterDefinitions.isCurrent, true)))
+    .run();
+
+  if (existing === undefined) {
+    transaction
+      .insert(providerAdapterDefinitions)
+      .values({
+        providerId,
+        kind: ref.kind,
+        adapterId: ref.adapterId,
+        version: ref.version,
+        digest: ref.digest,
+        definitionJson: null,
+        isCurrent: true,
+        disabled: false,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+  } else {
+    transaction
+      .update(providerAdapterDefinitions)
+      .set({ isCurrent: true, disabled: false, updatedAt: now })
+      .where(and(eq(providerAdapterDefinitions.providerId, providerId), exactRefCondition(ref)))
+      .run();
+  }
+
+  const event = appendEvent(transaction, {
+    aggregateType: 'provider_adapter_definition',
+    aggregateId: providerId,
+    eventType: existing === undefined
+      ? 'provider_adapter_definition.created'
+      : 'provider_adapter_definition.replaced',
+    payload: eventPayload(providerId, ref),
+    createdAt: now,
+  });
+  const row = transaction
+    .select()
+    .from(providerAdapterDefinitions)
+    .where(and(eq(providerAdapterDefinitions.providerId, providerId), exactRefCondition(ref)))
+    .get();
+  if (row === undefined) {
+    throw new ProviderAdapterDefinitionError('persisted_invalid', 'Adapter definition was not stored.');
+  }
+  return { record: persistedRecord(row), event };
+}
+
+function normalizeTrustedInstallationInput(
+  first: TrustedAdapterInstallationInput | CustomAdapterRef | string | undefined,
+  second?: string | CustomAdapterRef,
+  third?: Date,
+): TrustedAdapterInstallationInput {
+  if (typeof first === 'string' || first === undefined) {
+    const ref = CustomAdapterRefSchema.safeParse(second);
+    if (!ref.success) {
+      throw new ProviderAdapterDefinitionError('invalid_reference', 'Adapter reference is invalid.');
+    }
+    return {
+      ref: ref.data,
+      ...(first === undefined ? {} : { providerId: first }),
+      ...(third === undefined ? {} : { now: third }),
+    };
+  }
+  if (CustomAdapterRefSchema.safeParse(first).success) {
+    const ref = CustomAdapterRefSchema.parse(first);
+    return {
+      ref,
+      ...(typeof second === 'string' ? { providerId: second } : {}),
+      ...(third === undefined ? {} : { now: third }),
+    };
+  }
+  if (typeof first === 'object' && first !== null && Object.hasOwn(first, 'ref')) {
+    const input = first as TrustedAdapterInstallationInput;
+    const ref = CustomAdapterRefSchema.safeParse(input.ref);
+    if (
+      !ref.success ||
+      (input.providerId !== undefined && typeof input.providerId !== 'string') ||
+      (input.now !== undefined && !(input.now instanceof Date)) ||
+      (input.createdAt !== undefined && !(input.createdAt instanceof Date)) ||
+      (input.updatedAt !== undefined && !(input.updatedAt instanceof Date))
+    ) {
+      throw new ProviderAdapterDefinitionError('invalid_reference', 'Trusted adapter installation input is invalid.');
+    }
+    return {
+      ref: ref.data,
+      ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
+      ...(input.now === undefined ? {} : { now: input.now }),
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+      ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
+    };
+  }
+  throw new ProviderAdapterDefinitionError('invalid_reference', 'Adapter reference is invalid.');
+}
+
 export class ProviderAdapterDefinitionRepository {
   public constructor(private readonly database: AppDatabase) {}
 
@@ -432,6 +695,292 @@ export class ProviderAdapterDefinitionRepository {
       .where(and(eq(providerAdapterDefinitions.providerId, providerId), exactRefCondition(ref)))
       .get();
     return row === undefined ? null : persistedRecord(row);
+  }
+
+  public getTombstone(adapterId: string): TrustedAdapterTombstoneRecord | null {
+    const row = this.database
+      .select()
+      .from(trustedAdapterTombstones)
+      .where(eq(trustedAdapterTombstones.adapterId, adapterId))
+      .get();
+    return row === undefined ? null : persistedTombstone(row);
+  }
+
+  public isTombstoned(adapterId: string): boolean {
+    return this.getTombstone(adapterId) !== null;
+  }
+
+  public getTrustedAdapterInstallation(adapterId: string): TrustedAdapterInstallationRecord | null {
+    const row = this.database
+      .select()
+      .from(trustedAdapterInstallations)
+      .where(eq(trustedAdapterInstallations.adapterId, adapterId))
+      .get();
+    return row === undefined ? null : persistedInstallation(row);
+  }
+
+  public listTrustedAdapterInstallations(): readonly TrustedAdapterInstallationRecord[] {
+    return this.database
+      .select()
+      .from(trustedAdapterInstallations)
+      .orderBy(
+        asc(trustedAdapterInstallations.createdAt),
+        asc(trustedAdapterInstallations.updatedAt),
+        asc(trustedAdapterInstallations.adapterId),
+      )
+      .all()
+      .map(persistedInstallation);
+  }
+
+  /**
+   * Commits trusted installation metadata, an optional Provider binding, and
+   * their source-free lifecycle events as one SQLite transaction. The
+   * filesystem install is intentionally performed by TrustedAdapterService
+   * before entering this method and rolled back by that service on failure.
+   */
+  public installTrustedAdapter(input: TrustedAdapterInstallationInput): TrustedAdapterInstallResult;
+  public installTrustedAdapter(rawRef: CustomAdapterRef, providerId?: string, now?: Date): TrustedAdapterInstallResult;
+  public installTrustedAdapter(providerId: string | undefined, rawRef: CustomAdapterRef, now?: Date): TrustedAdapterInstallResult;
+  public installTrustedAdapter(
+    first: TrustedAdapterInstallationInput | CustomAdapterRef | string | undefined,
+    second?: string | CustomAdapterRef,
+    third?: Date,
+  ): TrustedAdapterInstallResult {
+    const input = normalizeTrustedInstallationInput(first, second, third);
+    const ref = parseRef(input.ref);
+    if (ref.kind !== 'trusted-javascript') {
+      throw new ProviderAdapterDefinitionError(
+        'invalid_reference',
+        'Only trusted JavaScript adapter revisions may be installed.',
+      );
+    }
+    const createdAt = transactionDate(input.createdAt ?? input.now);
+    const requestedUpdatedAt = transactionDate(input.updatedAt ?? input.now ?? createdAt);
+    const now = requestedUpdatedAt.getTime() >= createdAt.getTime() ? requestedUpdatedAt : createdAt;
+    return this.database.transaction((transaction) => {
+      const tombstone = transaction
+        .select({ adapterId: trustedAdapterTombstones.adapterId })
+        .from(trustedAdapterTombstones)
+        .where(eq(trustedAdapterTombstones.adapterId, ref.adapterId))
+        .get();
+      if (tombstone !== undefined) {
+        throw new ProviderAdapterDefinitionError('tombstoned', 'Trusted adapter id is tombstoned.');
+      }
+
+      const definitions = transaction
+        .select({
+          kind: providerAdapterDefinitions.kind,
+          adapterId: providerAdapterDefinitions.adapterId,
+          version: providerAdapterDefinitions.version,
+          digest: providerAdapterDefinitions.digest,
+        })
+        .from(providerAdapterDefinitions)
+        .where(eq(providerAdapterDefinitions.adapterId, ref.adapterId))
+        .all();
+      if (definitions.some((candidate) => candidate.kind !== ref.kind || candidate.version !== ref.version || candidate.digest !== ref.digest)) {
+        throw new ProviderAdapterDefinitionError(
+          'already_exists',
+          'Trusted adapter ids are immutable across revisions.',
+        );
+      }
+
+      const existing = transaction
+        .select()
+        .from(trustedAdapterInstallations)
+        .where(eq(trustedAdapterInstallations.adapterId, ref.adapterId))
+        .get();
+      if (existing !== undefined && (existing.version !== ref.version || existing.digest !== ref.digest)) {
+        throw new ProviderAdapterDefinitionError(
+          'already_exists',
+          'Trusted adapter ids are immutable across revisions.',
+        );
+      }
+
+      const events: ChangeEventRecord[] = [];
+      if (existing === undefined) {
+        transaction
+          .insert(trustedAdapterInstallations)
+          .values({
+            adapterId: ref.adapterId,
+            version: ref.version,
+            digest: ref.digest,
+            createdAt,
+            updatedAt: now,
+          })
+          .run();
+        events.push(appendEvent(transaction, {
+          aggregateType: 'trusted_adapter',
+          aggregateId: ref.adapterId,
+          eventType: 'trusted_adapter.installed',
+          payload: {
+            adapterId: ref.adapterId,
+            digest: ref.digest,
+            kind: ref.kind,
+            version: ref.version,
+          },
+          createdAt: now,
+        }));
+      }
+
+      let definition: ProviderAdapterDefinitionRecord | null = null;
+      if (input.providerId !== undefined) {
+        const binding = trustedBindingInTransaction(transaction, input.providerId, ref, now);
+        definition = binding.record;
+        events.push(binding.event);
+        const updatedAt = existing === undefined || now.getTime() >= existing.updatedAt.getTime()
+          ? now
+          : existing.updatedAt;
+        transaction
+          .update(trustedAdapterInstallations)
+          .set({ updatedAt })
+          .where(eq(trustedAdapterInstallations.adapterId, ref.adapterId))
+          .run();
+      }
+
+      const installation = transaction
+        .select()
+        .from(trustedAdapterInstallations)
+        .where(eq(trustedAdapterInstallations.adapterId, ref.adapterId))
+        .get();
+      if (installation === undefined) {
+        throw new ProviderAdapterDefinitionError('persisted_invalid', 'Trusted adapter installation was not stored.');
+      }
+      return {
+        definition,
+        events,
+        installation: persistedInstallation(installation),
+      };
+    });
+  }
+
+  /** Compatibility alias for callers that use the revision-oriented name. */
+  public installTrustedAdapterRevision(input: TrustedAdapterInstallationInput): TrustedAdapterInstallResult {
+    return this.installTrustedAdapter(input);
+  }
+
+  /**
+   * Atomically reserves a removed trusted adapter id. The transaction checks
+   * every persisted definition and retained Job ref before inserting the
+   * permanent tombstone, so a concurrent writer cannot recreate the id.
+   */
+  public tombstone(rawRef: CustomAdapterRef, removedAtInput?: Date): TrustedAdapterTombstoneRecord {
+    const ref = parseRef(rawRef);
+    if (ref.kind !== 'trusted-javascript') {
+      throw new ProviderAdapterDefinitionError(
+        'invalid_reference',
+        'Only trusted JavaScript adapter revisions may be tombstoned.',
+      );
+    }
+    return this.database.transaction((transaction) => {
+      const existing = transaction
+        .select()
+        .from(trustedAdapterTombstones)
+        .where(eq(trustedAdapterTombstones.adapterId, ref.adapterId))
+        .get();
+      if (existing !== undefined) {
+        transaction
+          .delete(trustedAdapterInstallations)
+          .where(eq(trustedAdapterInstallations.adapterId, ref.adapterId))
+          .run();
+        return persistedTombstone(existing);
+      }
+
+      const definition = transaction
+        .select({ providerId: providerAdapterDefinitions.providerId })
+        .from(providerAdapterDefinitions)
+        .where(eq(providerAdapterDefinitions.adapterId, ref.adapterId))
+        .get();
+      if (definition !== undefined) {
+        throw new ProviderAdapterDefinitionError(
+          'referenced_definitions',
+          'Adapter definition still references this adapter id.',
+        );
+      }
+      const retainedJob = transaction
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(and(eq(jobs.adapterId, ref.adapterId), isNull(jobs.deletedAt)))
+        .get();
+      if (retainedJob !== undefined) {
+        throw new ProviderAdapterDefinitionError(
+          'referenced_jobs',
+          'A retained Job still references this adapter id.',
+        );
+      }
+
+      const removedAt = transactionDate(removedAtInput);
+      transaction
+        .insert(trustedAdapterTombstones)
+        .values({
+          adapterId: ref.adapterId,
+          version: ref.version,
+          digest: ref.digest,
+          removedAt,
+        })
+        .run();
+      transaction
+        .delete(trustedAdapterInstallations)
+        .where(eq(trustedAdapterInstallations.adapterId, ref.adapterId))
+        .run();
+      transaction
+        .insert(changeEvents)
+        .values(
+          toChangeEventValues({
+            aggregateType: 'trusted_adapter',
+            aggregateId: ref.adapterId,
+            eventType: 'trusted_adapter.tombstoned',
+            payload: {
+              adapterId: ref.adapterId,
+              digest: ref.digest,
+              kind: ref.kind,
+              version: ref.version,
+            },
+            createdAt: removedAt,
+          }),
+        )
+        .run();
+      const row = transaction
+        .select()
+        .from(trustedAdapterTombstones)
+        .where(eq(trustedAdapterTombstones.adapterId, ref.adapterId))
+        .get();
+      if (row === undefined) throw new ProviderAdapterDefinitionError('persisted_invalid', 'Adapter tombstone was not stored.');
+      return persistedTombstone(row);
+    });
+  }
+
+  /**
+   * Read-only lookup for every persisted revision using an adapter id.
+   * AdapterStore keeps one immutable revision per id, so callers must account
+   * for historical references as well as the current revision.
+   */
+  public listByAdapterId(
+    adapterId: string,
+  ): readonly ProviderAdapterDefinitionRecord[] {
+    return this.database
+      .select()
+      .from(providerAdapterDefinitions)
+      .where(eq(providerAdapterDefinitions.adapterId, adapterId))
+      .all()
+      .map(persistedRecord);
+  }
+
+  /** Returns every retained revision in a deterministic, creation-ordered list. */
+  public list(providerId: string): readonly ProviderAdapterDefinitionRecord[] {
+    return this.database
+      .select()
+      .from(providerAdapterDefinitions)
+      .where(eq(providerAdapterDefinitions.providerId, providerId))
+      .orderBy(
+        asc(providerAdapterDefinitions.createdAt),
+        asc(providerAdapterDefinitions.updatedAt),
+        asc(providerAdapterDefinitions.kind),
+        asc(providerAdapterDefinitions.adapterId),
+        asc(providerAdapterDefinitions.version),
+        asc(providerAdapterDefinitions.digest),
+      )
+      .all()
+      .map(persistedRecord);
   }
 
   public create(providerId: string, input: PutProviderAdapterDefinitionInput): ProviderAdapterDefinitionRecord {
@@ -468,6 +1017,19 @@ export class ProviderAdapterDefinitionRepository {
           'invalid_reference',
           'Adapter reference kind is not valid for this provider.',
         );
+      }
+      if (ref.kind === 'trusted-javascript') {
+        const tombstone = transaction
+          .select({ adapterId: trustedAdapterTombstones.adapterId })
+          .from(trustedAdapterTombstones)
+          .where(eq(trustedAdapterTombstones.adapterId, ref.adapterId))
+          .get();
+        if (tombstone !== undefined) {
+          throw new ProviderAdapterDefinitionError(
+            'tombstoned',
+            'Trusted adapter id is tombstoned.',
+          );
+        }
       }
       const existing = transaction
         .select()

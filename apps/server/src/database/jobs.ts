@@ -509,6 +509,27 @@ function statusUpdateValues(
 export class JobRepository {
   public constructor(private readonly database: AppDatabase) {}
 
+  /**
+   * Returns whether a retained Job still names any revision under an adapter
+   * id. The id-only query is deliberate: AdapterStore has one directory per
+   * id, so removing that directory would invalidate every revision reference.
+   */
+  public hasRetainedAdapterId(adapterId: string): boolean {
+    return this.database
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(
+        eq(jobs.adapterId, adapterId),
+        isNull(jobs.deletedAt),
+      ))
+      .get() !== undefined;
+  }
+
+  /** Compatibility spelling for service ports and callers using "reference" terminology. */
+  public hasRetainedAdapterReference(adapterId: string): boolean {
+    return this.hasRetainedAdapterId(adapterId);
+  }
+
   public create(request: GenerationRequest, adapterRef?: CustomAdapterRef | null): JobRecord {
     return this.createWithInputs(
       request,
