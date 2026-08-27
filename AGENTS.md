@@ -19,9 +19,10 @@
 ## Host Safety
 
 - Do not stop, restart, rename, inspect secrets from, or otherwise alter existing host services and containers.
-- Do not run this project's application, Compose stack, E2E server, or Docker build on the development host.
-- Run Playwright, application-server, Compose, and Docker smoke tasks in GitHub Actions.
-- Local dependency installation, lint, typecheck, unit tests, and production builds are allowed when they do not start or alter a running service.
+- Local application, Playwright, Compose, Docker build, and smoke tests are allowed when they are isolated from existing host services: use task-owned temporary data, a unique Compose project/resource namespace, and a task-owned non-conflicting port.
+- Local runtime tests must create, inspect, restart, and remove only this task's explicitly isolated resources. Never target pre-existing containers, volumes, networks, ports, data directories, or processes.
+- Local dependency installation, lint, typecheck, unit tests, production builds, isolated application tests, Playwright, and Docker smoke are allowed. GitHub Actions remains the authoritative remote acceptance gate after local verification.
+- When the local environment can run a relevant acceptance gate safely, run it locally before pushing; do not defer locally available validation to GitHub Actions alone.
 
 ## Delivery
 
