@@ -35,6 +35,32 @@ const customRecord = {
   updatedAt: now,
 };
 
+function trustedBindingRecord(overrides: Partial<{
+  providerId: string;
+  ref: typeof trustedRef;
+  isCurrent: boolean;
+  disabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}> = {}) {
+  const manifest = validManifest();
+  const ref = overrides.ref ?? { ...trustedRef, digest: manifest.sha256 as string };
+  manifest.id = ref.adapterId;
+  manifest.version = ref.version;
+  manifest.sha256 = ref.digest;
+  return {
+    providerId: overrides.providerId ?? 'provider-1',
+    ref,
+    definition: null,
+    isCurrent: overrides.isCurrent ?? true,
+    disabled: overrides.disabled ?? false,
+    createdAt: overrides.createdAt ?? now,
+    updatedAt: overrides.updatedAt ?? now,
+    manifest,
+    installation: { createdAt: now, updatedAt: now },
+  };
+}
+
 function multipart(
   parts: readonly { name: string; value?: string; filename?: string; contentType?: string; bytes?: Uint8Array }[],
   boundary = '----adapter-route-test',
@@ -85,12 +111,17 @@ function customTools() {
 }
 
 function trustedTools() {
+  const binding = trustedBindingRecord();
   return {
     bind: vi.fn(async () => ({ manifest: validManifest(), ref: { ...trustedRef, digest: digestAdapterSource(trustedSource) }, createdAt: now, updatedAt: now })),
     get: vi.fn(async () => ({ manifest: validManifest(), ref: { ...trustedRef, digest: digestAdapterSource(trustedSource) }, createdAt: now, updatedAt: now })),
+    getBinding: vi.fn(async () => binding),
     install: vi.fn(async () => ({ manifest: validManifest(), ref: { ...trustedRef, digest: digestAdapterSource(trustedSource) }, createdAt: now, updatedAt: now })),
     list: vi.fn(async () => []),
+    listBindings: vi.fn(async () => [binding]),
+    disableBinding: vi.fn(async () => ({ ...binding, isCurrent: false, disabled: true })),
     remove: vi.fn(async () => undefined),
+    unbind: vi.fn(async () => true),
   };
 }
 
@@ -193,27 +224,79 @@ describe('adapter management routes', () => {
     }
   });
 
-  it('passes raw JSON and YAML PUT documents with strict query and no secret fields', async () => {
+  it('imports raw JSON/YAML with query versions and accepts only service-validated envelopes without one', async () => {
     const custom = customTools();
     const { app } = await createRouteApp(trustedTools(), custom);
     try {
       const json = await app.inject({
         method: 'PUT',
-        url: '/internal/providers/provider-1/adapter',
+        url: '/internal/providers/provider-1/adapter?version=1.0.0',
         headers: { 'content-type': 'application/json' },
-        payload: { schemaVersion: 1, version: '1.0.0', definition: { schemaVersion: 1, id: 'declarative' } },
+        payload: { schemaVersion: 1, id: 'declarative' },
       });
       expect(json.statusCode).toBe(200);
-      expect(custom.replace).toHaveBeenCalledWith(expect.objectContaining({ format: 'json', document: { schemaVersion: 1, version: '1.0.0', definition: { schemaVersion: 1, id: 'declarative' } }, providerId: 'provider-1' }));
+      expect(custom.replace).toHaveBeenCalledWith({
+        format: 'json',
+        document: { schemaVersion: 1, id: 'declarative' },
+        providerId: 'provider-1',
+        version: '1.0.0',
+      });
 
       const yaml = await app.inject({
         method: 'PUT',
-        url: '/internal/providers/provider-1/adapter',
+        url: '/internal/providers/provider-1/adapter?version=2.0.0',
         headers: { 'content-type': 'application/yaml' },
-        payload: 'schemaVersion: 1\nversion: 2.0.0\ndefinition:\n  schemaVersion: 1\n  id: declarative\n',
+        payload: 'schemaVersion: 1\nid: declarative\n',
       });
       expect(yaml.statusCode).toBe(200);
-      expect(custom.replace).toHaveBeenCalledWith(expect.objectContaining({ format: 'yaml', document: 'schemaVersion: 1\nversion: 2.0.0\ndefinition:\n  schemaVersion: 1\n  id: declarative\n' }));
+      expect(custom.replace).toHaveBeenCalledWith({
+        format: 'yaml',
+        document: 'schemaVersion: 1\nid: declarative\n',
+        providerId: 'provider-1',
+        version: '2.0.0',
+      });
+
+      const envelope = await app.inject({
+        method: 'PUT',
+        url: '/internal/providers/provider-1/adapter',
+        headers: { 'content-type': 'application/json' },
+        payload: { schemaVersion: 1, version: '3.0.0', definition: { schemaVersion: 1, id: 'declarative' } },
+      });
+      expect(envelope.statusCode).toBe(200);
+      expect(custom.replace).toHaveBeenNthCalledWith(3, {
+        format: 'json',
+        document: { schemaVersion: 1, version: '3.0.0', definition: { schemaVersion: 1, id: 'declarative' } },
+        providerId: 'provider-1',
+      });
+
+      const unknownQuery = await app.inject({
+        method: 'PUT',
+        url: '/internal/providers/provider-1/adapter?adminEnabled=true',
+        headers: { 'content-type': 'application/json' },
+        payload: { schemaVersion: 1, id: 'declarative' },
+      });
+      expect(unknownQuery.statusCode).toBe(400);
+      expect(custom.replace).toHaveBeenCalledTimes(3);
+
+      const rejectingCustom = customTools();
+      rejectingCustom.replace.mockRejectedValue(new CustomAdapterServiceError('invalid_reference', 'Adapter version is required.'));
+      const { app: rejectingApp } = await createRouteApp(trustedTools(), rejectingCustom);
+      try {
+        const bareWithoutVersion = await rejectingApp.inject({
+          method: 'PUT',
+          url: '/internal/providers/provider-1/adapter',
+          headers: { 'content-type': 'application/json' },
+          payload: { schemaVersion: 1, id: 'declarative' },
+        });
+        expect(bareWithoutVersion.statusCode).toBe(400);
+        expect(rejectingCustom.replace).toHaveBeenCalledWith({
+          format: 'json',
+          document: { schemaVersion: 1, id: 'declarative' },
+          providerId: 'provider-1',
+        });
+      } finally {
+        await rejectingApp.close();
+      }
 
       const secret = await app.inject({
         method: 'POST',
@@ -414,6 +497,190 @@ describe('adapter management routes', () => {
       });
       expect(bound.statusCode).toBe(201);
       expect(trusted.bind).toHaveBeenCalledWith({ providerId: 'provider-1', ref: trustedRef });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves the trusted current binding, disables it, and rejects source or request injection', async () => {
+    const trusted = trustedTools();
+    const binding = trustedBindingRecord();
+    trusted.getBinding
+      .mockResolvedValueOnce(binding)
+      .mockResolvedValueOnce(binding)
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce({ ...binding, source: 'secret-source' } as never)
+      .mockRejectedValueOnce(new TrustedAdapterServiceError('administrator_required'));
+    trusted.disableBinding.mockResolvedValueOnce({ ...binding, isCurrent: false, disabled: true });
+    const { app } = await createRouteApp(trusted);
+    try {
+      const current = await app.inject({ method: 'GET', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(current.statusCode).toBe(200);
+      expect(current.json<{ binding: { providerId: string; adapter: { ref: typeof trustedRef }; disabled: boolean } }>()).toMatchObject({
+        binding: { providerId: 'provider-1', adapter: { ref: trustedBindingRecord().ref }, disabled: false },
+      });
+      expect(current.body).not.toContain(`"source":"${trustedSource.toString('utf8')}`);
+
+      const historical = await app.inject({
+        method: 'GET',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript?kind=${binding.ref.kind}&adapterId=${binding.ref.adapterId}&version=${binding.ref.version}&digest=${binding.ref.digest}`,
+      });
+      expect(historical.statusCode).toBe(200);
+      expect(trusted.getBinding).toHaveBeenNthCalledWith(2, 'provider-1', binding.ref);
+
+      const unbound = await app.inject({ method: 'GET', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(unbound.statusCode).toBe(404);
+
+      const disabled = await app.inject({
+        method: 'POST',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript/disable',
+      });
+      expect(disabled.statusCode).toBe(200);
+      expect(disabled.json<{ binding: { isCurrent: boolean; disabled: boolean } }>().binding).toMatchObject({ isCurrent: false, disabled: true });
+      expect(trusted.disableBinding).toHaveBeenCalledWith('provider-1', undefined);
+
+      const maliciousDto = await app.inject({ method: 'GET', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(maliciousDto.statusCode).toBe(500);
+      expect(maliciousDto.body).not.toContain('secret-source');
+
+      const denied = await app.inject({ method: 'GET', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(denied.statusCode).toBe(403);
+
+      const bodyInjection = await app.inject({
+        method: 'POST',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript/disable',
+        headers: { 'content-type': 'application/json' },
+        payload: { ref: trustedRef, source: 'secret', providerId: 'other-provider' },
+      });
+      expect(bodyInjection.statusCode).toBe(400);
+      expect(trusted.disableBinding).toHaveBeenCalledTimes(1);
+
+      const queryInjection = await app.inject({
+        method: 'GET',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript?adminEnabled=true',
+      });
+      expect(queryInjection.statusCode).toBe(400);
+      expect(trusted.getBinding).toHaveBeenCalledTimes(5);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('paginates trusted binding revisions with stable cursors, exact filters, and tamper rejection', async () => {
+    const trusted = trustedTools();
+    const makeRevision = (adapterId: string, version: string, digest: string, createdAt: string) => trustedBindingRecord({
+      ref: { ...trustedRef, adapterId, version, digest },
+      createdAt: new Date(createdAt),
+      updatedAt: new Date(createdAt),
+    });
+    const rows = [
+      makeRevision('trusted-a', '1.0.0', 'a'.repeat(64), '2026-08-27T00:04:00.000Z'),
+      makeRevision('trusted-b', '1.0.0', 'b'.repeat(64), '2026-08-27T00:03:00.000Z'),
+      makeRevision('trusted-c', '1.0.0', 'c'.repeat(64), '2026-08-27T00:02:00.000Z'),
+      makeRevision('trusted-d', '1.0.0', 'd'.repeat(64), '2026-08-27T00:01:00.000Z'),
+    ];
+    trusted.listBindings.mockResolvedValue(rows);
+    const { app } = await createRouteApp(trusted);
+    try {
+      const first = await app.inject({ method: 'GET', url: '/internal/providers/provider-1/adapter/trusted-javascript/revisions?limit=2' });
+      expect(first.statusCode).toBe(200);
+      const firstJson = first.json<{ items: { adapter: { ref: { adapterId: string } } }[]; nextCursor: string | null }>();
+      expect(firstJson.items.map((item) => item.adapter.ref.adapterId)).toEqual(['trusted-a', 'trusted-b']);
+      expect(firstJson.nextCursor).toBeTruthy();
+
+      const second = await app.inject({
+        method: 'GET',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript/revisions?limit=2&cursor=${encodeURIComponent(firstJson.nextCursor!)}`,
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json<{ items: { adapter: { ref: { adapterId: string } } }[] }>().items.map((item) => item.adapter.ref.adapterId)).toEqual(['trusted-c', 'trusted-d']);
+
+      rows.unshift(makeRevision('trusted-new', '1.0.0', 'e'.repeat(64), '2026-08-27T00:05:00.000Z'));
+      const stableSecond = await app.inject({
+        method: 'GET',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript/revisions?limit=2&cursor=${encodeURIComponent(firstJson.nextCursor!)}`,
+      });
+      expect(stableSecond.statusCode).toBe(200);
+      expect(stableSecond.json<{ items: { adapter: { ref: { adapterId: string } } }[] }>().items.map((item) => item.adapter.ref.adapterId)).toEqual(['trusted-c', 'trusted-d']);
+
+      const exact = await app.inject({
+        method: 'GET',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript/revisions?kind=trusted-javascript&adapterId=trusted-c&version=1.0.0&digest=${'c'.repeat(64)}`,
+      });
+      expect(exact.statusCode).toBe(200);
+      expect(exact.json<{ items: { adapter: { ref: { adapterId: string } } }[] }>().items.map((item) => item.adapter.ref.adapterId)).toEqual(['trusted-c']);
+
+      const wrongKind = await app.inject({
+        method: 'GET',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript/revisions?kind=declarative-http&adapterId=trusted-c&version=1.0.0&digest=${'c'.repeat(64)}`,
+      });
+      expect(wrongKind.statusCode).toBe(400);
+
+      const forged = Buffer.from(JSON.stringify([
+        Date.parse('2026-08-27T00:04:00.000Z'),
+        JSON.stringify(['trusted-javascript', 'missing', '1.0.0', 'f'.repeat(64)]),
+      ]), 'utf8').toString('base64url');
+      const invalid = await app.inject({
+        method: 'GET',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript/revisions?cursor=${forged}`,
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(trusted.listBindings).toHaveBeenCalledTimes(5);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('unbinds current or an exact trusted revision without removing the global adapter', async () => {
+    const trusted = trustedTools();
+    trusted.unbind
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new TrustedAdapterServiceError('adapter_references_in_use'));
+    const { app } = await createRouteApp(trusted);
+    try {
+      const current = await app.inject({ method: 'DELETE', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(current.statusCode).toBe(204);
+      expect(trusted.unbind).toHaveBeenNthCalledWith(1, 'provider-1', undefined);
+      expect(trusted.remove).not.toHaveBeenCalled();
+
+      const ref = { ...trustedRef, digest: digestAdapterSource(trustedSource) };
+      const exact = await app.inject({
+        method: 'DELETE',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript?kind=${ref.kind}&adapterId=${ref.adapterId}&version=${ref.version}&digest=${ref.digest}`,
+      });
+      expect(exact.statusCode).toBe(204);
+      expect(trusted.unbind).toHaveBeenNthCalledWith(2, 'provider-1', ref);
+
+      const missing = await app.inject({ method: 'DELETE', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(missing.statusCode).toBe(404);
+
+      const retained = await app.inject({ method: 'DELETE', url: '/internal/providers/provider-1/adapter/trusted-javascript' });
+      expect(retained.statusCode).toBe(409);
+      expect(retained.json()).toEqual({
+        error: 'adapter_references_in_use',
+        message: 'The adapter is still referenced and cannot be removed.',
+      });
+
+      const partialQuery = await app.inject({
+        method: 'DELETE',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript?kind=trusted-javascript&adapterId=trusted-js-fixture',
+      });
+      expect(partialQuery.statusCode).toBe(400);
+      const wrongKind = await app.inject({
+        method: 'DELETE',
+        url: `/internal/providers/provider-1/adapter/trusted-javascript?kind=declarative-http&adapterId=${ref.adapterId}&version=${ref.version}&digest=${ref.digest}`,
+      });
+      expect(wrongKind.statusCode).toBe(400);
+      const body = await app.inject({
+        method: 'DELETE',
+        url: '/internal/providers/provider-1/adapter/trusted-javascript',
+        headers: { 'content-type': 'application/json' },
+        payload: {},
+      });
+      expect(body.statusCode).toBe(400);
+      expect(trusted.unbind).toHaveBeenCalledTimes(4);
     } finally {
       await app.close();
     }

@@ -11,6 +11,7 @@ import {
   CustomAdapterDefinitionPageSchema,
   CustomAdapterDefinitionResponseSchema,
   CustomAdapterExportQuerySchema,
+  CustomAdapterImportQuerySchema,
   CustomAdapterDryRunResponseSchema,
   CustomAdapterExtractedResponseSchema,
   CustomAdapterExportResponseSchema,
@@ -27,8 +28,16 @@ import {
   ProviderIdSchema,
   ProviderIdValueSchema,
   ProviderIdParamsSchema,
+  TrustedAdapterBindingDtoSchema,
+  TrustedAdapterBindingPageSchema,
+  TrustedAdapterBindingResponseSchema,
+  TrustedAdapterDisableBodySchema,
   TrustedAdapterPageSchema,
   TrustedAdapterManagementDtoSchema,
+  TrustedAdapterRefSchema,
+  TrustedAdapterRevisionQuerySchema,
+  TrustedAdapterRevisionListQuerySchema,
+  TrustedAdapterUnbindQuerySchema,
   TrustedAdapterResponseSchema,
   TrustedAdapterBindRequestSchema,
   AdapterIdParamsSchema,
@@ -54,6 +63,7 @@ import {
 } from '../services/custom-adapter-service.js';
 import {
   TrustedAdapterServiceError,
+  type TrustedAdapterBindingDto as TrustedServiceBindingDto,
   type TrustedAdapterManagementDto,
   type TrustedAdapterService,
   type TrustedAdapterServiceErrorCode,
@@ -62,7 +72,9 @@ import {
 const DECLARATIVE_FORMAT = AdapterDocumentFormatSchema;
 const DOCUMENT = CustomAdapterDocumentSchema;
 const REF = CustomAdapterRefSchema;
+const TRUSTED_REF = TrustedAdapterRefSchema;
 const PROVIDER_ID = ProviderIdSchema;
+const TRUSTED_UNBIND_QUERY_SCHEMA = z.union([EmptyQuerySchema, TrustedAdapterUnbindQuerySchema]);
 
 // Provider-scoped routes inject the path provider id after parsing these
 // shared schemas, so a body cannot silently target another Provider.
@@ -147,7 +159,15 @@ function dryRunDto(value: unknown): unknown {
 
 type TrustedService = Pick<
   TrustedAdapterService,
-  'bind' | 'get' | 'install' | 'list' | 'remove'
+  | 'bind'
+  | 'get'
+  | 'getBinding'
+  | 'install'
+  | 'list'
+  | 'listBindings'
+  | 'disableBinding'
+  | 'remove'
+  | 'unbind'
 >;
 type CustomService = Pick<
   CustomAdapterService,
@@ -361,6 +381,58 @@ function trustedDto(value: TrustedAdapterManagementDto): unknown {
   });
 }
 
+function trustedBindingDto(value: TrustedServiceBindingDto): unknown {
+  const cloned = cloneJson(value);
+  if (cloned === null || typeof cloned !== 'object' || Array.isArray(cloned)) {
+    throw new Error('Trusted adapter binding DTO is invalid.');
+  }
+  const source = cloned as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'providerId',
+    'ref',
+    'definition',
+    'isCurrent',
+    'disabled',
+    'createdAt',
+    'updatedAt',
+    'manifest',
+    'installation',
+  ]);
+  if (Object.keys(source).some((key) => !allowedKeys.has(key))) {
+    throw new Error('Trusted adapter binding DTO contains unsupported fields.');
+  }
+  if (source.definition !== null) throw new Error('Trusted adapter binding definition is invalid.');
+
+  const installation = source.installation;
+  if (installation === null || typeof installation !== 'object' || Array.isArray(installation)) {
+    throw new Error('Trusted adapter installation timestamps are invalid.');
+  }
+  const installationRecord = installation as Record<string, unknown>;
+  if (Object.keys(installationRecord).some((key) => key !== 'createdAt' && key !== 'updatedAt')) {
+    throw new Error('Trusted adapter installation timestamps contain unsupported fields.');
+  }
+
+  const manifest = parseAdapterManifest(source.manifest);
+  const ref = TrustedAdapterRefSchema.parse(source.ref);
+  if (ref.adapterId !== manifest.id || ref.version !== manifest.version || ref.digest !== manifest.sha256) {
+    throw new Error('Trusted adapter binding reference does not match its manifest.');
+  }
+  const adapter = TrustedAdapterManagementDtoSchema.parse({
+    manifest,
+    ref,
+    createdAt: isoDate(installationRecord.createdAt),
+    updatedAt: isoDate(installationRecord.updatedAt),
+  });
+  return TrustedAdapterBindingDtoSchema.parse({
+    providerId: PROVIDER_ID.parse(source.providerId),
+    adapter,
+    isCurrent: z.boolean().parse(source.isCurrent),
+    disabled: z.boolean().parse(source.disabled),
+    createdAt: isoDate(source.createdAt),
+    updatedAt: isoDate(source.updatedAt),
+  });
+}
+
 function customDto(value: unknown): unknown {
   if (value === null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Custom adapter DTO is invalid.');
@@ -490,6 +562,49 @@ function revisionPage(value: unknown, query: {
   const hasNext = lookahead.length > query.limit;
   const items = lookahead.slice(0, query.limit).map((row) => customDto(row.item));
   return CustomAdapterDefinitionPageSchema.parse({
+    items,
+    nextCursor: hasNext ? cursorForRevision(lookahead[query.limit - 1]!) : null,
+  });
+}
+
+type TrustedRevisionListQuery = z.infer<typeof TrustedAdapterRevisionListQuerySchema>;
+
+function trustedRevisionPage(value: unknown, query: TrustedRevisionListQuery): unknown {
+  if (!Array.isArray(value)) throw new Error('Trusted adapter revision list is invalid.');
+  const exact = query.kind === undefined ? null : {
+    kind: 'trusted-javascript' as const,
+    adapterId: query.adapterId!,
+    version: query.version!,
+    digest: query.digest!,
+  };
+  const rows: RevisionCursorItem[] = value.map((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Trusted adapter revision is invalid.');
+    }
+    const source = item as Record<string, unknown>;
+    const ref = TrustedAdapterRefSchema.parse(cloneJson(source.ref));
+    const timestamp = source.createdAt instanceof Date ? source.createdAt.getTime() : Date.parse(String(source.createdAt));
+    if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw new Error('Trusted adapter revision timestamp is invalid.');
+    return { item, key: revisionKey(ref), ref, timestampMs: timestamp };
+  });
+  rows.sort(revisionCompare);
+  const filtered = exact === null ? rows : rows.filter((row) =>
+    row.ref.kind === exact.kind && row.ref.adapterId === exact.adapterId && row.ref.version === exact.version && row.ref.digest === exact.digest,
+  );
+  const cursor = decodeRevisionCursor(query.cursor);
+  if (cursor !== null && cursor.ref.kind !== 'trusted-javascript') {
+    throw new InvalidRevisionCursorError('The trusted adapter revision cursor is invalid.');
+  }
+  let start = 0;
+  if (cursor !== null) {
+    const index = filtered.findIndex((row) => row.timestampMs === cursor.timestampMs && row.key === cursor.key);
+    if (index < 0) throw new InvalidRevisionCursorError('The trusted adapter revision cursor is invalid.');
+    start = index + 1;
+  }
+  const lookahead = filtered.slice(start, start + query.limit + 1);
+  const hasNext = lookahead.length > query.limit;
+  const items = lookahead.slice(0, query.limit).map((row) => trustedBindingDto(row.item as TrustedServiceBindingDto));
+  return TrustedAdapterBindingPageSchema.parse({
     items,
     nextCursor: hasNext ? cursorForRevision(lookahead[query.limit - 1]!) : null,
   });
@@ -711,6 +826,66 @@ export async function registerAdapterRoutes(
     );
   });
 
+  app.get<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter/trusted-javascript', async (request, reply) => {
+    if (!ensureNoBody(request, reply)) return;
+    const params = providerParams(request.params);
+    const query = TrustedAdapterRevisionQuerySchema.safeParse(cloneJson(request.query));
+    if (params === null || !query.success) return invalidRequest(reply);
+    const ref = query.data.kind === undefined
+      ? undefined
+      : TRUSTED_REF.parse({
+          kind: query.data.kind,
+          adapterId: query.data.adapterId,
+          version: query.data.version,
+          digest: query.data.digest,
+        });
+    return callTool(reply, () => services.trusted.getBinding(params.providerId, ref), (value) => {
+      if (value === null) return reply.code(404).send({ error: 'not_found', message: SERVICE_MESSAGES.not_found });
+      return TrustedAdapterBindingResponseSchema.parse({ binding: trustedBindingDto(value as TrustedServiceBindingDto) });
+    });
+  });
+
+  app.get<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter/trusted-javascript/revisions', async (request, reply) => {
+    if (!ensureNoBody(request, reply)) return;
+    const params = providerParams(request.params);
+    const query = TrustedAdapterRevisionListQuerySchema.safeParse(cloneJson(request.query));
+    if (params === null || !query.success) return invalidRequest(reply);
+    return callTool(reply, () => services.trusted.listBindings(params.providerId), (value) => trustedRevisionPage(value, query.data));
+  });
+
+  app.post<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter/trusted-javascript/disable', async (request, reply) => {
+    const params = providerParams(request.params);
+    if (params === null || !EmptyQuerySchema.safeParse(request.query).success) return invalidRequest(reply);
+    let ref: CustomAdapterRef | undefined;
+    if (bodyPresent(request)) {
+      const body = TrustedAdapterDisableBodySchema.safeParse(request.body);
+      if (!body.success) return invalidRequest(reply);
+      ref = body.data.ref;
+    }
+    return callTool(reply, () => services.trusted.disableBinding(params.providerId, ref), (value) => {
+      if (value === null) return reply.code(404).send({ error: 'not_found', message: SERVICE_MESSAGES.not_found });
+      return TrustedAdapterBindingResponseSchema.parse({ binding: trustedBindingDto(value as TrustedServiceBindingDto) });
+    });
+  });
+
+  app.delete<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter/trusted-javascript', async (request, reply) => {
+    if (!ensureNoBody(request, reply)) return;
+    const params = providerParams(request.params);
+    const query = TRUSTED_UNBIND_QUERY_SCHEMA.safeParse(cloneJson(request.query));
+    if (params === null || !query.success) return invalidRequest(reply);
+    const ref = query.data.kind === undefined
+      ? undefined
+      : TRUSTED_REF.parse({
+          kind: query.data.kind,
+          adapterId: query.data.adapterId,
+          version: query.data.version,
+          digest: query.data.digest,
+        });
+    return callTool(reply, () => services.trusted.unbind(params.providerId, ref), (removed) => removed === true
+      ? reply.code(204).send()
+      : reply.code(404).send({ error: 'not_found', message: SERVICE_MESSAGES.not_found }));
+  });
+
   app.get<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter', async (request, reply) => {
     if (!ensureNoBody(request, reply)) return;
     const params = providerParams(request.params);
@@ -732,7 +907,8 @@ export async function registerAdapterRoutes(
   app.put<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter', async (request, reply) => {
     const params = providerParams(request.params);
     if (params === null) return invalidRequest(reply);
-    if (!EmptyQuerySchema.safeParse(request.query).success) return invalidRequest(reply);
+    const query = CustomAdapterImportQuerySchema.safeParse(cloneJson(request.query));
+    if (!query.success) return invalidRequest(reply);
     const format = formatForMediaType(request);
     if (format === null) return unsupportedMedia(reply);
     const document = request.body;
@@ -740,7 +916,12 @@ export async function registerAdapterRoutes(
       return invalidRequest(reply);
     }
     if (!DOCUMENT.safeParse(document).success) return invalidRequest(reply);
-    const input: Record<string, unknown> = { providerId: params.providerId, document, format };
+    const input: Record<string, unknown> = {
+      providerId: params.providerId,
+      document,
+      format,
+      ...(query.data.version === undefined ? {} : { version: query.data.version }),
+    };
     return callTool(
       reply,
       () => services.custom.replace(input as never),

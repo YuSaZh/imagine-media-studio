@@ -474,6 +474,145 @@ describe('TrustedAdapterService', () => {
     const denied = await harnessFactory(false);
     await expect(denied.service.get('missing-adapter')).rejects.toMatchObject({ code: 'administrator_required' });
   });
+
+  it('reads current, exact historical, and disabled Provider bindings without ref fallback', async () => {
+    const harness = await harnessFactory();
+    const input = await fixture();
+    const first = await harness.service.install(installRequest(input));
+    await harness.service.bind(harness.provider.id, first.ref);
+
+    const upgradedSource = new TextEncoder().encode(`${new TextDecoder().decode(input.source)}\n// second immutable adapter\n`);
+    const secondManifest = {
+      ...input.manifest,
+      id: 'trusted-js-fixture-v2',
+      version: '2.0.0',
+      sha256: digestAdapterSource(upgradedSource),
+    };
+    const second = await harness.service.install({ manifest: secondManifest, source: upgradedSource });
+    await harness.service.bind(harness.provider.id, second.ref);
+
+    const current = await harness.service.getBinding(harness.provider.id);
+    expect(current).toMatchObject({
+      providerId: harness.provider.id,
+      ref: second.ref,
+      isCurrent: true,
+      disabled: false,
+      definition: null,
+      manifest: { id: second.ref.adapterId, version: second.ref.version, sha256: second.ref.digest },
+    });
+    expect(current?.installation.createdAt).toBeInstanceOf(Date);
+    expect(current?.installation.updatedAt).toBeInstanceOf(Date);
+    expect(JSON.stringify(current)).not.toContain(new TextDecoder().decode(input.source));
+    expect('source' in (current as object)).toBe(false);
+
+    const historical = await harness.service.getBinding(harness.provider.id, first.ref);
+    expect(historical).toMatchObject({
+      providerId: harness.provider.id,
+      ref: first.ref,
+      isCurrent: false,
+      disabled: false,
+    });
+    expect(await harness.service.getBinding(harness.provider.id, {
+      ...first.ref,
+      digest: '0'.repeat(64),
+    })).toBeNull();
+    expect((await harness.service.listBindings(harness.provider.id)).map((binding) => binding.ref.adapterId)).toEqual([
+      first.ref.adapterId,
+      second.ref.adapterId,
+    ]);
+
+    const disabled = await harness.service.disableBinding(harness.provider.id);
+    expect(disabled).toMatchObject({ ref: second.ref, isCurrent: false, disabled: true });
+    await expect(harness.service.getBinding(harness.provider.id)).resolves.toBeNull();
+    await expect(harness.service.getBinding(harness.provider.id, second.ref)).resolves.toMatchObject({
+      ref: second.ref,
+      isCurrent: false,
+      disabled: true,
+    });
+  });
+
+  it('unbinds one Provider binding while retaining the immutable installation and another Provider binding', async () => {
+    const harness = await harnessFactory();
+    const secondProvider = harness.providers.create({ name: `Trusted other ${harness.root}`, type: 'custom-js-v1' });
+    const input = await fixture();
+    const installed = await harness.service.install(installRequest(input, harness.provider.id));
+    await harness.service.bind(secondProvider.id, installed.ref);
+
+    await expect(harness.service.deleteBinding(harness.provider.id, installed.ref)).resolves.toBe(true);
+    expect(harness.definitions.getByRef(harness.provider.id, installed.ref)).toBeNull();
+    expect(await harness.service.getBinding(harness.provider.id)).toBeNull();
+    expect(await harness.service.getBinding(secondProvider.id, installed.ref)).toMatchObject({
+      providerId: secondProvider.id,
+      ref: installed.ref,
+      isCurrent: true,
+    });
+    expect(await harness.store.get(installed.ref.adapterId)).not.toBeNull();
+    expect(harness.definitions.getTrustedAdapterInstallation(installed.ref.adapterId)).not.toBeNull();
+  });
+
+  it('maps retained Job references to conflict and leaves the global adapter intact', async () => {
+    const harness = await harnessFactory();
+    const input = await fixture();
+    const installed = await harness.service.install(installRequest(input, harness.provider.id));
+    const job = harness.jobs.createAtCurrent(
+      createMockGenerationRequest({ providerId: harness.provider.id, modelId: 'fixture-model' }),
+      installed.ref,
+    );
+    await expect(harness.service.deleteBinding(harness.provider.id, installed.ref)).rejects.toMatchObject({
+      code: 'adapter_references_in_use',
+      statusCode: 409,
+    });
+    expect(harness.definitions.getByRef(harness.provider.id, installed.ref)).not.toBeNull();
+    expect(await harness.store.get(installed.ref.adapterId)).not.toBeNull();
+
+    const claimed = harness.jobs.claimQueued(job.id, job.revision);
+    if (!claimed) throw new Error('Expected adapter Job to be claimed.');
+    harness.jobs.compareAndSetStatus(job.id, claimed.revision, ['submitting'], 'failed', 'failed');
+    expect(harness.jobs.softDelete(job.id)).toBe(true);
+    await expect(harness.service.unbind(harness.provider.id, installed.ref)).resolves.toBe(true);
+    expect(await harness.store.get(installed.ref.adapterId)).not.toBeNull();
+  });
+
+  it('fails closed with a stable not_found error when the binding tombstone or source is absent', async () => {
+    const harness = await harnessFactory();
+    const input = await fixture();
+    const installed = await harness.service.install(installRequest(input, harness.provider.id));
+    await harness.store.remove(installed.ref.adapterId);
+    await expect(harness.service.getBinding(harness.provider.id, installed.ref)).rejects.toMatchObject({
+      code: 'not_found',
+      statusCode: 404,
+    });
+    await expect(harness.service.getBinding(harness.provider.id)).rejects.toMatchObject({
+      code: 'not_found',
+      statusCode: 404,
+    });
+
+    const tombstoned = await harnessFactory();
+    const tombstoneInput = await fixture();
+    const tombstoneInstall = await tombstoned.service.install(installRequest(tombstoneInput, tombstoned.provider.id));
+    await tombstoned.service.unbind(tombstoned.provider.id, tombstoneInstall.ref);
+    await tombstoned.service.remove(tombstoneInstall.ref.adapterId);
+    await expect(tombstoned.service.getBinding(tombstoned.provider.id, tombstoneInstall.ref)).rejects.toMatchObject({
+      code: 'not_found',
+      statusCode: 404,
+    });
+  });
+
+  it('requires administrator authorization for every binding lifecycle method', async () => {
+    const harness = await harnessFactory(false);
+    const ref = {
+      kind: 'trusted-javascript' as const,
+      adapterId: 'trusted-js-fixture',
+      version: '1.0.0',
+      digest: '0'.repeat(64),
+    };
+    await expect(harness.service.getBinding(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
+    await expect(harness.service.getBinding(harness.provider.id, ref)).rejects.toMatchObject({ code: 'administrator_required' });
+    await expect(harness.service.listBindings(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
+    await expect(harness.service.disableBinding(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
+    await expect(harness.service.deleteBinding(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
+    await expect(harness.service.unbind(harness.provider.id)).rejects.toMatchObject({ code: 'administrator_required' });
+  });
 });
 
 async function harnessFactory(

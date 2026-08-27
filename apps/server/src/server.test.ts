@@ -8,6 +8,7 @@ import { createMockGenerationRequest } from '@imagine/testkit';
 import type { CustomAdapterRef } from '@imagine/shared';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { createAdapterWorkerFactory, type AdapterWorkerFactory } from './adapters/worker-host.js';
 import type { AppConfig } from './config.js';
@@ -1174,13 +1175,9 @@ describe('Imagine server PR 0 skeleton', () => {
 
     const legacyVersionQuery = await server.app.inject({
       method: 'PUT',
-      url: `/internal/providers/${customProvider.id}/adapter?version=${revision.ref.version}`,
+      url: `/internal/providers/${customProvider.id}/adapter?version=2.0.0`,
       headers: { ...admin, 'content-type': 'application/json' },
-      payload: {
-        definition: revision.definition,
-        schemaVersion: 1,
-        version: revision.ref.version,
-      },
+      payload: revision.definition,
     });
     const bareSpec = await server.app.inject({
       method: 'PUT',
@@ -1188,7 +1185,14 @@ describe('Imagine server PR 0 skeleton', () => {
       headers: { ...admin, 'content-type': 'application/json' },
       payload: revision.definition,
     });
-    expect(legacyVersionQuery.statusCode).toBe(400);
+    expect(legacyVersionQuery.statusCode).toBe(200);
+    const createdRevision = await server.app.inject({
+      method: 'GET',
+      url: `/internal/providers/${customProvider.id}/adapter/revisions?kind=declarative-http&adapterId=${revision.ref.adapterId}&version=2.0.0&digest=${revision.ref.digest}`,
+      headers: sameOrigin,
+    });
+    expect(createdRevision.statusCode).toBe(200);
+    expect(createdRevision.json<{ items: { ref: { version: string } }[] }>().items.map((item) => item.ref.version)).toEqual(['2.0.0']);
     expect(bareSpec.statusCode).toBe(400);
 
     const yamlExport = await server.app.inject({
@@ -1206,6 +1210,36 @@ describe('Imagine server PR 0 skeleton', () => {
       payload: yamlExport.body,
     });
     expect(yamlImport.statusCode).toBe(200);
+    const yamlEnvelope = parseYaml(yamlExport.body) as { definition?: Record<string, unknown> };
+    const yamlRawImport = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter?version=3.0.0`,
+      headers: { ...sameOrigin, 'content-type': 'application/yaml' },
+      payload: stringifyYaml(yamlEnvelope.definition),
+    });
+    expect(yamlRawImport.statusCode).toBe(200);
+    const yamlRoundTrip = await server.app.inject({
+      method: 'GET',
+      url: `/internal/providers/${customProvider.id}/adapter/export?format=yaml`,
+      headers: sameOrigin,
+    });
+    expect(yamlRoundTrip.statusCode).toBe(200);
+    expect((parseYaml(yamlRoundTrip.body) as { version?: string }).version).toBe('3.0.0');
+
+    const adminEnabledQuery = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter?adminEnabled=true`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: revision.definition,
+    });
+    const unknownQuery = await server.app.inject({
+      method: 'PUT',
+      url: `/internal/providers/${customProvider.id}/adapter?unexpected=true`,
+      headers: { ...sameOrigin, 'content-type': 'application/json' },
+      payload: revision.definition,
+    });
+    expect(adminEnabledQuery.statusCode).toBe(400);
+    expect(unknownQuery.statusCode).toBe(400);
 
     const request = createMockGenerationRequest({
       extra: { style: 'clean' },

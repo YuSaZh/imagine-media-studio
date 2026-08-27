@@ -1,33 +1,42 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
+
+function subscribeOnline(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  window.addEventListener('online', listener);
+  window.addEventListener('offline', listener);
+  return () => {
+    window.removeEventListener('online', listener);
+    window.removeEventListener('offline', listener);
+  };
+}
+
+function getOnlineSnapshot(): boolean {
+  return typeof navigator === 'undefined' ? true : navigator.onLine;
+}
+
+function getOnlineServerSnapshot(): boolean {
+  return true;
+}
+
+function subscribeStandalone(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  const mediaQuery = window.matchMedia('(display-mode: standalone)');
+  mediaQuery.addEventListener('change', listener);
+  return () => mediaQuery.removeEventListener('change', listener);
+}
+
+function getStandaloneSnapshot(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches;
+}
+
+function getStandaloneServerSnapshot(): boolean {
+  return false;
+}
 
 export function useOnlineStatus(): boolean {
-  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-
-  useEffect(() => {
-    const markOnline = () => setIsOnline(true);
-    const markOffline = () => setIsOnline(false);
-    window.addEventListener('online', markOnline);
-    window.addEventListener('offline', markOffline);
-    return () => {
-      window.removeEventListener('online', markOnline);
-      window.removeEventListener('offline', markOffline);
-    };
-  }, []);
-
-  return isOnline;
+  return useSyncExternalStore(subscribeOnline, getOnlineSnapshot, getOnlineServerSnapshot);
 }
 
 export function useStandaloneMode(): boolean {
-  const [isStandalone, setIsStandalone] = useState(() =>
-    window.matchMedia('(display-mode: standalone)').matches,
-  );
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(display-mode: standalone)');
-    const updateMode = () => setIsStandalone(mediaQuery.matches);
-    mediaQuery.addEventListener('change', updateMode);
-    return () => mediaQuery.removeEventListener('change', updateMode);
-  }, []);
-
-  return isStandalone;
+  return useSyncExternalStore(subscribeStandalone, getStandaloneSnapshot, getStandaloneServerSnapshot);
 }

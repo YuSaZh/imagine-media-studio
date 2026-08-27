@@ -2222,7 +2222,8 @@ video.viewer-media {
 }
 
 .provider-model-actions button {
-  width: 30px;
+  width: var(--control-touch);
+  min-height: var(--control-touch);
   padding: 0;
 }
 
@@ -2299,6 +2300,226 @@ video.viewer-media {
   color: var(--color-danger);
 }
 
+.provider-adapter-row {
+  display: flex;
+  min-height: var(--control-touch);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: 13px;
+  padding-top: 12px;
+}
+
+.provider-adapter-row > span,
+.provider-adapter-row > button {
+  display: inline-flex;
+  min-height: var(--control-touch);
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+}
+
+.provider-adapter-row > span {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.provider-adapter-row > span.is-muted {
+  color: var(--color-text-secondary);
+}
+
+.provider-adapter-row > button {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 5px;
+  background: var(--color-surface);
+  padding: 0 11px;
+}
+
+.provider-adapter-row > button:hover {
+  background: var(--color-surface-subtle);
+}
+
+.custom-adapter-dialog-overlay {
+  position: fixed;
+  z-index: calc(var(--z-viewer) - 2);
+  inset: 0;
+  background: var(--color-overlay);
+  animation: fade-in var(--duration-medium) var(--ease-standard);
+}
+
+.custom-adapter-dialog-content {
+  position: fixed;
+  z-index: calc(var(--z-viewer) - 1);
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(1120px, calc(100vw - 32px));
+  max-height: min(900px, calc(100dvh - 32px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+  outline: 0;
+  transform: translate(-50%, -50%);
+  animation: fade-in var(--duration-medium) var(--ease-standard);
+}
+
+.custom-adapter-dialog-header,
+.custom-adapter-dialog-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--color-surface);
+  padding: 15px 24px;
+}
+
+.custom-adapter-dialog-header {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.custom-adapter-dialog-header > div,
+.custom-adapter-dialog-header h2,
+.custom-adapter-dialog-header p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.custom-adapter-dialog-header h2 {
+  margin: 4px 0 0;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.custom-adapter-dialog-header p:last-child {
+  margin: 5px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+}
+
+.custom-adapter-dialog-close {
+  display: grid;
+  width: var(--control-touch);
+  height: var(--control-touch);
+  flex: 0 0 var(--control-touch);
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-round);
+  background: transparent;
+}
+
+.custom-adapter-dialog-close:hover {
+  background: var(--color-surface-subtle);
+}
+
+.custom-adapter-dialog-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 28px;
+}
+
+.custom-adapter-dialog-body > [data-testid="custom-adapter-workspace"] {
+  margin: 0 auto;
+}
+
+.custom-adapter-dialog-pending {
+  display: flex;
+  min-height: var(--control-touch);
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: 0;
+  color: var(--color-info);
+  font-size: 0.68rem;
+}
+
+.custom-adapter-revision-loading,
+.custom-adapter-revision-error {
+  display: grid;
+  min-height: 160px;
+  place-items: center;
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+}
+
+.custom-adapter-revision-error {
+  color: var(--color-danger);
+}
+
+.custom-adapter-dialog-footer {
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+}
+
+.custom-adapter-dialog-footer-close {
+  min-width: 76px;
+  min-height: var(--control-touch);
+  border: 1px solid var(--color-surface-strong);
+  border-radius: 5px;
+  background: var(--color-surface-strong);
+  color: var(--color-text-inverse);
+  padding: 0 13px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .provider-adapter-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .provider-adapter-row > button {
+    justify-content: center;
+  }
+
+  .custom-adapter-dialog-content {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: calc(100dvh - var(--keyboard-offset));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 10px 10px 0 0;
+    transform: none;
+  }
+
+  .custom-adapter-dialog-header,
+  .custom-adapter-dialog-footer {
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-left: max(12px, env(safe-area-inset-left));
+  }
+
+  .custom-adapter-dialog-body {
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-left: max(12px, env(safe-area-inset-left));
+  }
+
+  .custom-adapter-dialog-footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custom-adapter-dialog-overlay,
+  .custom-adapter-dialog-content {
+    animation: none;
+  }
+}
+
 .provider-form-warning {
   border-left: 3px solid var(--color-warning);
   background: var(--color-surface-subtle);
@@ -2342,7 +2563,8 @@ video.viewer-media {
 }
 
 .settings-inline-error button {
-  min-height: 30px;
+  min-width: var(--control-touch);
+  min-height: var(--control-touch);
   border: 1px solid currentColor;
   border-radius: 5px;
   background: transparent;
@@ -2402,9 +2624,9 @@ video.viewer-media {
 
 .provider-dialog-heading > button {
   display: grid;
-  width: var(--control-default);
-  height: var(--control-default);
-  flex: 0 0 var(--control-default);
+  width: var(--control-touch);
+  height: var(--control-touch);
+  flex: 0 0 var(--control-touch);
   place-items: center;
   border: 0;
   border-radius: var(--radius-round);

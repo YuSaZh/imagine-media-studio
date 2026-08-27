@@ -102,6 +102,8 @@ describe('Provider editor mapping', () => {
       'gemini-veo-operation-v1',
       'gemini-omni-interactions-video-v1',
       'xai-imagine-video-v1',
+      'custom-http-v1',
+      'custom-js-v1',
     ]));
     expect(() => buildProviderWriteInput({
       ...providerToForm(null),
@@ -109,6 +111,18 @@ describe('Provider editor mapping', () => {
       profile: 'openai-videos-v1-compatible',
       type: 'openai-videos-v1-compatible',
     })).toThrow('requires a Base URL');
+    expect(() => buildProviderWriteInput({
+      ...providerToForm(null),
+      name: 'Custom HTTP',
+      profile: 'custom-http-v1',
+      type: 'custom-http-v1',
+    })).toThrow('requires a Base URL');
+    expect(buildProviderWriteInput({
+      ...providerToForm(null),
+      name: 'Trusted JS',
+      profile: 'custom-js-v1',
+      type: 'custom-js-v1',
+    })).toMatchObject({ type: 'custom-js-v1', baseUrl: null });
   });
 
   it('validates manual model capabilities before writing', () => {

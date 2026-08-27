@@ -233,6 +233,18 @@ function isPlainJsonObject(value: unknown): value is Readonly<Record<string, unk
     (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
+/**
+ * Zod object schemas parse class instances as ordinary objects. HTTP request
+ * contracts must reject those inputs before the object parser can discard the
+ * prototype and any inherited fields.
+ */
+function plainObjectInput<T extends z.ZodTypeAny>(schema: T): z.ZodType<z.infer<T>> {
+  return z.preprocess(
+    (value) => isPlainJsonObject(value) ? value : undefined,
+    schema,
+  ) as z.ZodType<z.infer<T>>;
+}
+
 function assertBoundedJson(value: unknown, options: BoundedJsonOptions): void {
   let nodes = 0;
   let keys = 0;
@@ -386,9 +398,10 @@ export type CustomAdapterDocument = z.infer<typeof CustomAdapterDocumentSchema>;
 export const CustomHttpAdapterRefSchema = CustomAdapterRefSchema.extend({
   kind: z.literal('declarative-http'),
 });
-export const TrustedAdapterRefSchema = CustomAdapterRefSchema.extend({
+const TrustedAdapterRefObjectSchema = CustomAdapterRefSchema.extend({
   kind: z.literal('trusted-javascript'),
 });
+export const TrustedAdapterRefSchema = plainObjectInput(TrustedAdapterRefObjectSchema);
 export type CustomHttpAdapterRef = z.infer<typeof CustomHttpAdapterRefSchema>;
 export type TrustedAdapterRef = z.infer<typeof TrustedAdapterRefSchema>;
 
@@ -442,6 +455,64 @@ export const CustomAdapterRevisionListQuerySchema = z.object({
 });
 export type CustomAdapterRevisionListQuery = z.infer<typeof CustomAdapterRevisionListQuerySchema>;
 
+const TrustedAdapterKindSchema = z.literal('trusted-javascript');
+
+/** Exact immutable reference query restricted to trusted JavaScript adapters. */
+const TrustedAdapterRefQueryObjectSchema = z.object({
+  ...CustomAdapterRefQuerySchema.shape,
+  kind: TrustedAdapterKindSchema,
+}).strict();
+export const TrustedAdapterRefQuerySchema = plainObjectInput(TrustedAdapterRefQueryObjectSchema);
+export type TrustedAdapterRefQuery = z.infer<typeof TrustedAdapterRefQuerySchema>;
+
+/**
+ * Optional revision filters are useful for reading the current binding when
+ * omitted, or one historical binding when the complete ref is supplied.
+ */
+const TrustedAdapterRevisionQueryObjectSchema = z.object({
+  ...CustomAdapterRevisionQuerySchema.shape,
+  kind: TrustedAdapterKindSchema.optional(),
+}).strict().superRefine((value, context) => {
+  const present = ['kind', 'adapterId', 'version', 'digest'].filter((key) =>
+    Object.hasOwn(value, key),
+  );
+  if (present.length !== 0 && present.length !== 4) {
+    context.addIssue({
+      code: 'custom',
+      path: [present[0] ?? 'kind'],
+      message: 'Adapter revision references must include kind, adapterId, version, and digest.',
+    });
+  }
+});
+export const TrustedAdapterRevisionQuerySchema = plainObjectInput(TrustedAdapterRevisionQueryObjectSchema);
+export type TrustedAdapterRevisionQuery = z.infer<typeof TrustedAdapterRevisionQuerySchema>;
+
+/** Revision-list query reused from the custom adapter contract. */
+const TrustedAdapterRevisionListQueryObjectSchema = z.object({
+  ...CustomAdapterRevisionListQuerySchema.shape,
+  kind: TrustedAdapterKindSchema.optional(),
+}).strict().superRefine((value, context) => {
+  const present = ['kind', 'adapterId', 'version', 'digest'].filter((key) =>
+    Object.hasOwn(value, key),
+  );
+  if (present.length !== 0 && present.length !== 4) {
+    context.addIssue({
+      code: 'custom',
+      path: [present[0] ?? 'kind'],
+      message: 'Adapter revision references must include kind, adapterId, version, and digest.',
+    });
+  }
+});
+export const TrustedAdapterRevisionListQuerySchema = plainObjectInput(TrustedAdapterRevisionListQueryObjectSchema);
+export type TrustedAdapterRevisionListQuery = z.infer<typeof TrustedAdapterRevisionListQuerySchema>;
+
+/** Unbinding always targets one complete immutable trusted revision. */
+export const TrustedAdapterUnbindQuerySchema = TrustedAdapterRefQuerySchema;
+export type TrustedAdapterUnbindQuery = TrustedAdapterRefQuery;
+export const TrustedJavaScriptAdapterRefQuerySchema = TrustedAdapterRefQuerySchema;
+export const TrustedJavaScriptAdapterRevisionListQuerySchema = TrustedAdapterRevisionListQuerySchema;
+export const TrustedJavaScriptAdapterUnbindQuerySchema = TrustedAdapterUnbindQuerySchema;
+
 export const CustomAdapterTargetSchema = z.object({
   providerId: ProviderIdSchema,
   ref: CustomAdapterRefSchema.optional(),
@@ -457,6 +528,13 @@ export const CustomAdapterImportEnvelopeSchema = z.object({
 export type CustomAdapterImportEnvelope = z.infer<typeof CustomAdapterImportEnvelopeSchema>;
 export const CustomAdapterExportEnvelopeSchema = CustomAdapterImportEnvelopeSchema;
 export type CustomAdapterExportEnvelope = CustomAdapterImportEnvelope;
+
+/** Optional version selector for raw import routes. */
+export const CustomAdapterImportQuerySchema = plainObjectInput(z.object({
+  version: CustomAdapterVersionSchema.optional(),
+}).strict());
+export type CustomAdapterImportQuery = z.infer<typeof CustomAdapterImportQuerySchema>;
+export const AdapterImportQuerySchema = CustomAdapterImportQuerySchema;
 
 /** Canonical browser payload for importing a raw document or export envelope. */
 export const CustomAdapterImportRequestSchema = z.object({
@@ -1124,7 +1202,7 @@ const TrustedAdapterManifestStringSchema = z.string()
   .min(1)
   .max(255)
   .refine((value) => !hasControlCharacters(value));
-const TrustedAdapterResourceLimitsSchema = z.object({
+const TrustedAdapterResourceLimitsObjectSchema = z.object({
   timeoutMs: z.number().int().positive().max(10 * 60 * 1000),
   maxMessageBytes: z.number().int().positive().max(16 * 1024 * 1024),
   maxOutputBytes: z.number().int().positive().max(16 * 1024 * 1024),
@@ -1133,8 +1211,9 @@ const TrustedAdapterResourceLimitsSchema = z.object({
   maxYoungGenerationSizeMb: z.number().int().positive().max(128),
   stackSizeMb: z.number().int().positive().max(16),
 }).strict();
+const TrustedAdapterResourceLimitsSchema = plainObjectInput(TrustedAdapterResourceLimitsObjectSchema);
 
-export const TrustedAdapterManifestSchema = z.object({
+const TrustedAdapterManifestObjectSchema = z.object({
   schemaVersion: z.literal(1),
   id: TrustedAdapterManifestIdSchema,
   version: TrustedAdapterManifestVersionSchema,
@@ -1152,15 +1231,17 @@ export const TrustedAdapterManifestSchema = z.object({
     context.addIssue({ code: 'custom', path: ['operations'], message: 'Manifest operations must be unique.' });
   }
 });
+export const TrustedAdapterManifestSchema = plainObjectInput(TrustedAdapterManifestObjectSchema);
 export type TrustedAdapterManifest = z.infer<typeof TrustedAdapterManifestSchema>;
 
 /** Source-free projection of an installed trusted adapter. */
-export const TrustedAdapterManagementDtoSchema = z.object({
+const TrustedAdapterManagementDtoObjectSchema = z.object({
   manifest: TrustedAdapterManifestSchema,
   ref: TrustedAdapterRefSchema,
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,
 }).strict();
+export const TrustedAdapterManagementDtoSchema = plainObjectInput(TrustedAdapterManagementDtoObjectSchema);
 export type TrustedAdapterManagementDto = z.infer<typeof TrustedAdapterManagementDtoSchema>;
 export const TrustedAdapterResponseSchema = z.object({
   adapter: TrustedAdapterManagementDtoSchema,
@@ -1171,12 +1252,63 @@ export const TrustedAdapterPageSchema = z.object({
 export type TrustedAdapterResponse = z.infer<typeof TrustedAdapterResponseSchema>;
 export type TrustedAdapterPage = z.infer<typeof TrustedAdapterPageSchema>;
 
-export const TrustedAdapterBindRequestSchema = z.object({
+const TrustedAdapterBindRequestObjectSchema = z.object({
   providerId: ProviderIdSchema,
   ref: TrustedAdapterRefSchema,
 }).strict();
+export const TrustedAdapterBindRequestSchema = plainObjectInput(TrustedAdapterBindRequestObjectSchema);
 export type TrustedAdapterBindRequest = z.infer<typeof TrustedAdapterBindRequestSchema>;
 export const TrustedJavaScriptAdapterBindRequestSchema = TrustedAdapterBindRequestSchema;
+
+/** Provider-scoped bind bodies carry only the immutable trusted ref. */
+const TrustedAdapterBindBodyObjectSchema = z.object({
+  ref: TrustedAdapterRefSchema,
+}).strict();
+export const TrustedAdapterBindBodySchema = plainObjectInput(TrustedAdapterBindBodyObjectSchema);
+export type TrustedAdapterBindBody = z.infer<typeof TrustedAdapterBindBodySchema>;
+export const TrustedJavaScriptAdapterBindBodySchema = TrustedAdapterBindBodySchema;
+
+/** A disable body is either empty or targets one exact trusted revision. */
+const TrustedAdapterDisableBodyWithRefSchema = z.object({
+  ref: TrustedAdapterRefSchema,
+}).strict();
+export const TrustedAdapterDisableBodySchema = plainObjectInput(z.union([
+  EmptyQuerySchema,
+  TrustedAdapterDisableBodyWithRefSchema,
+]));
+export type TrustedAdapterDisableBody = z.infer<typeof TrustedAdapterDisableBodySchema>;
+export const TrustedAdapterDisableRequestSchema = TrustedAdapterDisableBodySchema;
+export type TrustedAdapterDisableRequest = TrustedAdapterDisableBody;
+export const TrustedJavaScriptAdapterDisableBodySchema = TrustedAdapterDisableBodySchema;
+export const TrustedJavaScriptAdapterDisableRequestSchema = TrustedAdapterDisableRequestSchema;
+
+/** Source-free Provider binding projection and wire envelopes. */
+const TrustedAdapterBindingDtoObjectSchema = z.object({
+  providerId: ProviderIdSchema,
+  adapter: TrustedAdapterManagementDtoSchema,
+  isCurrent: z.boolean(),
+  disabled: z.boolean(),
+  createdAt: IsoTimestampSchema,
+  updatedAt: IsoTimestampSchema,
+}).strict();
+export const TrustedAdapterBindingDtoSchema = plainObjectInput(TrustedAdapterBindingDtoObjectSchema);
+export type TrustedAdapterBindingDto = z.infer<typeof TrustedAdapterBindingDtoSchema>;
+
+export const TrustedAdapterBindingResponseSchema = plainObjectInput(z.object({
+  binding: TrustedAdapterBindingDtoSchema,
+}).strict());
+export type TrustedAdapterBindingResponse = z.infer<typeof TrustedAdapterBindingResponseSchema>;
+
+export const TrustedAdapterBindingPageSchema = plainObjectInput(z.object({
+  items: z.array(TrustedAdapterBindingDtoSchema).max(200),
+  nextCursor: z.string().trim().min(1).max(2048).nullable().optional(),
+}).strict());
+export type TrustedAdapterBindingPage = z.infer<typeof TrustedAdapterBindingPageSchema>;
+
+export const TrustedJavaScriptAdapterBindingDtoSchema = TrustedAdapterBindingDtoSchema;
+export type TrustedJavaScriptAdapterBindingDto = TrustedAdapterBindingDto;
+export const TrustedJavaScriptAdapterBindingResponseSchema = TrustedAdapterBindingResponseSchema;
+export const TrustedJavaScriptAdapterBindingPageSchema = TrustedAdapterBindingPageSchema;
 
 export const AdapterErrorCodeSchema = z.enum([
   'invalid_request',

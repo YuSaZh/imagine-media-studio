@@ -52,6 +52,10 @@ export interface TrustedAdapterStorePort {
 
 export interface TrustedAdapterDefinitionRepositoryPort {
   getCurrent(providerId: string): ProviderAdapterDefinitionRecord | null;
+  getByRef(providerId: string, ref: CustomAdapterRef): ProviderAdapterDefinitionRecord | null;
+  list(providerId: string): readonly ProviderAdapterDefinitionRecord[];
+  disable(providerId: string, ref?: CustomAdapterRef): ProviderAdapterDefinitionRecord | null;
+  delete(providerId: string, ref?: CustomAdapterRef): boolean;
   create?(
     providerId: string,
     input: PutProviderAdapterDefinitionInput,
@@ -69,6 +73,7 @@ export interface TrustedAdapterDefinitionRepositoryPort {
   ): TrustedAdapterInstallResult | Promise<TrustedAdapterInstallResult>;
   /** Read-only lookup used to prevent dangling adapter-id references. */
   listByAdapterId(adapterId: string): readonly ProviderAdapterDefinitionRecord[];
+  getTrustedAdapterInstallation?(adapterId: string): TrustedAdapterInstallationRecord | null;
   getTombstone?(adapterId: string): TrustedAdapterTombstoneRecord | null;
   isTombstoned?(adapterId: string): boolean;
   tombstone?(ref: CustomAdapterRef, removedAt?: Date): TrustedAdapterTombstoneRecord;
@@ -114,6 +119,30 @@ export interface TrustedAdapterManagementDto {
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
+
+export interface TrustedAdapterInstallationTimestamps {
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/**
+ * Source-free view of one Provider binding. The top-level timestamps belong to
+ * the provider definition; installation timestamps are kept separate because
+ * an immutable adapter can remain installed after its last binding is removed.
+ */
+export interface TrustedAdapterBindingDto {
+  readonly providerId: string;
+  readonly ref: TrustedAdapterRef;
+  readonly definition: null;
+  readonly isCurrent: boolean;
+  readonly disabled: boolean;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+  readonly manifest: AdapterManifest;
+  readonly installation: TrustedAdapterInstallationTimestamps;
+}
+
+export type TrustedJavaScriptAdapterBindingDto = TrustedAdapterBindingDto;
 
 export type TrustedAdapterDto = TrustedAdapterManagementDto;
 export type TrustedJavaScriptAdapterDto = TrustedAdapterManagementDto;
@@ -206,6 +235,13 @@ interface ServiceRepositories {
   readonly jobs: TrustedAdapterJobRepositoryPort;
 }
 
+interface BindingReadResult {
+  readonly dto: TrustedAdapterBindingDto;
+  readonly manifest: AdapterManifest;
+  readonly installation: TrustedAdapterInstallationRecord;
+  readonly events: readonly unknown[];
+}
+
 export interface TrustedAdapterServiceOptions {
   /** This value is captured at construction from PasswordAuth.required. */
   readonly adminEnabled: boolean;
@@ -258,6 +294,21 @@ function boundedByteLength(value: unknown): number | undefined {
     return serialized === undefined ? undefined : Buffer.byteLength(serialized, 'utf8');
   } catch {
     return undefined;
+  }
+}
+
+function cloneJsonValue(value: unknown, seen = new Set<object>()): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) throw new TrustedAdapterServiceError('definition_failure');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((item) => cloneJsonValue(item, seen));
+    if (value instanceof Date) return new Date(value.getTime());
+    const output: Record<string, unknown> = Object.create(null);
+    for (const [key, child] of Object.entries(value)) output[key] = cloneJsonValue(child, seen);
+    return output;
+  } finally {
+    seen.delete(value);
   }
 }
 
@@ -441,6 +492,115 @@ export class TrustedAdapterService {
     });
   }
 
+  /**
+   * Reads one provider binding. An omitted ref means the provider's current
+   * revision; an explicit ref is always looked up exactly and never falls back
+   * to current.
+   */
+  public async getBinding(providerId: string, ref?: CustomAdapterRef): Promise<TrustedAdapterBindingDto | null> {
+    this.assertAdmin();
+    this.requireCustomJavaScriptProvider(providerId);
+    const requestedRef = ref === undefined ? undefined : parseTrustedRef(ref);
+    const initial = requestedRef === undefined
+      ? this.readCurrentBindingDefinition(providerId)
+      : this.readBindingDefinition(providerId, requestedRef);
+    if (initial === null) return null;
+    return this.withAdapterLock(initial.ref.adapterId, async () => {
+      const definition = requestedRef === undefined
+        ? this.readCurrentBindingDefinition(providerId)
+        : this.readBindingDefinition(providerId, requestedRef);
+      if (definition === null) return null;
+      const result = await this.readBinding(providerId, definition);
+      if (result.events.length > 0) await this.flushOutbox();
+      return result.dto;
+    });
+  }
+
+  /** Returns all current and historical trusted revisions bound to a Provider. */
+  public async listBindings(providerId: string): Promise<readonly TrustedAdapterBindingDto[]> {
+    this.assertAdmin();
+    this.requireCustomJavaScriptProvider(providerId);
+    let definitions: readonly ProviderAdapterDefinitionRecord[];
+    try {
+      definitions = this.adapterDefinitions.list(providerId);
+    } catch (error) {
+      throw this.mapDefinitionError(error);
+    }
+    const output: TrustedAdapterBindingDto[] = [];
+    let reconciled = false;
+    for (const definition of definitions) {
+      this.assertTrustedBindingDefinition(providerId, definition);
+      const result = await this.readBinding(providerId, definition);
+      if (result.events.length > 0) reconciled = true;
+      output.push(result.dto);
+    }
+    if (reconciled) await this.flushOutbox();
+    return output;
+  }
+
+  /** Disables one exact binding, or the current binding when ref is omitted. */
+  public async disableBinding(providerId: string, ref?: CustomAdapterRef): Promise<TrustedAdapterBindingDto | null> {
+    this.assertAdmin();
+    this.requireCustomJavaScriptProvider(providerId);
+    const requestedRef = ref === undefined ? undefined : parseTrustedRef(ref);
+    const initial = requestedRef === undefined
+      ? this.readCurrentBindingDefinition(providerId)
+      : this.readBindingDefinition(providerId, requestedRef);
+    if (initial === null) return null;
+    return this.withAdapterLock(initial.ref.adapterId, async () => {
+      const definition = requestedRef === undefined
+        ? this.readCurrentBindingDefinition(providerId)
+        : this.readBindingDefinition(providerId, requestedRef);
+      if (definition === null) return null;
+      const loaded = await this.readBinding(providerId, definition);
+      let disabled: ProviderAdapterDefinitionRecord | null;
+      try {
+        disabled = this.adapterDefinitions.disable(providerId, definition.ref);
+      } catch (error) {
+        throw this.mapDefinitionError(error);
+      }
+      if (disabled === null) {
+        if (loaded.events.length > 0) await this.flushOutbox();
+        return null;
+      }
+      this.assertTrustedBindingDefinition(providerId, disabled);
+      await this.flushOutbox();
+      return this.bindingDto(disabled, loaded.manifest, loaded.installation);
+    });
+  }
+
+  /** Removes one exact binding without removing the global installation. */
+  public async deleteBinding(providerId: string, ref?: CustomAdapterRef): Promise<boolean> {
+    this.assertAdmin();
+    this.requireCustomJavaScriptProvider(providerId);
+    const requestedRef = ref === undefined ? undefined : parseTrustedRef(ref);
+    const initial = requestedRef === undefined
+      ? this.readCurrentBindingDefinition(providerId)
+      : this.readBindingDefinition(providerId, requestedRef);
+    if (initial === null) return false;
+    return this.withAdapterLock(initial.ref.adapterId, async () => {
+      const definition = requestedRef === undefined
+        ? this.readCurrentBindingDefinition(providerId)
+        : this.readBindingDefinition(providerId, requestedRef);
+      if (definition === null) return false;
+      const loaded = await this.readBinding(providerId, definition);
+      let removed: boolean;
+      try {
+        removed = this.adapterDefinitions.delete(providerId, definition.ref);
+      } catch (error) {
+        throw this.mapDefinitionError(error);
+      }
+      if (removed || loaded.events.length > 0) await this.flushOutbox();
+      return removed;
+    });
+  }
+
+  /** Alias used by callers that call provider-scoped deletion an unbind. */
+  public async unbind(providerId: string, ref?: CustomAdapterRef): Promise<boolean> {
+    this.assertAdmin();
+    return this.deleteBinding(providerId, ref);
+  }
+
   public async list(): Promise<readonly TrustedAdapterManagementDto[]> {
     this.assertAdmin();
     let records: readonly AdapterRecord[];
@@ -547,6 +707,89 @@ export class TrustedAdapterService {
       release();
       if (this.adapterLocks.get(adapterId) === current) this.adapterLocks.delete(adapterId);
     }
+  }
+
+  private readCurrentBindingDefinition(providerId: string): ProviderAdapterDefinitionRecord | null {
+    let definition: ProviderAdapterDefinitionRecord | null;
+    try {
+      definition = this.adapterDefinitions.getCurrent(providerId);
+    } catch (error) {
+      throw this.mapDefinitionError(error);
+    }
+    if (definition === null) return null;
+    this.assertTrustedBindingDefinition(providerId, definition);
+    return definition;
+  }
+
+  private readBindingDefinition(
+    providerId: string,
+    ref: TrustedAdapterRef,
+  ): ProviderAdapterDefinitionRecord | null {
+    if (this.readTombstone(ref.adapterId) !== null) {
+      throw new TrustedAdapterServiceError('not_found');
+    }
+    let definition: ProviderAdapterDefinitionRecord | null;
+    try {
+      definition = this.adapterDefinitions.getByRef(providerId, ref);
+    } catch (error) {
+      throw this.mapDefinitionError(error);
+    }
+    if (definition === null) return null;
+    this.assertTrustedBindingDefinition(providerId, definition);
+    if (!sameRef(definition.ref, ref)) {
+      throw new TrustedAdapterServiceError('definition_failure');
+    }
+    return definition;
+  }
+
+  private assertTrustedBindingDefinition(
+    providerId: string,
+    definition: ProviderAdapterDefinitionRecord,
+  ): void {
+    if (definition.providerId !== providerId) {
+      throw new TrustedAdapterServiceError('definition_failure');
+    }
+    if (definition.ref.kind !== TRUSTED_JAVASCRIPT_KIND) {
+      throw new TrustedAdapterServiceError('provider_type_mismatch');
+    }
+    if (definition.definition !== null) {
+      throw new TrustedAdapterServiceError('definition_failure');
+    }
+  }
+
+  /**
+   * Resolve the filesystem manifest using the complete immutable ref before
+   * exposing a binding. Missing/tombstoned rows and digest/version drift are
+   * intentionally surfaced as stable service errors.
+   */
+  private async readBinding(
+    providerId: string,
+    definition: ProviderAdapterDefinitionRecord,
+  ): Promise<BindingReadResult> {
+    this.assertTrustedBindingDefinition(providerId, definition);
+    const ref = parseTrustedRef(definition.ref);
+    if (this.readTombstone(ref.adapterId) !== null) {
+      throw new TrustedAdapterServiceError('not_found');
+    }
+    const installed = await this.loadInstalled(ref.adapterId);
+    const manifest = this.manifestFromRecord(installed, ref.adapterId);
+    if (!sameRef(this.refFromManifest(manifest), ref)) {
+      throw new TrustedAdapterServiceError('manifest_mismatch');
+    }
+    const installation = await this.ensureInstallation(ref);
+    if (
+      installation.installation.adapterId !== ref.adapterId ||
+      installation.installation.version !== ref.version ||
+      installation.installation.digest !== ref.digest
+    ) {
+      throw new TrustedAdapterServiceError('manifest_mismatch');
+    }
+    return {
+      dto: this.bindingDto(definition, manifest, installation.installation),
+      manifest,
+      installation: installation.installation,
+      events: installation.events,
+    };
   }
 
   private readTombstone(adapterId: string): TrustedAdapterTombstoneRecord | null {
@@ -814,6 +1057,32 @@ export class TrustedAdapterService {
       ref,
       createdAt: new Date(installation.createdAt.getTime()),
       updatedAt: new Date(installation.updatedAt.getTime()),
+    };
+  }
+
+  private bindingDto(
+    definition: ProviderAdapterDefinitionRecord,
+    manifest: AdapterManifest,
+    installation: TrustedAdapterInstallationRecord,
+  ): TrustedAdapterBindingDto {
+    this.assertTrustedBindingDefinition(definition.providerId, definition);
+    const ref = this.refFromManifest(manifest);
+    if (!sameRef(definition.ref, ref)) {
+      throw new TrustedAdapterServiceError('manifest_mismatch');
+    }
+    return {
+      providerId: definition.providerId,
+      ref: { ...definition.ref } as TrustedAdapterRef,
+      definition: null,
+      isCurrent: definition.isCurrent,
+      disabled: definition.disabled,
+      createdAt: new Date(definition.createdAt.getTime()),
+      updatedAt: new Date(definition.updatedAt.getTime()),
+      manifest: cloneJsonValue(manifest) as AdapterManifest,
+      installation: {
+        createdAt: new Date(installation.createdAt.getTime()),
+        updatedAt: new Date(installation.updatedAt.getTime()),
+      },
     };
   }
 

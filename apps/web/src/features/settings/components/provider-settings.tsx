@@ -35,6 +35,7 @@ import {
   type ManualModelCreateInput,
   type ProviderWriteInput,
 } from '../api/settings-query.js';
+import { CustomAdapterWorkspaceContainer } from './custom-adapter-workspace-container.js';
 
 export const PROVIDER_PROFILE_OPTIONS = [
   { value: 'mock', label: 'Mock Provider' },
@@ -47,6 +48,8 @@ export const PROVIDER_PROFILE_OPTIONS = [
   { value: 'xai-imagine-image-v1', label: 'xAI Imagine Image v1' },
   { value: 'xai-imagine-video-v1', label: 'xAI Imagine Video v1' },
   { value: 'openai-videos-v1-compatible', label: 'OpenAI-compatible Videos v1' },
+  { value: 'custom-http-v1', label: 'Custom HTTP Adapter' },
+  { value: 'custom-js-v1', label: 'Trusted JavaScript Adapter' },
 ] as const;
 
 type ProviderProfile = (typeof PROVIDER_PROFILE_OPTIONS)[number]['value'];
@@ -107,8 +110,8 @@ export function buildProviderWriteInput(form: ProviderFormState): ProviderWriteI
   if (!name) throw new Error('Provider name is required.');
   if (!type) throw new Error('Provider type is required.');
   const baseUrl = form.baseUrl.trim() || null;
-  if (type === 'openai-videos-v1-compatible' && baseUrl === null) {
-    throw new Error('OpenAI-compatible Videos requires a Base URL.');
+  if ((type === 'openai-videos-v1-compatible' || type === 'custom-http-v1') && baseUrl === null) {
+    throw new Error(`${type === 'custom-http-v1' ? 'Custom HTTP Adapter' : 'OpenAI-compatible Videos'} requires a Base URL.`);
   }
   if (baseUrl !== null) {
     try {
@@ -324,11 +327,12 @@ function ProviderEditor({
             </p>
           )}
           <label>
-            <span>Base URL{form.profile === 'openai-videos-v1-compatible' ? ' (required)' : ''}</span>
+            <span>Base URL{form.profile === 'openai-videos-v1-compatible' || form.profile === 'custom-http-v1' ? ' (required)' : ''}</span>
             <input
               inputMode="url"
               onChange={(event) => update('baseUrl', event.target.value)}
               placeholder="https://api.example.com"
+              required={form.profile === 'openai-videos-v1-compatible' || form.profile === 'custom-http-v1'}
               type="url"
               value={form.baseUrl}
             />
@@ -500,6 +504,7 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
     model: ModelDto | null;
     providerId: string;
   } | null>(null);
+  const [adapterWorkspaceProvider, setAdapterWorkspaceProvider] = useState<ProviderDto | null>(null);
   const [testResults, setTestResults] = useState<
     Readonly<Record<string, { message: string; ok: boolean }>>
   >({});
@@ -587,8 +592,15 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
     }
   };
   const saveProvider = async (input: ProviderWriteInput) => {
-    if (editor === 'new') await createProvider.mutateAsync(input);
-    else if (editor) await patchProvider.mutateAsync({ id: editor.id, input: {
+    if (editor === 'new') {
+      const created = await createProvider.mutateAsync(input);
+      setEditor(null);
+      if (input.type === 'custom-http-v1' || input.type === 'custom-js-v1') {
+        setAdapterWorkspaceProvider(created.provider);
+      }
+      return;
+    }
+    if (editor) await patchProvider.mutateAsync({ id: editor.id, input: {
       ...input,
       isDefault: editor.isDefault,
       } });
@@ -651,6 +663,7 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
           const models = modelsByProvider.get(provider.id) ?? [];
           const result = testResults[provider.id];
           const refreshResult = refreshResults[provider.id];
+          const isCustomAdapter = provider.type === 'custom-http-v1' || provider.type === 'custom-js-v1';
           return (
             <article className="provider-card" key={provider.id}>
               <div className="provider-card-heading">
@@ -700,7 +713,7 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
               <section className="provider-models" aria-label={`${provider.name} models`}>
                 <div className="provider-models-heading">
                   <h3>Model catalog</h3>
-                  {!fixtureMode && (
+                  {!fixtureMode && !isCustomAdapter && (
                     <div className="provider-models-actions">
                       <button
                         disabled={busy || !provider.enabled}
@@ -739,7 +752,7 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
                           {model.enabled ? 'Enabled' : 'Disabled'}
                         </span>
                       </div>
-                      {manual && !fixtureMode && (
+                      {manual && !fixtureMode && !isCustomAdapter && (
                         <div className="provider-model-actions">
                           <button
                             aria-label={`Edit ${model.displayName}`}
@@ -815,6 +828,23 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
                   {refreshResult.message}
                 </p>
               )}
+              {isCustomAdapter && (
+                <div className="provider-adapter-row" data-testid={`adapter-state-${provider.id}`}>
+                  <span className={provider.enabled ? 'is-ready' : 'is-muted'}>
+                    <PlugZap aria-hidden="true" size={14} />
+                    {provider.enabled ? 'Adapter ready / required' : 'Adapter disabled'}
+                  </span>
+                  <button
+                    aria-label={`Manage adapter for ${provider.name}`}
+                    disabled={busy}
+                    onClick={() => setAdapterWorkspaceProvider(provider)}
+                    title="Manage adapter"
+                    type="button"
+                  >
+                    <Pencil aria-hidden="true" size={14} />Manage adapter
+                  </button>
+                </div>
+              )}
             </article>
           );
         })}
@@ -850,6 +880,14 @@ export function ProviderSettings({ fixtureMode }: { fixtureMode: boolean }) {
           />
         )}
       </Dialog.Root>
+      {adapterWorkspaceProvider && (
+        <CustomAdapterWorkspaceContainer
+          fixtureMode={fixtureMode}
+          onOpenChange={(open) => { if (!open) setAdapterWorkspaceProvider(null); }}
+          open
+          provider={adapterWorkspaceProvider}
+        />
+      )}
     </>
   );
 }

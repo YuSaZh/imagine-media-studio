@@ -24,6 +24,7 @@ import {
   CustomAdapterRevisionListQuerySchema,
   CustomAdapterExportQuerySchema,
   CustomAdapterImportEnvelopeSchema,
+  CustomAdapterImportQuerySchema,
   CustomAdapterImportRequestSchema,
   CustomAdapterPreviewRequestSchema,
   CustomAdapterDryRunRequestSchema,
@@ -36,6 +37,15 @@ import {
   TrustedAdapterManifestSchema,
   TrustedAdapterManagementDtoSchema,
   TrustedAdapterBindRequestSchema,
+  TrustedAdapterBindBodySchema,
+  TrustedAdapterDisableBodySchema,
+  TrustedAdapterBindingDtoSchema,
+  TrustedAdapterBindingResponseSchema,
+  TrustedAdapterBindingPageSchema,
+  TrustedAdapterRefQuerySchema,
+  TrustedAdapterRevisionQuerySchema,
+  TrustedAdapterRevisionListQuerySchema,
+  TrustedAdapterUnbindQuerySchema,
   AdapterErrorResponseSchema,
   MAX_ADAPTER_RESPONSE_BYTES,
   CustomAdapterExtractedResponseSchema,
@@ -291,6 +301,23 @@ describe('internal API schemas', () => {
     expect(CustomAdapterImportRequestSchema.safeParse({ providerId: 'provider-1', document: inherited }).success).toBe(false);
   });
 
+  it('keeps raw import version queries optional, bounded, plain, and strict', () => {
+    expect(CustomAdapterImportQuerySchema.parse({})).toEqual({});
+    expect(CustomAdapterImportQuerySchema.parse({ version: '1.0.0' })).toEqual({ version: '1.0.0' });
+    expect(CustomAdapterImportQuerySchema.safeParse({ version: '' }).success).toBe(false);
+    expect(CustomAdapterImportQuerySchema.safeParse({ version: 'x'.repeat(65) }).success).toBe(false);
+    expect(CustomAdapterImportQuerySchema.safeParse({ version: '1' }).success).toBe(true);
+    expect(CustomAdapterImportQuerySchema.safeParse({ version: null }).success).toBe(false);
+    for (const key of ['providerId', 'source', 'secrets', 'adminEnabled']) {
+      expect(CustomAdapterImportQuerySchema.safeParse({ version: '1.0.0', [key]: 'forbidden' }).success).toBe(false);
+    }
+    const inherited = Object.assign(Object.create({ adminEnabled: true }), { version: '1.0.0' });
+    expect(CustomAdapterImportQuerySchema.safeParse(inherited).success).toBe(false);
+    const nullPrototype = Object.assign(Object.create(null), { version: '1.0.0' });
+    expect(CustomAdapterImportQuerySchema.parse(nullPrototype)).toEqual({ version: '1.0.0' });
+    expect(CustomAdapterImportEnvelopeSchema.safeParse({ schemaVersion: 1, definition: {} }).success).toBe(false);
+  });
+
   it('keeps preview and dry-run requests free of server-only context and binary inputs', () => {
     const request = {
       operation: 'image.generate' as const,
@@ -439,6 +466,117 @@ describe('internal API schemas', () => {
     });
     expect(AdapterErrorResponseSchema.safeParse({ error: 'unknown_adapter_code' }).success).toBe(false);
     expect(AdapterErrorResponseSchema.safeParse({ error: 'storage_error', source: 'secret' }).success).toBe(false);
+  });
+
+  it('keeps trusted Provider bindings source-free and uses exact trusted revision refs', () => {
+    const manifest = {
+      schemaVersion: 1 as const,
+      id: 'trusted-js-binding',
+      version: '1.0.0',
+      displayName: 'Trusted JavaScript binding',
+      sha256: 'c'.repeat(64),
+      operations: ['image.generate' as const],
+      capabilities: {
+        providerType: 'custom-js-v1',
+        models: [{
+          id: 'model-1',
+          displayName: 'Model 1',
+          capabilities: { operations: ['image.generate'] },
+        }],
+      },
+      allowedHosts: ['api.example.com'],
+      requiredSecrets: ['UPSTREAM_TOKEN'],
+      resourceLimits: {
+        timeoutMs: 5_000,
+        maxMessageBytes: 1_048_576,
+        maxOutputBytes: 1_048_576,
+        maxLogBytes: 65_536,
+        maxOldGenerationSizeMb: 64,
+        maxYoungGenerationSizeMb: 16,
+        stackSizeMb: 4,
+      },
+    };
+    const ref = {
+      kind: 'trusted-javascript' as const,
+      adapterId: manifest.id,
+      version: manifest.version,
+      digest: manifest.sha256,
+    };
+    const adapter = {
+      manifest,
+      ref,
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-26T00:00:00.000Z',
+    };
+    const binding = {
+      providerId: 'provider-1',
+      adapter,
+      isCurrent: true,
+      disabled: false,
+      createdAt: '2026-08-27T00:00:00.000Z',
+      updatedAt: '2026-08-27T01:00:00.000Z',
+    };
+
+    expect(TrustedAdapterBindingDtoSchema.parse(binding)).toEqual(binding);
+    expect(TrustedAdapterBindingResponseSchema.parse({ binding })).toEqual({ binding });
+    expect(TrustedAdapterBindingPageSchema.parse({ items: [binding], nextCursor: 'cursor-1' })).toEqual({
+      items: [binding],
+      nextCursor: 'cursor-1',
+    });
+    expect(TrustedAdapterBindingPageSchema.parse({ items: [], nextCursor: null })).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+
+    expect(TrustedAdapterRefQuerySchema.parse(ref)).toEqual(ref);
+    expect(TrustedAdapterUnbindQuerySchema.parse(ref)).toEqual(ref);
+    expect(TrustedAdapterRevisionQuerySchema.parse({})).toEqual({});
+    expect(TrustedAdapterRevisionListQuerySchema.parse({ limit: '20', ...ref })).toEqual({ limit: 20, ...ref });
+    expect(TrustedAdapterRevisionListQuerySchema.parse({})).toEqual({ limit: 50 });
+    expect(TrustedAdapterRefQuerySchema.safeParse({ ...ref, kind: 'declarative-http' }).success).toBe(false);
+    expect(TrustedAdapterRevisionListQuerySchema.safeParse({ ...ref, kind: 'declarative-http' }).success).toBe(false);
+    expect(TrustedAdapterRevisionQuerySchema.safeParse({ ...ref, kind: 'declarative-http' }).success).toBe(false);
+
+    for (const key of ['kind', 'adapterId', 'version', 'digest']) {
+      const partial = { [key]: ref[key as keyof typeof ref] };
+      expect(TrustedAdapterUnbindQuerySchema.safeParse(partial).success).toBe(false);
+      expect(TrustedAdapterRevisionListQuerySchema.safeParse(partial).success).toBe(false);
+      expect(TrustedAdapterRevisionQuerySchema.safeParse(partial).success).toBe(false);
+    }
+    expect(TrustedAdapterBindingPageSchema.safeParse({ items: [], nextCursor: 'x'.repeat(2_049) }).success).toBe(false);
+    expect(TrustedAdapterBindingPageSchema.safeParse({ items: Array.from({ length: 201 }, () => binding) }).success).toBe(false);
+
+    for (const key of ['source', 'secrets', 'secretValues', 'adminEnabled', 'providerId']) {
+      const value = key === 'secrets' || key === 'secretValues' ? { apiKey: 'hidden' } : 'forbidden';
+      expect(TrustedAdapterBindBodySchema.safeParse({ ref, [key]: value }).success).toBe(false);
+      expect(TrustedAdapterDisableBodySchema.safeParse({ [key]: value }).success).toBe(false);
+    }
+    expect(TrustedAdapterBindBodySchema.parse({ ref })).toEqual({ ref });
+    expect(TrustedAdapterDisableBodySchema.parse({})).toEqual({});
+    expect(TrustedAdapterDisableBodySchema.parse({ ref })).toEqual({ ref });
+    expect(TrustedAdapterDisableBodySchema.safeParse({ ref, unknown: true }).success).toBe(false);
+    expect(TrustedAdapterDisableBodySchema.safeParse(null).success).toBe(false);
+    expect(TrustedAdapterDisableBodySchema.safeParse([]).success).toBe(false);
+
+    expect(TrustedAdapterBindingDtoSchema.safeParse({ ...binding, source: 'adapter.mjs' }).success).toBe(false);
+    expect(TrustedAdapterBindingDtoSchema.safeParse({ ...binding, secrets: { apiKey: 'hidden' } }).success).toBe(false);
+    expect(TrustedAdapterBindingDtoSchema.safeParse({
+      ...binding,
+      adapter: { ...adapter, source: 'adapter.mjs' },
+    }).success).toBe(false);
+    expect(TrustedAdapterBindingResponseSchema.safeParse({ binding, unknown: true }).success).toBe(false);
+    expect(TrustedAdapterBindingPageSchema.safeParse({ items: [binding], source: 'adapter.mjs' }).success).toBe(false);
+    expect(TrustedAdapterBindingDtoSchema.safeParse({ ...binding, createdAt: 'not-a-timestamp' }).success).toBe(false);
+    expect(TrustedAdapterBindingDtoSchema.safeParse({ ...binding, updatedAt: '2026-08-27' }).success).toBe(false);
+    expect(TrustedAdapterBindingDtoSchema.safeParse({ ...binding, createdAt: undefined }).success).toBe(false);
+
+    const inheritedBinding = Object.assign(Object.create({ source: 'adapter.mjs' }), binding);
+    expect(TrustedAdapterBindingDtoSchema.safeParse(inheritedBinding).success).toBe(false);
+    const nullPrototypeBinding = Object.assign(Object.create(null), binding);
+    expect(TrustedAdapterBindingDtoSchema.parse(nullPrototypeBinding)).toEqual(binding);
+    const inheritedRef = Object.assign(Object.create({ source: 'adapter.mjs' }), ref);
+    expect(TrustedAdapterRefQuerySchema.safeParse(inheritedRef).success).toBe(false);
+    expect(TrustedAdapterDisableBodySchema.safeParse({ ref: inheritedRef }).success).toBe(false);
   });
 
   it('hardens route query and multipart ProviderId values', () => {

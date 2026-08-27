@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CustomAdapterRefSchema, TrustedAdapterManifestSchema } from '@imagine/shared';
+
 import {
   internalClient,
   InternalApiError,
@@ -201,5 +203,365 @@ describe('internalClient', () => {
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/internal/models/model-1');
     expect(fetchMock.mock.calls[2]?.[0]).toBe('/internal/models/model-1');
+  });
+
+  it('manages trusted adapters without exposing source in the response or query cache contract', async () => {
+    const manifest = TrustedAdapterManifestSchema.parse({
+      schemaVersion: 1,
+      id: 'trusted-fixture',
+      version: '1.0.0',
+      displayName: 'Trusted Fixture',
+      sha256: 'c'.repeat(64),
+      operations: ['image.generate'],
+      capabilities: {
+        providerType: 'custom-js-v1',
+        models: [{
+          id: 'fixture-image',
+          displayName: 'Fixture Image',
+          capabilities: { operations: ['image.generate'] },
+        }],
+      },
+      allowedHosts: ['api.example.invalid'],
+      requiredSecrets: [],
+      resourceLimits: {
+        timeoutMs: 30_000,
+        maxMessageBytes: 1_048_576,
+        maxOutputBytes: 1_048_576,
+        maxLogBytes: 262_144,
+        maxOldGenerationSizeMb: 64,
+        maxYoungGenerationSizeMb: 16,
+        stackSizeMb: 4,
+      },
+    });
+    const ref = {
+      kind: 'trusted-javascript' as const,
+      adapterId: manifest.id,
+      version: manifest.version,
+      digest: manifest.sha256,
+    };
+    const trustedResponse = JSON.stringify({
+      adapter: {
+        manifest,
+        ref,
+        createdAt: '2026-08-25T00:00:00.000Z',
+        updatedAt: '2026-08-25T00:00:00.000Z',
+      },
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [JSON.parse(trustedResponse).adapter] }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(trustedResponse, {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(trustedResponse, {
+        headers: { 'Content-Type': 'application/json' },
+        status: 201,
+      }))
+      .mockResolvedValueOnce(new Response(trustedResponse, {
+        headers: { 'Content-Type': 'application/json' },
+        status: 201,
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const controller = new AbortController();
+    const source = new File(['export function capabilities() {}'], 'adapter.mjs', { type: 'text/javascript' });
+
+    await expect(internalClient.listTrustedAdapters()).resolves.toMatchObject({ items: [{ ref }] });
+    await expect(internalClient.getTrustedAdapter(ref.adapterId)).resolves.toMatchObject({ adapter: { ref } });
+    await expect(internalClient.installTrustedAdapter({ manifest, source, providerId: 'provider-1' }, { signal: controller.signal })).resolves.toMatchObject({ adapter: { ref } });
+    await expect(internalClient.bindTrustedAdapter({ providerId: 'provider-1', ref })).resolves.toMatchObject({ adapter: { ref } });
+    await expect(internalClient.removeTrustedAdapter(ref.adapterId)).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/internal/adapters');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/internal/adapters/trusted-fixture');
+    const installRequest = fetchMock.mock.calls[2]?.[1];
+    expect(installRequest?.body).toBeInstanceOf(FormData);
+    expect(installRequest?.signal).toBe(controller.signal);
+    expect((installRequest?.headers as Headers).has('Content-Type')).toBe(false);
+    const installBody = installRequest?.body as FormData;
+    expect([...installBody.keys()]).toEqual(['manifest', 'source', 'providerId']);
+    expect(installBody.get('manifest')).toBe(JSON.stringify(manifest));
+    expect(installBody.get('source')).toBeInstanceOf(File);
+    expect(installBody.get('providerId')).toBe('provider-1');
+    expect(fetchMock.mock.calls[3]?.[0]).toBe('/internal/providers/provider-1/adapter/trusted-javascript');
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({ ref });
+    expect(fetchMock.mock.calls[4]?.[0]).toBe('/internal/adapters/trusted-fixture');
+  });
+
+  it('uses exact custom revision queries, raw export metadata, and raw JSON/YAML PUT bodies', async () => {
+    const ref = {
+      kind: 'declarative-http' as const,
+      adapterId: 'custom-adapter',
+      version: '2.0.0',
+      digest: 'd'.repeat(64),
+    };
+    const definition = {
+      providerId: 'provider/1',
+      ref,
+      definition: { id: ref.adapterId },
+      isCurrent: true,
+      disabled: false,
+      createdAt: '2026-08-25T00:00:00.000Z',
+      updatedAt: '2026-08-25T00:00:00.000Z',
+    };
+    const envelope = { schemaVersion: 1 as const, version: ref.version, definition: { id: ref.adapterId } };
+    const page = JSON.stringify({ items: [definition], nextCursor: null });
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ definition }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(page, {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response('schemaVersion: 1\nversion: 2.0.0\ndefinition: {}\n', {
+        headers: {
+          'Content-Type': 'application/yaml; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="adapter-custom-adapter-2.0.0.yaml"',
+        },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ definition }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ definition }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ definition }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ definition }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      }));
+    const signal = new AbortController().signal;
+
+    await expect(internalClient.getCustomAdapter('provider/1')).resolves.toMatchObject({ definition });
+    await expect(internalClient.listCustomAdapterRevisions('provider/1', { ref, limit: 10, cursor: 'opaque cursor' })).resolves.toMatchObject({ items: [definition] });
+    await expect(internalClient.exportCustomAdapter('provider/1', { ref, format: 'yaml' }, { signal })).resolves.toEqual({
+      text: 'schemaVersion: 1\nversion: 2.0.0\ndefinition: {}\n',
+      content: 'schemaVersion: 1\nversion: 2.0.0\ndefinition: {}\n',
+      filename: 'adapter-custom-adapter-2.0.0.yaml',
+      contentType: 'application/yaml; charset=utf-8',
+    });
+    await expect(internalClient.putCustomAdapter('provider/1', { document: envelope, format: 'json' })).resolves.toMatchObject({ definition });
+    await expect(internalClient.putCustomAdapter('provider/1', {
+      document: 'schemaVersion: 1\nversion: 2.0.0\ndefinition: {}\n',
+      format: 'yaml',
+      version: '2.0.0',
+    })).resolves.toMatchObject({ definition });
+    await expect(internalClient.putCustomAdapter('provider/1', {
+      document: { id: ref.adapterId },
+      format: 'json',
+      version: '3.0.0',
+    })).resolves.toMatchObject({ definition });
+    await expect(internalClient.putCustomAdapter('provider/1', {
+      document: JSON.stringify({ id: ref.adapterId }),
+      format: 'json',
+      version: '4.0.0',
+    })).resolves.toMatchObject({ definition });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/internal/providers/provider%2F1/adapter');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(`/internal/providers/provider%2F1/adapter/revisions?kind=declarative-http&adapterId=custom-adapter&version=2.0.0&digest=${ref.digest}&limit=10&cursor=opaque+cursor`);
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(`/internal/providers/provider%2F1/adapter/export?kind=declarative-http&adapterId=custom-adapter&version=2.0.0&digest=${ref.digest}&format=yaml`);
+    expect(fetchMock.mock.calls[2]?.[1]?.signal).toBe(signal);
+    expect(new Headers(fetchMock.mock.calls[3]?.[1]?.headers).get('Content-Type')).toBe('application/json');
+    expect(fetchMock.mock.calls[3]?.[1]?.body).toBe(JSON.stringify(envelope));
+    expect(new Headers(fetchMock.mock.calls[4]?.[1]?.headers).get('Content-Type')).toBe('application/yaml; charset=utf-8');
+    expect(fetchMock.mock.calls[4]?.[0]).toBe('/internal/providers/provider%2F1/adapter?version=2.0.0');
+    expect(fetchMock.mock.calls[4]?.[1]?.body).toBe('schemaVersion: 1\nversion: 2.0.0\ndefinition: {}\n');
+    expect(new Headers(fetchMock.mock.calls[5]?.[1]?.headers).get('Content-Type')).toBe('application/json');
+    expect(fetchMock.mock.calls[5]?.[0]).toBe('/internal/providers/provider%2F1/adapter?version=3.0.0');
+    expect(fetchMock.mock.calls[5]?.[1]?.body).toBe(JSON.stringify({ id: ref.adapterId }));
+    expect(fetchMock.mock.calls[6]?.[0]).toBe('/internal/providers/provider%2F1/adapter?version=4.0.0');
+    expect(fetchMock.mock.calls[6]?.[1]?.body).toBe(JSON.stringify({ id: ref.adapterId }));
+  });
+
+  it('requires bounded versions for raw documents and recognizes only strict YAML envelopes', async () => {
+    const responseBody = JSON.stringify({ definition: {
+        providerId: 'provider-1',
+        ref: { kind: 'declarative-http', adapterId: 'raw', version: '1.0.0', digest: 'a'.repeat(64) },
+        definition: { id: 'raw' },
+        isCurrent: true,
+        disabled: false,
+        createdAt: '2026-08-25T00:00:00.000Z',
+        updatedAt: '2026-08-25T00:00:00.000Z',
+      } });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(responseBody, { headers: { 'Content-Type': 'application/json' }, status: 200 }),
+    );
+    const envelope = { schemaVersion: 1 as const, version: '1.0.0', definition: { id: 'raw' } };
+    const exportedYaml = 'schemaVersion: 1\nversion: 2.0.0\ndefinition:\n  id: raw\n';
+    await expect(internalClient.putCustomAdapter('provider-1', envelope)).resolves.toBeTruthy();
+    await expect(internalClient.putCustomAdapter('provider-1', { id: 'raw' })).rejects.toThrow('version');
+    await expect(internalClient.putCustomAdapter('provider-1', '{"id":"raw"}', 'json')).rejects.toThrow('version');
+    await expect(internalClient.putCustomAdapter('provider-1', exportedYaml, 'yaml')).resolves.toBeTruthy();
+    await expect(internalClient.putCustomAdapter('provider-1', 'id: raw\n', 'yaml')).rejects.toThrow('version');
+    const signal = new AbortController().signal;
+    await expect(internalClient.putCustomAdapter(
+      'provider-1',
+      'id: raw\n',
+      { format: 'yaml', version: '2.0.0' },
+      { signal },
+    )).resolves.toBeTruthy();
+    await expect(internalClient.putCustomAdapter(
+      'provider-1',
+      exportedYaml,
+      { format: 'yaml', version: '3.0.0' },
+    )).rejects.toThrow('version');
+    await expect(internalClient.putCustomAdapter(
+      'provider-1',
+      'document:\n  schemaVersion: 1\n  version: 2.0.0\n  definition:\n',
+      'yaml',
+    )).rejects.toThrow('version');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/internal/providers/provider-1/adapter');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/internal/providers/provider-1/adapter');
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/internal/providers/provider-1/adapter?version=2.0.0');
+    expect(fetchMock.mock.calls[2]?.[1]?.signal).toBe(signal);
+  });
+
+  it('strictly parses every custom tool response and rejects invalid input before fetch', async () => {
+    const ref = {
+      kind: 'declarative-http' as const,
+      adapterId: 'custom-adapter',
+      version: '1.0.0',
+      digest: 'e'.repeat(64),
+    };
+    const preview = {
+      method: 'POST' as const,
+      relativePath: '/v1/generate',
+      query: {},
+      headers: {},
+      body: { type: 'none' as const },
+      url: 'https://api.example.invalid/v1/generate',
+      endpoint: 'submit' as const,
+      capabilities: {
+        providerType: 'custom-http-v1',
+        models: [{ id: 'image', displayName: 'Image', capabilities: { operations: ['image.generate'] } }],
+      },
+    };
+    const responses = [
+      { valid: true, adapterId: ref.adapterId, canonical: '{}', spec: { id: ref.adapterId } },
+      preview,
+      {
+        network: false,
+        performed: false,
+        endpoint: 'submit',
+        request: { ...preview, capabilities: undefined },
+        preview: { ...preview, capabilities: undefined },
+        capabilities: preview.capabilities,
+      },
+      { state: 'pending', remoteJobId: 'remote-1', progress: 50 },
+      { path: '/data/0/id', found: true, value: 'remote-1' },
+      { capabilities: preview.capabilities },
+    ];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      const next = responses.shift();
+      return new Response(JSON.stringify(next), { headers: { 'Content-Type': 'application/json' }, status: 200 });
+    });
+    const request = {
+      operation: 'image.generate' as const,
+      providerId: 'provider-1',
+      modelId: 'image',
+      prompt: 'test',
+      inputs: [],
+    };
+
+    await expect(internalClient.validateCustomAdapter('provider-1', { document: { schemaVersion: 1, version: '1.0.0', definition: { id: ref.adapterId } } })).resolves.toMatchObject({ valid: true });
+    await expect(internalClient.previewCustomAdapter('provider-1', { request })).resolves.toMatchObject({ endpoint: 'submit' });
+    await expect(internalClient.dryRunCustomAdapter('provider-1', { request })).resolves.toMatchObject({ network: false, performed: false });
+    await expect(internalClient.simulateCustomAdapter('provider-1', { response: { status: 200, json: {} } })).resolves.toEqual({ state: 'pending', remoteJobId: 'remote-1', progress: 50 });
+    await expect(internalClient.testCustomAdapterPath('provider-1', { path: '/data/0/id', json: { data: [{ id: 'remote-1' }] } })).resolves.toEqual({ path: '/data/0/id', found: true, value: 'remote-1' });
+    await expect(internalClient.previewCustomAdapterCapabilities('provider-1')).resolves.toMatchObject({ capabilities: { providerType: 'custom-http-v1' } });
+
+    const calls = fetchMock.mock.calls;
+    expect(calls).toHaveLength(6);
+    expect(calls[0]?.[0]).toBe('/internal/providers/provider-1/adapter/validate');
+    expect(calls[1]?.[0]).toBe('/internal/providers/provider-1/adapter/preview');
+    expect(calls[2]?.[0]).toBe('/internal/providers/provider-1/adapter/dry-run');
+    expect(calls[3]?.[0]).toBe('/internal/providers/provider-1/adapter/simulate');
+    expect(calls[4]?.[0]).toBe('/internal/providers/provider-1/adapter/path-test');
+    expect(calls[5]?.[0]).toBe('/internal/providers/provider-1/adapter/capabilities-preview');
+    expect(JSON.parse(String(calls[1]?.[1]?.body))).toEqual({ request });
+
+    await expect(internalClient.testCustomAdapterPath('provider-1', { path: 'data', json: {} })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(CustomAdapterRefSchema.safeParse({ kind: 'declarative-http', adapterId: 'bad/id', version: '1.0.0', digest: 'f'.repeat(64) }).success).toBe(false);
+  });
+
+  it('turns raw non-2xx adapter export responses into InternalApiError and emits auth events', async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeToAuthRequired(listener);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('not-json', { headers: { 'Content-Type': 'text/plain' }, status: 401 }),
+    );
+    try {
+      await expect(internalClient.exportCustomAdapter('provider-1')).rejects.toEqual(
+        new InternalApiError(401, 'internal_api_error', 'Internal API request failed with status 401.'),
+      );
+      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledWith();
+      expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe('same-origin');
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('reads exact trusted bindings, disables provider bindings, and unbinds without global removal', async () => {
+    const manifest = TrustedAdapterManifestSchema.parse({
+      schemaVersion: 1,
+      id: 'trusted-binding',
+      version: '1.0.0',
+      displayName: 'Trusted Binding',
+      sha256: 'f'.repeat(64),
+      operations: ['image.generate'],
+      capabilities: {
+        providerType: 'custom-js-v1',
+        models: [{ id: 'image', displayName: 'Image', capabilities: { operations: ['image.generate'] } }],
+      },
+      allowedHosts: ['api.example.invalid'],
+      requiredSecrets: [],
+      resourceLimits: {
+        timeoutMs: 30_000,
+        maxMessageBytes: 1_048_576,
+        maxOutputBytes: 1_048_576,
+        maxLogBytes: 262_144,
+        maxOldGenerationSizeMb: 64,
+        maxYoungGenerationSizeMb: 16,
+        stackSizeMb: 4,
+      },
+    });
+    const ref = { kind: 'trusted-javascript' as const, adapterId: manifest.id, version: manifest.version, digest: manifest.sha256 };
+    const adapter = { manifest, ref, createdAt: '2026-08-25T00:00:00.000Z', updatedAt: '2026-08-25T00:00:00.000Z' };
+    const binding = { providerId: 'provider-1', adapter, isCurrent: true, disabled: false, createdAt: '2026-08-25T00:00:00.000Z', updatedAt: '2026-08-25T00:00:00.000Z' };
+    const response = JSON.stringify({ binding });
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(response, { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(response, { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [binding], nextCursor: null }), { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(response, { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(internalClient.getTrustedBinding('provider-1')).resolves.toMatchObject({ binding });
+    await expect(internalClient.getTrustedBinding('provider-1', ref)).resolves.toMatchObject({ binding });
+    await expect(internalClient.listTrustedBindings('provider-1', { ref, limit: 20, cursor: 'next cursor' })).resolves.toMatchObject({ items: [binding] });
+    await expect(internalClient.disableTrustedBinding('provider-1', ref)).resolves.toMatchObject({ binding });
+    await expect(internalClient.unbindTrustedBinding('provider-1', ref)).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/internal/providers/provider-1/adapter/trusted-javascript');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(`/internal/providers/provider-1/adapter/trusted-javascript?kind=trusted-javascript&adapterId=trusted-binding&version=1.0.0&digest=${ref.digest}`);
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(`/internal/providers/provider-1/adapter/trusted-javascript/revisions?kind=trusted-javascript&adapterId=trusted-binding&version=1.0.0&digest=${ref.digest}&limit=20&cursor=next+cursor`);
+    expect(fetchMock.mock.calls[3]?.[0]).toBe('/internal/providers/provider-1/adapter/trusted-javascript/disable');
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual({ ref });
+    expect(fetchMock.mock.calls[4]?.[0]).toBe(`/internal/providers/provider-1/adapter/trusted-javascript?kind=trusted-javascript&adapterId=trusted-binding&version=1.0.0&digest=${ref.digest}`);
+    expect(fetchMock.mock.calls[4]?.[1]?.method).toBe('DELETE');
+    expect(fetchMock.mock.calls[4]?.[0]).not.toContain('/internal/adapters/');
   });
 });
