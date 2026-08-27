@@ -112,4 +112,4 @@ const tombstoned = await request('/internal/adapters/trusted-javascript', {
   method: 'POST',
   body: trustedForm(),
 }, 409);
-assert.equal(JSON.parse(tombstoned.text).error, 'tombstoned');
+assert.equal(JSON.parse(tombstoned.text).error, 'adapter_id_immutable');
