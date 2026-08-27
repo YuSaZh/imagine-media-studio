@@ -15,6 +15,7 @@ const authHeader = `Basic ${Buffer.from(`studio:${appPassword}`).toString('base6
 function withAuth(options = {}) {
   const headers = new globalThis.Headers(options.headers);
   headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
   return { ...options, headers };
 }
 
