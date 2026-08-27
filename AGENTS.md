@@ -29,5 +29,6 @@
 - Keep dependency versions exact and update them in dedicated changes.
 - Record third-party review or reuse in `docs/third-party/reuse-audit.md` before copying code.
 - The primary agent owns commits, pushes, releases, and cross-area integration. Sub-agents must not commit or push.
-- The user grants the primary agent standing authorization to stage accepted project changes, create commits, and push them directly to `origin/main` after each verified milestone. Do not ask the user to reconfirm these Git operations.
-- If the execution sandbox requires elevated Git access, reuse the narrow approved `git add`, `git commit`, and `git push` rules without pausing for another product-level authorization question.
+- The user grants the primary agent standing authorization to use `git`, `gh`, and Git-over-SSH for this repository; stage accepted project changes; create commits; and push them directly to `origin/main` after each verified milestone. This authorization persists across turns, context compaction, session recovery, and subsequent approved phases. Do not ask the user to reconfirm it.
+- After a milestone passes its required local and/or GitHub Actions acceptance gates, the primary agent must commit and push it, then continue with the approved plan unless the user has explicitly requested a pause at that point.
+- A tool or sandbox approval prompt is an execution-platform requirement, not a request for product-level Git authorization. Reuse narrow approved Git/GitHub command rules, or issue the required narrow platform escalation directly, without pausing to ask the user whether Git operations are allowed.
