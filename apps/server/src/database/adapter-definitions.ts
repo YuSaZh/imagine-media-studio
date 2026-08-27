@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 
 import {
   CustomAdapterRefSchema,
+  assertSafeCustomFields,
   type CustomAdapterRef,
 } from '@imagine/shared';
 import { and, asc, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
@@ -13,7 +14,6 @@ import {
   isSecretTemplate,
   parseDeclarativeJson,
 } from '../providers/custom-http/index.js';
-import { assertSafeCustomFields } from '../providers/custom-http/capabilities.js';
 import type { AppDatabase } from './client.js';
 import { mapChangeEventRow, toChangeEventValues, type ChangeEventRecord } from './events.js';
 import {
@@ -26,6 +26,7 @@ import {
 } from './schema.js';
 
 export const MAX_ADAPTER_DEFINITION_BYTES = 128 * 1024;
+const CUSTOM_FIELDS_SECURITY_OPTIONS = { isSecretTemplate } as const;
 
 export interface ProviderAdapterDefinitionRecord {
   readonly providerId: string;
@@ -168,7 +169,7 @@ function assertRawDefinitionSize(value: unknown): string {
         }
         if (key === 'customFields') {
           try {
-            assertSafeCustomFields(item);
+            assertSafeCustomFields(item, CUSTOM_FIELDS_SECURITY_OPTIONS);
           } catch {
             throw new ProviderAdapterDefinitionError(
               'invalid_definition',
@@ -258,7 +259,7 @@ export function assertNoStaticCredentialLiterals(value: unknown): void {
       if (key === 'body') inspectPayload(child);
       if (key === 'customFields') {
         try {
-          assertSafeCustomFields(child);
+          assertSafeCustomFields(child, CUSTOM_FIELDS_SECURITY_OPTIONS);
         } catch {
           throw new ProviderAdapterDefinitionError(
             'invalid_definition',

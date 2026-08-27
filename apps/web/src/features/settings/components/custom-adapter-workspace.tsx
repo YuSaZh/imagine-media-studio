@@ -7,7 +7,13 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { TrustedAdapterManifestSchema } from '@imagine/shared';
+import {
+  assertSafeCustomFields,
+  isCredentialLikeMetadataKey,
+  isStrictRestrictedRequestSchema,
+  TrustedAdapterManifestSchema,
+} from '@imagine/shared';
+import { isAlias, isMap, isSeq, parseDocument as parseYamlDocument } from 'yaml';
 import {
   AlertTriangle,
   Check,
@@ -328,10 +334,16 @@ const FORBIDDEN_FIELD_NAMES = new Set([
   'credentials',
   'privatekey',
 ]);
+const DECLARATIVE_ENDPOINT_NAMES = new Set(['submit', 'poll', 'cancel', 'connection', 'catalog']);
+const DANGEROUS_REFERENCE_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
 const PREVIEW_REDACT_PATTERN = /(?:authorization|cookie|apikey|api[-_]?key|secret|password|token|credential|signature|private[-_]?key)/iu;
 const ADAPTER_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/u;
-const AUTH_HEADER_PATTERN = /^(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie)$/iu;
-const SECRET_TEMPLATE_PATTERN = /\{\{\s*secret\.[A-Za-z][A-Za-z0-9:_-]*\s*\}\}/u;
+const STATIC_CREDENTIAL_HEADER = /^(?:authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|(?:x[-_])?api[-_]?key|access[-_]?token|oauth[-_]?token|auth(?:[-_]?token)?|credential|signature|password|secret|token|x[-_]?(?:amz|goog|ms)[-_])/iu;
+const CREDENTIAL_FIELD_NAME = /(?:^|[-_.])(?:token|key|api[-_.]?key|authorization|auth|cookie|password|secret|credential|credentials|signature|sig|access[-_.]?token|oauth[-_.]?token|idempotency[-_.]?key|headers?)(?:$|[-_.])/iu;
+const CREDENTIAL_QUERY_TOKEN_PATTERN = /(?:^|[-_.])(?:token|key|api[-_.]?key|access[-_.]?token|auth|authorization|credential|credentials|signature|sig|secret|password|cookie|idempotency[-_.]?key|bearer)(?=$|[-_.])/iu;
+const CREDENTIAL_QUERY_PREFIX_PATTERN = /^x[-_.]?(?:amz|goog|ms)(?:[-_.].+)?$/iu;
+const OAUTH_QUERY_PREFIX_PATTERN = /^oauth(?:[-_.].*)?$/iu;
+const SECRET_TEMPLATE_PATTERN = /\{\{\s*secret\.[^{}]+?\s*\}\}/u;
 const STATIC_SECRET_PATTERN = /(?:Bearer\s+[A-Za-z0-9._-]{8,}|(?:sk|pk|ghp|xai|AIza)[-_A-Za-z0-9]{8,})/u;
 const STATUS_LABELS: Record<AdapterWorkspaceStatus, string> = {
   loading: 'Loading adapter workspace',
@@ -609,6 +621,52 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+type SecurityPathSegment = string | number;
+type CredentialContainer = 'body' | 'customFields' | 'files' | 'headers' | 'query' | 'requestSchema' | 'requestSchemaProperties';
+
+function securityPathString(path: readonly SecurityPathSegment[]): string {
+  return path.reduce<string>((output, segment) => typeof segment === 'number' ? `${output}[${segment}]` : `${output}.${segment}`, '$');
+}
+
+function isExportEnvelopeRoot(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === 3 &&
+    keys.every((key) => key === 'schemaVersion' || key === 'version' || key === 'definition') &&
+    value.schemaVersion === 1 &&
+    typeof value.version === 'string' &&
+    isObject(value.definition);
+}
+
+function isAllowedSecretRefPath(path: readonly SecurityPathSegment[], envelope: boolean): boolean {
+  const offset = envelope ? 1 : 0;
+  return path.length === offset + 3 &&
+    (!envelope || path[0] === 'definition') &&
+    typeof path[offset] === 'string' &&
+    DECLARATIVE_ENDPOINT_NAMES.has(path[offset] as string) &&
+    path[offset + 1] === 'auth' &&
+    path[offset + 2] === 'secretRef';
+}
+
+function isSafeSecretReference(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  return normalized.length > 0 &&
+    normalized.length <= 128 &&
+    !DANGEROUS_REFERENCE_NAMES.has(normalized);
+}
+
+function isCredentialLikeQueryName(value: string): boolean {
+  const normalized = value.trim();
+  return CREDENTIAL_QUERY_TOKEN_PATTERN.test(normalized) ||
+    CREDENTIAL_QUERY_PREFIX_PATTERN.test(normalized) ||
+    OAUTH_QUERY_PREFIX_PATTERN.test(normalized);
+}
+
+function isCredentialLikeFieldName(value: string): boolean {
+  return CREDENTIAL_FIELD_NAME.test(value) || isCredentialLikeQueryName(value);
+}
+
 function normalizeFieldName(value: string): string {
   return value.replace(/[-_]/gu, '').toLowerCase();
 }
@@ -616,21 +674,98 @@ function normalizeFieldName(value: string): string {
 function isForbiddenFieldName(value: string): boolean {
   const normalized = normalizeFieldName(value);
   if (normalized === 'requiredsecrets') return false;
-  return FORBIDDEN_FIELD_NAMES.has(normalized) || normalized.startsWith('secret') || normalized.endsWith('token');
+  return FORBIDDEN_FIELD_NAMES.has(normalized);
 }
 
-function forbiddenFieldPaths(value: unknown, path = '$', seen = new Set<object>()): string[] {
+function childCredentialContainer(key: string, container: CredentialContainer | undefined): CredentialContainer | undefined {
+  if (key === 'body') return 'body';
+  if (key === 'customFields') return 'customFields';
+  if (key === 'files') return 'files';
+  if (key === 'headers') return 'headers';
+  if (key === 'query') return 'query';
+  if (key === 'requestSchema') return 'requestSchema';
+  if (container === 'requestSchema' && key === 'properties') return 'requestSchemaProperties';
+  if (container === 'requestSchemaProperties') return 'requestSchema';
+  return container;
+}
+
+function schemaChildContainer(
+  container: CredentialContainer | undefined,
+  key: string,
+  child: unknown,
+): CredentialContainer | 'reject' | undefined {
+  const schemaProperty = container === 'requestSchemaProperties' ||
+    (container === 'customFields' && isCredentialLikeMetadataKey(key));
+  if (!schemaProperty) return undefined;
+  return isStrictRestrictedRequestSchema(child, { maxKeys: MAX_SECURITY_KEYS }) ? 'requestSchema' : 'reject';
+}
+
+function forbiddenFieldPaths(
+  value: unknown,
+  path: string,
+  pathSegments: readonly SecurityPathSegment[],
+  envelope: boolean,
+  container: CredentialContainer | undefined,
+  seen: Set<object>,
+): string[] {
+  if (typeof value === 'string') return SECRET_TEMPLATE_PATTERN.test(value) ? [path] : [];
   if (value === null || typeof value !== 'object') return [];
   if (seen.has(value)) return [`${path} (cycle)`];
   seen.add(value);
   const result: string[] = [];
   if (Array.isArray(value)) {
-    value.forEach((item, index) => result.push(...forbiddenFieldPaths(item, `${path}[${index}]`, seen)));
+    value.forEach((item, index) => {
+      result.push(...forbiddenFieldPaths(item, `${path}[${index}]`, [...pathSegments, index], envelope, container, seen));
+    });
   } else {
     Object.entries(value).forEach(([key, child]) => {
       const childPath = `${path}.${key}`;
-      if (isForbiddenFieldName(key)) result.push(childPath);
-      result.push(...forbiddenFieldPaths(child, childPath, seen));
+      const childPathSegments = [...pathSegments, key];
+      if (key === 'customFields') {
+        try {
+          assertSafeCustomFields(child, CUSTOM_FIELDS_SECURITY_OPTIONS);
+        } catch {
+          result.push(childPath);
+          return;
+        }
+        return;
+      }
+      const schemaContainer = schemaChildContainer(container, key, child);
+      if (schemaContainer !== undefined) {
+        if (schemaContainer === 'reject') result.push(childPath);
+        else result.push(...forbiddenFieldPaths(child, childPath, childPathSegments, envelope, schemaContainer, seen));
+        return;
+      }
+      if (container === 'body' && isCredentialLikeFieldName(key)) {
+        result.push(childPath);
+        return;
+      }
+      if (container === 'headers' && STATIC_CREDENTIAL_HEADER.test(key)) {
+        result.push(childPath);
+        return;
+      }
+      if (container === 'query' && isCredentialLikeQueryName(key)) {
+        result.push(childPath);
+        return;
+      }
+      if (container === 'files' && key === 'field' && typeof child === 'string' && isCredentialLikeFieldName(child)) {
+        result.push(childPath);
+        return;
+      }
+      if (key === 'secretRef' && isAllowedSecretRefPath(childPathSegments, envelope)) {
+        if (!isSafeSecretReference(child) || (typeof child === 'string' && SECRET_TEMPLATE_PATTERN.test(child))) result.push(childPath);
+        return;
+      }
+      if (key === 'secretRef') {
+        result.push(childPath);
+        return;
+      }
+      if (isForbiddenFieldName(key)) {
+        result.push(childPath);
+        return;
+      }
+      const childContainer = childCredentialContainer(key, container);
+      result.push(...forbiddenFieldPaths(child, childPath, childPathSegments, envelope, childContainer, seen));
     });
   }
   seen.delete(value);
@@ -639,7 +774,7 @@ function forbiddenFieldPaths(value: unknown, path = '$', seen = new Set<object>(
 
 /** Returns forbidden browser/server boundary fields without exposing values. */
 export function findForbiddenAdapterFields(value: unknown): readonly string[] {
-  return forbiddenFieldPaths(value);
+  return forbiddenFieldPaths(value, '$', [], isExportEnvelopeRoot(value), undefined, new Set<object>());
 }
 
 export function hasForbiddenAdapterFields(value: unknown): boolean {
@@ -658,50 +793,174 @@ export interface AdapterValidationFailure {
 
 export type AdapterValidationResult<T> = AdapterValidationSuccess<T> | AdapterValidationFailure;
 
+const MAX_SECURITY_DOCUMENT_BYTES = 128 * 1024;
+const MAX_SECURITY_DEPTH = 12;
+const MAX_SECURITY_NODES = 10_000;
+const MAX_SECURITY_KEYS = 512;
+const MAX_SECURITY_ARRAY_ITEMS = 128;
+const MAX_SECURITY_STRING_LENGTH = 4_096;
+const CUSTOM_FIELDS_SECURITY_OPTIONS = {
+  isSecretTemplate: (value: string): boolean => SECRET_TEMPLATE_PATTERN.test(value),
+  maxKeys: MAX_SECURITY_KEYS,
+} as const;
+
+function assertSafeYamlNodes(node: unknown, seen = new Set<object>()): void {
+  if (node === null || typeof node !== 'object') return;
+  if (isAlias(node)) throw new Error('YAML aliases are not allowed.');
+  if (seen.has(node)) throw new Error('YAML document contains a cycle.');
+  const candidate = node as { readonly tag?: unknown; readonly items?: readonly unknown[] };
+  if (candidate.tag !== undefined) throw new Error('YAML tags are not allowed.');
+  seen.add(node);
+  if (isSeq(node)) {
+    for (const item of candidate.items ?? []) assertSafeYamlNodes(item, seen);
+  } else if (isMap(node)) {
+    for (const pair of candidate.items ?? []) {
+      const entry = pair as { readonly key?: unknown; readonly value?: unknown };
+      assertSafeYamlNodes(entry.key, seen);
+      assertSafeYamlNodes(entry.value, seen);
+    }
+  }
+  seen.delete(node);
+}
+
+function assertBoundedSecurityTree(value: unknown, depth = 0, state = { arrays: 0, keys: 0, nodes: 0, strings: 0 }, seen = new Set<object>()): void {
+  state.nodes += 1;
+  if (state.nodes > MAX_SECURITY_NODES || depth > MAX_SECURITY_DEPTH) throw new Error('Adapter document exceeds the browser safety bounds.');
+  if (typeof value === 'string') {
+    state.strings += value.length;
+    if (value.length > MAX_SECURITY_STRING_LENGTH || state.strings > MAX_SECURITY_NODES * MAX_SECURITY_STRING_LENGTH) throw new Error('Adapter document contains oversized strings.');
+    return;
+  }
+  if (value === null || typeof value === 'boolean') return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Adapter document contains a non-finite number.');
+    return;
+  }
+  if (typeof value !== 'object') throw new Error('Adapter document contains a non-JSON value.');
+  if (seen.has(value)) throw new Error('Adapter document contains a cycle.');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      state.arrays += 1;
+      if (value.length > MAX_SECURITY_ARRAY_ITEMS || state.arrays > MAX_SECURITY_ARRAY_ITEMS) throw new Error('Adapter document contains an oversized array.');
+      value.forEach((item) => assertBoundedSecurityTree(item, depth + 1, state, seen));
+    } else {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== null && prototype !== Object.prototype) throw new Error('Adapter document object is not plain.');
+      const entries = Object.entries(value);
+      state.keys += entries.length;
+      if (state.keys > MAX_SECURITY_KEYS) throw new Error('Adapter document contains too many keys.');
+      entries.forEach(([key, child]) => {
+        if (key.length === 0 || key.length > MAX_SECURITY_STRING_LENGTH || DANGEROUS_REFERENCE_NAMES.has(key)) throw new Error('Adapter document contains an invalid key.');
+        assertBoundedSecurityTree(child, depth + 1, state, seen);
+      });
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function parseYamlSecurityDocument(value: string): unknown {
+  if (!value.trim()) throw new Error('Adapter document is required.');
+  if (new TextEncoder().encode(value).byteLength > MAX_SECURITY_DOCUMENT_BYTES) throw new Error('Adapter document is too large.');
+  let document: ReturnType<typeof parseYamlDocument>;
+  try {
+    document = parseYamlDocument(value, {
+      merge: false,
+      prettyErrors: false,
+      resolveKnownTags: false,
+      schema: 'core',
+      strict: true,
+      stringKeys: true,
+      uniqueKeys: true,
+      version: '1.2',
+    });
+  } catch {
+    throw new Error('Adapter YAML is invalid.');
+  }
+  if (document.errors.length > 0) throw new Error('Adapter YAML is invalid.');
+  if (document.warnings.length > 0) throw new Error('Adapter YAML is unsafe.');
+  const directives = document.directives;
+  const directiveTags = Object.keys(directives?.tags ?? {});
+  if (
+    directives?.docStart === true ||
+    directives?.docEnd === true ||
+    directives?.yaml?.explicit === true ||
+    directiveTags.some((tag) => tag !== '!!')
+  ) {
+    throw new Error('Adapter YAML directives are not allowed.');
+  }
+  assertSafeYamlNodes(document.contents);
+  let parsed: unknown;
+  try {
+    parsed = document.toJS({ mapAsMap: false, maxAliasCount: 0 }) as unknown;
+  } catch {
+    throw new Error('Adapter YAML contains an unsupported alias or value.');
+  }
+  assertBoundedSecurityTree(parsed);
+  return parsed;
+}
+
+function assertUniqueJsonKeys(value: string, label: string): void {
+  let document: ReturnType<typeof parseYamlDocument>;
+  try {
+    document = parseYamlDocument(value, {
+      prettyErrors: false,
+      schema: 'json',
+      strict: true,
+      stringKeys: true,
+      uniqueKeys: true,
+    });
+  } catch {
+    throw new Error(`${label} must be valid JSON.`);
+  }
+  if (document.errors.length > 0) throw new Error(`${label} must not contain duplicate object keys.`);
+  if (document.warnings.length > 0) throw new Error(`${label} must be valid JSON.`);
+  try {
+    document.toJS({ mapAsMap: false, maxAliasCount: 0 });
+  } catch {
+    throw new Error(`${label} must be valid JSON.`);
+  }
+}
+
 function parseJsonText(value: string, label: string): unknown {
   if (!value.trim()) throw new Error(`${label} is required.`);
+  if (new TextEncoder().encode(value).byteLength > MAX_SECURITY_DOCUMENT_BYTES) throw new Error(`${label} is too large.`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
     throw new Error(`${label} must be valid JSON.`);
   }
+  assertUniqueJsonKeys(value, label);
+  assertBoundedSecurityTree(parsed);
   const forbidden = findForbiddenAdapterFields(parsed);
   if (forbidden.length > 0) throw new Error(`${label} contains server-only fields.`);
   return parsed;
 }
 
-function validateYamlBoundary(value: string): void {
-  if (!value.trim()) throw new Error('Adapter document is required.');
-  // YAML is parsed and bounded by the server. The browser still rejects the
-  // field names that must never cross this boundary, including YAML mappings.
-  const lines = value.split(/\r?\n/u);
-  for (const line of lines) {
-    const match = /^\s*["']?([A-Za-z][A-Za-z0-9_-]*)["']?\s*:/u.exec(line);
-    if (match && isForbiddenFieldName(match[1] ?? '')) {
-      throw new Error('Adapter document contains server-only fields.');
-    }
-  }
-}
-
 export function validateCustomHttpDocument(format: AdapterDocumentFormat, document: string): AdapterValidationResult<string> {
   try {
-    if (format === 'json') {
-      const parsed = parseJsonText(document, 'Adapter document');
-      if (!isObject(parsed)) throw new Error('Adapter document must be a JSON object.');
-    } else {
-      validateYamlBoundary(document);
-    }
+    const parsed = format === 'json' ? parseJsonText(document, 'Adapter document') : parseYamlSecurityDocument(document);
+    if (!isObject(parsed)) throw new Error('Adapter document must be an object.');
+    assertSafeImportedValue(parsed);
     return { ok: true, value: document };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'Adapter document is invalid.' };
   }
 }
 
-function assertSafeImportedValue(value: unknown, path = '$', headerContext = false, seen = new Set<object>()): void {
+function assertSafeImportedValue(
+  value: unknown,
+  path = '$',
+  container: CredentialContainer | undefined = undefined,
+  seen = new Set<object>(),
+  pathSegments: readonly SecurityPathSegment[] = [],
+  envelope = pathSegments.length === 0 && isExportEnvelopeRoot(value),
+): void {
   if (typeof value === 'string') {
-    if (headerContext && value.trim() && !SECRET_TEMPLATE_PATTERN.test(value)) throw new Error(`Imported document contains a static credential at ${path}.`);
-    if (STATIC_SECRET_PATTERN.test(value) && !SECRET_TEMPLATE_PATTERN.test(value)) throw new Error(`Imported document contains a static credential at ${path}.`);
+    if (SECRET_TEMPLATE_PATTERN.test(value)) throw new Error(`Imported document contains a secret template at ${path}.`);
+    if (STATIC_SECRET_PATTERN.test(value)) throw new Error(`Imported document contains a static credential at ${path}.`);
     return;
   }
   if (value === null || typeof value !== 'object') return;
@@ -709,13 +968,52 @@ function assertSafeImportedValue(value: unknown, path = '$', headerContext = fal
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      value.forEach((item, index) => assertSafeImportedValue(item, `${path}[${index}]`, headerContext, seen));
+      value.forEach((item, index) => {
+        const childPathSegments = [...pathSegments, index];
+        assertSafeImportedValue(item, securityPathString(childPathSegments), container, seen, childPathSegments, envelope);
+      });
       return;
     }
     Object.entries(value).forEach(([key, child]) => {
-      if (isForbiddenFieldName(key) && normalizeFieldName(key) !== 'requiredsecrets') throw new Error(`Imported document contains a server-only field at ${path}.${key}.`);
-      const childHeaderContext = headerContext || AUTH_HEADER_PATTERN.test(key);
-      assertSafeImportedValue(child, `${path}.${key}`, childHeaderContext, seen);
+      const childPathSegments = [...pathSegments, key];
+      const childPath = securityPathString(childPathSegments);
+      if (key === 'customFields') {
+        assertSafeCustomFields(child, CUSTOM_FIELDS_SECURITY_OPTIONS);
+        return;
+      }
+      const schemaContainer = schemaChildContainer(container, key, child);
+      if (schemaContainer !== undefined) {
+        if (schemaContainer === 'reject') {
+          const message = container === 'customFields'
+            ? 'Imported document contains a credential-like custom field.'
+            : 'Imported document contains an invalid request schema.';
+          throw new Error(`${message} at ${childPath}.`);
+        }
+        assertSafeImportedValue(child, childPath, schemaContainer, seen, childPathSegments, envelope);
+        return;
+      }
+      if (container === 'body' && isCredentialLikeFieldName(key)) {
+        throw new Error(`Imported document contains a credential-like body field at ${childPath}.`);
+      }
+      if (container === 'headers' && STATIC_CREDENTIAL_HEADER.test(key)) {
+        throw new Error(`Imported document contains a credential header at ${childPath}.`);
+      }
+      if (container === 'query' && isCredentialLikeQueryName(key)) {
+        throw new Error(`Imported document contains a credential-like query parameter at ${childPath}.`);
+      }
+      if (container === 'files' && key === 'field' && typeof child === 'string' && isCredentialLikeFieldName(child)) {
+        throw new Error(`Imported document contains a credential-like multipart field at ${childPath}.`);
+      }
+      if (key === 'secretRef' && isAllowedSecretRefPath(childPathSegments, envelope)) {
+        if (!isSafeSecretReference(child) || (typeof child === 'string' && SECRET_TEMPLATE_PATTERN.test(child))) {
+          throw new Error(`Imported document contains an invalid secret reference at ${childPath}.`);
+        }
+        return;
+      }
+      if (key === 'secretRef') throw new Error(`Imported document contains a secret reference outside adapter authentication at ${childPath}.`);
+      if (isForbiddenFieldName(key)) throw new Error(`Imported document contains a server-only field at ${childPath}.`);
+      const childContainer = childCredentialContainer(key, container);
+      assertSafeImportedValue(child, childPath, childContainer, seen, childPathSegments, envelope);
     });
   } finally {
     seen.delete(value);
@@ -725,24 +1023,9 @@ function assertSafeImportedValue(value: unknown, path = '$', headerContext = fal
 /** Rejects imported static credentials before they reach the draft DOM/state. */
 export function validateAdapterImportSecurity(format: AdapterDocumentFormat, document: string): AdapterValidationResult<string> {
   try {
-    if (format === 'json') {
-      try {
-        assertSafeImportedValue(JSON.parse(document) as unknown);
-      } catch (error) {
-        if (error instanceof SyntaxError) return { ok: false, error: 'Imported document must be valid JSON.' };
-        throw error;
-      }
-    } else {
-      for (const line of document.split(/\r?\n/u)) {
-        const match = /^\s*["']?([^"':\s]+)["']?\s*:\s*(.*?)\s*$/u.exec(line);
-        if (!match) continue;
-        const key = match[1] ?? '';
-        const value = match[2] ?? '';
-        const sensitive = isForbiddenFieldName(key) || AUTH_HEADER_PATTERN.test(key) || normalizeFieldName(key) === 'headers';
-        if (sensitive && value && !SECRET_TEMPLATE_PATTERN.test(value)) throw new Error(`Imported document contains a static credential at ${key}.`);
-        if (STATIC_SECRET_PATTERN.test(value) && !SECRET_TEMPLATE_PATTERN.test(value)) throw new Error(`Imported document contains a static credential at ${key}.`);
-      }
-    }
+    const parsed = format === 'json' ? parseJsonText(document, 'Imported document') : parseYamlSecurityDocument(document);
+    if (!isObject(parsed)) throw new Error('Imported document must be an object.');
+    assertSafeImportedValue(parsed);
     return { ok: true, value: document };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'Imported document contains unsafe credential fields.' };

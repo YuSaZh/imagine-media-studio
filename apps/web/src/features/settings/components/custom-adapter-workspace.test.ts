@@ -10,6 +10,7 @@ import {
   applyImportedTrustedManifest,
   createLatestImportSequence,
   formatAdapterExportName,
+  findForbiddenAdapterFields,
   hasForbiddenAdapterFields,
   isAdapterRevisionDisabled,
   isFileImportSelectionDisabled,
@@ -54,6 +55,51 @@ const trustedManifest = JSON.stringify({
     stackSizeMb: 4,
   },
 });
+
+function customHttpSpecWithAuth(): Record<string, unknown> {
+  const spec = JSON.parse(DEFAULT_CUSTOM_HTTP_DRAFT.document) as Record<string, unknown>;
+  const submit = spec.submit as Record<string, unknown>;
+  submit.auth = { type: 'bearer', secretRef: 'apiKey', location: 'header' };
+  return spec;
+}
+
+function customHttpSpecWithSchemaMetadata(customFieldApiKey: unknown = { type: 'string', maxLength: 64 }): Record<string, unknown> {
+  const spec = customHttpSpecWithAuth();
+  const model = (spec.models as Array<Record<string, unknown>>)[0]!;
+  model.requestSchema = {
+    type: 'object',
+    properties: {
+      apiKey: { type: 'string', maxLength: 64 },
+      authorization: { type: 'string' },
+      secretary: { type: 'string' },
+      mytoken: { type: 'string' },
+    },
+    required: [],
+    additionalProperties: false,
+  };
+  const capabilities = model.capabilities as Record<string, unknown>;
+  capabilities.customFields = { apiKey: customFieldApiKey };
+  return spec;
+}
+
+function exportedJsonEnvelope(spec: Record<string, unknown>, version = '1.0.0'): string {
+  return JSON.stringify({ schemaVersion: 1, version, definition: spec });
+}
+
+function exportedYamlEnvelope(secretRef = 'apiKey'): string {
+  return [
+    'definition:',
+    '  submit:',
+    '    auth:',
+    '      location: header',
+    `      secretRef: ${secretRef}`,
+    '      type: bearer',
+    '    body:',
+    '      type: json',
+    'schemaVersion: 1',
+    'version: 1.0.0',
+  ].join('\n');
+}
 
 describe('CustomAdapterWorkspace SSR contract', () => {
   it('renders the custom HTTP document workflow with labeled controls', () => {
@@ -309,7 +355,7 @@ describe('CustomAdapterWorkspace mapping and validation', () => {
   it('rejects secret-like and administrator-only fields recursively', () => {
     expect(hasForbiddenAdapterFields({ request: { extra: { adminEnabled: true } } })).toBe(true);
     expect(hasForbiddenAdapterFields({ request: { extra: { apiKey: 'plaintext' } } })).toBe(true);
-    expect(hasForbiddenAdapterFields({ headers: { Authorization: '{{ secret.apiKey }}' } })).toBe(false);
+    expect(hasForbiddenAdapterFields({ headers: { Authorization: '{{ secret.apiKey }}' } })).toBe(true);
     expect(validateCustomHttpDocument('json', '{"adminEnabled":true}')).toMatchObject({
       ok: false,
       error: expect.stringContaining('server-only'),
@@ -320,13 +366,130 @@ describe('CustomAdapterWorkspace mapping and validation', () => {
     });
   });
 
-  it('rejects static imported credentials before accepting draft content but permits safe templates', () => {
+  it('allows only schema-owned auth secret references through JSON and YAML boundaries', () => {
+    const spec = customHttpSpecWithAuth();
+    const json = exportedJsonEnvelope(spec);
+    const yaml = exportedYamlEnvelope();
+
+    expect(findForbiddenAdapterFields(spec)).toEqual([]);
+    expect(findForbiddenAdapterFields(JSON.parse(json) as unknown)).toEqual([]);
+    expect(validateCustomHttpDocument('json', JSON.stringify(spec))).toMatchObject({ ok: true });
+    expect(validateCustomHttpDocument('yaml', 'schemaVersion: 1\nsubmit:\n  auth: { type: bearer, secretRef: apiKey, location: header }\n')).toMatchObject({ ok: true });
+    expect(validateCustomHttpDocument('json', json)).toMatchObject({ ok: true });
+    expect(validateCustomHttpDocument('yaml', yaml)).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('json', json)).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('yaml', yaml)).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('json', JSON.stringify(spec))).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('yaml', 'schemaVersion: 1\nsubmit:\n  auth: { type: bearer, secretRef: apiKey, location: header }\n')).toMatchObject({ ok: true });
+  });
+
+  it('allows credential-like request schema names and schema-shaped custom fields', () => {
+    const document = JSON.stringify(customHttpSpecWithSchemaMetadata());
+    expect(findForbiddenAdapterFields(JSON.parse(document) as unknown)).toEqual([]);
+    expect(validateCustomHttpDocument('json', document)).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('json', document)).toMatchObject({ ok: true });
+  });
+
+  it('delegates null, empty, list, and descriptive custom fields to the shared guard', () => {
+    for (const customFields of [null, {}, [], { description: 'A display-only note.' }]) {
+      const spec = customHttpSpecWithAuth();
+      const model = (spec.models as Array<Record<string, unknown>>)[0]!;
+      (model.capabilities as Record<string, unknown>).customFields = customFields;
+      const document = JSON.stringify(spec);
+      expect(validateCustomHttpDocument('json', document)).toMatchObject({ ok: true });
+      expect(validateAdapterImportSecurity('json', document)).toMatchObject({ ok: true });
+    }
+  });
+
+  it('rejects credential-like custom fields unless they contain a strict request schema', () => {
+    for (const customFieldApiKey of ['plaintext', '{{ secret.apiKey }}']) {
+      const document = JSON.stringify(customHttpSpecWithSchemaMetadata(customFieldApiKey));
+      expect(validateCustomHttpDocument('json', document)).toMatchObject({ ok: false });
+      expect(validateAdapterImportSecurity('json', document)).toMatchObject({ ok: false });
+    }
+  });
+
+  it('rejects secret references outside auth paths and unsafe reference values in both formats', () => {
+    const spec = customHttpSpecWithAuth();
+    const invalidJsonValues = [
+      { ...spec, metadata: { secretRef: 'apiKey' } },
+      { ...spec, submit: { ...(spec.submit as Record<string, unknown>), body: { type: 'json', value: { secretRef: 'apiKey' } } } },
+      { ...spec, submit: { ...(spec.submit as Record<string, unknown>), auth: { type: 'bearer', secretRef: '{{ secret.apiKey }}', location: 'header' } } },
+      { ...spec, submit: { ...(spec.submit as Record<string, unknown>), auth: { type: 'bearer', secretRef: '__proto__', location: 'header' } } },
+      { ...spec, submit: { ...(spec.submit as Record<string, unknown>), auth: { type: 'bearer', secretRef: '   ', location: 'header' } } },
+      { ...spec, submit: { ...(spec.submit as Record<string, unknown>), auth: { type: 'bearer', secretRef: 'x'.repeat(129), location: 'header' } } },
+    ];
+    for (const value of invalidJsonValues) {
+      const document = exportedJsonEnvelope(value);
+      expect(hasForbiddenAdapterFields(value)).toBe(true);
+      expect(validateCustomHttpDocument('json', document)).toMatchObject({ ok: false });
+      expect(validateAdapterImportSecurity('json', document)).toMatchObject({ ok: false });
+    }
+
+    expect(validateAdapterImportSecurity('yaml', exportedYamlEnvelope('Bearer abcdefgh'))).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('yaml', exportedYamlEnvelope('__proto__'))).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', [
+      'schemaVersion: 1',
+      'id: unsafe',
+      'name: Unsafe',
+      'operations: [image.generate]',
+      'models: []',
+      'submit:',
+      '  headers:',
+      '    Authorization: Bearer static-secret-value',
+    ].join('\n'))).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', [
+      'schemaVersion: 1',
+      'version: 1.0.0',
+      'definition:',
+      '  metadata: { secretRef: apiKey }',
+    ].join('\n'))).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', [
+      'submit:',
+      '  auth: &auth',
+      '    type: bearer',
+      '    secretRef: apiKey',
+      '    location: header',
+      'copy: *auth',
+    ].join('\n'))).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', [
+      'submit:',
+      '  auth:',
+      '    type: bearer',
+      '    secretRef: apiKey',
+      '    secretRef: otherKey',
+      '    location: header',
+    ].join('\n'))).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('json', '{"submit":{"auth":{"secretRef":"apiKey","secretRef":"otherKey"}}}')).toMatchObject({ ok: false });
+  });
+
+  it('rejects static imported credentials and all secret templates except auth references', () => {
+    for (const header of ['Authorization', 'X-API-Key', 'X-Goog-Api-Key']) {
+      expect(validateAdapterImportSecurity('json', JSON.stringify({ headers: { [header]: '{{ secret.apiKey }}' } }))).toMatchObject({ ok: false });
+    }
     expect(validateAdapterImportSecurity('json', '{"headers":{"Authorization":"Bearer static-secret-value"}}')).toMatchObject({ ok: false });
-    expect(validateAdapterImportSecurity('json', '{"headers":{"Authorization":"Bearer {{ secret.apiKey }}"}}')).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('json', '{"headers":{"X-Trace":"{{ secret.apiKey }}"}}')).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('json', '{"query":{"model":"{{ secret.apiKey }}"}}')).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('json', '{"body":{"value":{"prompt":"{{ secret.apiKey }}"}}}')).toMatchObject({ ok: false });
     expect(validateAdapterImportSecurity('json', '{"headers":{"Content-Type":"application/json"}}')).toMatchObject({ ok: true });
     expect(validateAdapterImportSecurity('json', '{"apiKey":"plaintext"}')).toMatchObject({ ok: false });
     expect(validateAdapterImportSecurity('yaml', 'Authorization: Bearer static-secret-value')).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', 'headers:\n  X-Trace: "{{ secret.apiKey }}"')).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', 'query:\n  model: "{{ secret.apiKey }}"')).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', 'body:\n  value:\n    prompt: "{{ secret.apiKey }}"')).toMatchObject({ ok: false });
+    expect(validateAdapterImportSecurity('yaml', 'headers:\n  X-Goog-Api-Key: "{{ secret.apiKey }}"')).toMatchObject({ ok: false });
     expect(validateAdapterImportSecurity('json', '{"headers":')).toMatchObject({ ok: false, error: expect.stringContaining('valid JSON') });
+  });
+
+  it('accepts backend-compatible secret reference names across JSON and YAML', () => {
+    const reference = ' tenant / $' + '\u03bb';
+    const spec = customHttpSpecWithAuth();
+    const submit = spec.submit as Record<string, unknown>;
+    const value = { ...spec, submit: { ...submit, auth: { type: 'bearer', secretRef: reference, location: 'header' } } };
+    expect(validateAdapterImportSecurity('json', exportedJsonEnvelope(value))).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('yaml', 'submit:\n  auth:\n    type: bearer\n    secretRef: " tenant / $\\u03bb "\n    location: header')).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('json', exportedJsonEnvelope({ ...value, submit: { ...value.submit as Record<string, unknown>, auth: { type: 'bearer', secretRef: 'Bearer abcdefgh', location: 'header' } } }))).toMatchObject({ ok: true });
+    expect(validateAdapterImportSecurity('json', exportedJsonEnvelope({ ...value, submit: { ...value.submit as Record<string, unknown>, auth: { type: 'bearer', secretRef: 'constructor', location: 'header' } } }))).toMatchObject({ ok: false });
   });
 
   it('maps a draft without leaking optional values and preserves long documents', () => {

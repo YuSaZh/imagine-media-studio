@@ -6,3 +6,4 @@ export * from './image-input-policy.js';
 export * from './mask-document.js';
 export * from './mask-target.js';
 export * from './viewport-transform.js';
+export * from './custom-fields-security.js';
