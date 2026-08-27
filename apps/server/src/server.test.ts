@@ -5,9 +5,11 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockGenerationRequest } from '@imagine/testkit';
+import type { CustomAdapterRef } from '@imagine/shared';
 import sharp from 'sharp';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createAdapterWorkerFactory, type AdapterWorkerFactory } from './adapters/worker-host.js';
 import type { AppConfig } from './config.js';
 import {
   MOCK_VIDEO_MP4_BASE64,
@@ -15,6 +17,7 @@ import {
 } from './providers/mock-provider.js';
 import { MOCK_PROVIDER_ID } from './providers/provider-registry.js';
 import type { ProviderHttpExecutor } from './providers/provider-http-client.js';
+import { canonicalDeclarativeSpec, parseDeclarativeJson } from './providers/custom-http/index.js';
 import { createServer, type ImagineServer } from './server.js';
 
 const temporaryDirectories: string[] = [];
@@ -25,6 +28,58 @@ const VALID_PNG = Buffer.from(
   'base64',
 );
 const VALID_PNG_SHA256 = createHash('sha256').update(VALID_PNG).digest('hex');
+const CUSTOM_HTTP_FIXTURE = new URL(
+  '../../../fixtures/providers/custom-http/sync-image/adapter.json',
+  import.meta.url,
+);
+const TRUSTED_JS_FIXTURE_DIRECTORY = new URL('./providers/custom-js/fixtures/', import.meta.url);
+type DeclarativeAdapterRef = Omit<CustomAdapterRef, 'kind'> & { kind: 'declarative-http' };
+type TrustedJavaScriptAdapterRef = Omit<CustomAdapterRef, 'kind'> & { kind: 'trusted-javascript' };
+
+async function customHttpRevision(withConnection = false): Promise<{
+  definition: Record<string, unknown>;
+  ref: DeclarativeAdapterRef;
+}> {
+  const definition = JSON.parse(await readFile(CUSTOM_HTTP_FIXTURE, 'utf8')) as Record<string, unknown>;
+  if (withConnection) {
+    definition.connection = {
+      expectedStatus: [200],
+      extract: {},
+      method: 'GET',
+      path: '/health',
+    };
+  }
+  const canonical = canonicalDeclarativeSpec(parseDeclarativeJson(JSON.stringify(definition)));
+  return {
+    definition,
+    ref: {
+      adapterId: 'sync-image',
+      digest: createHash('sha256').update(canonical, 'utf8').digest('hex'),
+      kind: 'declarative-http',
+      version: withConnection ? '1.0.1' : '1.0.0',
+    },
+  };
+}
+
+async function trustedJavaScriptRevision(): Promise<{
+  manifest: Record<string, unknown>;
+  ref: TrustedJavaScriptAdapterRef;
+  source: Buffer;
+}> {
+  const manifest = JSON.parse(await readFile(new URL('trusted-fixture-manifest.json', TRUSTED_JS_FIXTURE_DIRECTORY), 'utf8')) as Record<string, unknown>;
+  const source = await readFile(new URL('trusted-fixture.mjs', TRUSTED_JS_FIXTURE_DIRECTORY));
+  const adapterId = manifest.id;
+  const version = manifest.version;
+  const digest = manifest.sha256;
+  if (typeof adapterId !== 'string' || typeof version !== 'string' || typeof digest !== 'string') {
+    throw new Error('Trusted JavaScript fixture manifest is invalid.');
+  }
+  return {
+    manifest,
+    ref: { adapterId, digest, kind: 'trusted-javascript', version },
+    source,
+  };
+}
 
 function multipartUpload(
   fields: Readonly<Record<string, string>>,
@@ -71,6 +126,7 @@ async function createTestServer(
   withWebDist = false,
   appPassword: string | null = null,
   providerHttpExecutor?: ProviderHttpExecutor,
+  adapterWorkerFactory?: AdapterWorkerFactory,
 ): Promise<ImagineServer> {
   const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-server-test-'));
   temporaryDirectories.push(dataDir);
@@ -105,6 +161,7 @@ async function createTestServer(
     migrationsDirectory,
     startRunner,
     ...(providerHttpExecutor === undefined ? {} : { providerHttpExecutor }),
+    ...(adapterWorkerFactory === undefined ? {} : { adapterWorkerFactory }),
   });
   servers.push(server);
   return server;
@@ -887,5 +944,123 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(cookie).toContain('SameSite=Strict');
     expect(authenticated.statusCode).toBe(200);
     expect(basic.statusCode).toBe(200);
+  });
+
+  it('wires custom adapter definitions, scoped HTTP, and the worker runtime', async () => {
+    const targets: string[] = [];
+    const providerHttpExecutor: ProviderHttpExecutor = async (target) => {
+      targets.push(target.url.toString());
+      return { body: '{}', headers: {}, statusCode: 200 };
+    };
+    const adapterWorkerFactory = createAdapterWorkerFactory({
+      workerEntryUrl: new URL('./providers/custom-js/fixtures/trusted-worker-entry.mjs', import.meta.url),
+    });
+    const server = await createTestServer(
+      false,
+      false,
+      false,
+      'test-password',
+      providerHttpExecutor,
+      adapterWorkerFactory,
+    );
+    const adminHeaders = {
+      authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}`,
+    };
+
+    const httpRevision = await customHttpRevision(true);
+    const httpProvider = server.providers.create({
+      baseUrl: 'https://8.8.8.8:8443',
+      name: 'Scoped custom HTTP',
+      type: 'custom-http-v1',
+      apiKey: 'custom-http-secret',
+    });
+    server.adapterDefinitions.replace(httpProvider.id, httpRevision);
+    await expect(server.providers.refreshModels(httpProvider.id)).resolves.toHaveLength(1);
+    await expect(server.providers.testConnection(httpProvider.id)).resolves.toMatchObject({ ok: true });
+    expect(targets).toEqual(['https://8.8.8.8:8443/health']);
+
+    const httpJob = await server.app.inject({
+      headers: adminHeaders,
+      method: 'POST',
+      payload: {
+        extra: { style: 'clean' },
+        inputs: [],
+        modelId: 'image-model',
+        operation: 'image.generate',
+        prompt: 'custom HTTP fixture',
+        providerId: httpProvider.id,
+      },
+      url: '/internal/jobs',
+    });
+    expect(httpJob.statusCode).toBe(202);
+    expect(server.jobs.get(httpJob.json<{ job: { id: string } }>().job.id)?.adapterRef).toEqual(httpRevision.ref);
+
+    const jsRevision = await trustedJavaScriptRevision();
+    const jsProvider = server.providers.create({
+      name: 'Trusted JavaScript fixture',
+      type: 'custom-js-v1',
+    });
+    await server.adapterStore.install({ manifest: jsRevision.manifest, source: jsRevision.source });
+    server.adapterDefinitions.replace(jsProvider.id, { ref: jsRevision.ref });
+    await expect(server.providers.refreshModels(jsProvider.id)).resolves.toHaveLength(1);
+
+    const jsJob = await server.app.inject({
+      headers: adminHeaders,
+      method: 'POST',
+      payload: {
+        inputs: [],
+        modelId: 'fixture-model',
+        operation: 'image.generate',
+        prompt: 'custom JS fixture',
+        providerId: jsProvider.id,
+      },
+      url: '/internal/jobs',
+    });
+    expect(jsJob.statusCode).toBe(202);
+    expect(server.jobs.get(jsJob.json<{ job: { id: string } }>().job.id)?.adapterRef).toEqual(jsRevision.ref);
+  });
+
+  it('keeps adapter management fail-closed without an application password', async () => {
+    const server = await createTestServer(false, false);
+    await expect(server.adapterStore.install({ manifest: {}, source: '' })).rejects.toThrow(
+      'Administrator authorization is required for adapter management.',
+    );
+  });
+
+  it('closes the runner, worker host, store, and database in order', async () => {
+    const server = await createTestServer(false, false);
+    const phases: string[] = [];
+    vi.spyOn(server.runner, 'stop').mockImplementation(async () => {
+      phases.push('runner');
+    });
+    vi.spyOn(server.adapterWorkerHost, 'close').mockImplementation(async () => {
+      phases.push('worker');
+    });
+    vi.spyOn(server.adapterStore, 'close').mockImplementation(async () => {
+      phases.push('store');
+      expect(server.adapterDefinitions.getCurrent('missing')).toBeNull();
+    });
+
+    await server.app.close();
+    expect(phases).toEqual(['runner', 'worker', 'store']);
+    expect(() => server.adapterDefinitions.getCurrent('missing')).toThrow();
+    servers.splice(servers.indexOf(server), 1);
+  });
+
+  it('continues resource cleanup when an earlier close step fails', async () => {
+    const server = await createTestServer(false, false);
+    const phases: string[] = [];
+    vi.spyOn(server.runner, 'stop').mockRejectedValue(new Error('runner close failed'));
+    vi.spyOn(server.adapterWorkerHost, 'close').mockImplementation(async () => {
+      phases.push('worker');
+    });
+    vi.spyOn(server.adapterStore, 'close').mockImplementation(async () => {
+      phases.push('store');
+    });
+
+    await expect(server.app.close()).rejects.toBeInstanceOf(AggregateError);
+    expect(phases).toEqual(['worker', 'store']);
+    expect(() => server.adapterDefinitions.getCurrent('missing')).toThrow();
+    servers.splice(servers.indexOf(server), 1);
   });
 });

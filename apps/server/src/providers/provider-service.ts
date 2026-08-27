@@ -6,10 +6,17 @@ import {
   ProviderDtoSchema,
   ProviderTypeSchema,
   SafeConfigSchema,
+  type CustomAdapterRef,
   type JsonObject,
+  type ModelCapabilities,
   type ProviderDto,
 } from '@imagine/shared';
-import type { ProviderAdapter, ProviderCapabilities, ProviderContext } from '@imagine/provider-contract';
+import type {
+  ProviderAdapter,
+  ProviderCapabilities,
+  ProviderContext,
+  ProviderModel,
+} from '@imagine/provider-contract';
 
 import {
   type ManualModelInput,
@@ -90,7 +97,55 @@ export class ModelCatalogServiceError extends Error {
   }
 }
 
+class InvalidProviderCapabilitiesError extends Error {
+  public override readonly name = 'InvalidProviderCapabilitiesError';
+}
+
 const systemClock: ProviderServiceClock = { now: () => Date.now() };
+
+const CUSTOM_HTTP_PROVIDER_TYPE = 'custom-http-v1' as const;
+const CUSTOM_JS_PROVIDER_TYPE = 'custom-js-v1' as const;
+const MAX_CAPABILITY_MODELS = 200;
+const MAX_CAPABILITY_ARRAY_ITEMS = 128;
+const MAX_CAPABILITY_KEYS = 512;
+const MAX_CAPABILITY_NODES = 10_000;
+const MAX_CAPABILITY_DEPTH = 12;
+const MAX_CAPABILITY_STRING_LENGTH = 4_096;
+const MAX_CAPABILITY_BYTES = 2 * 1024 * 1024;
+const MAX_CAPABILITY_OPERATIONS = 16;
+const CAPABILITY_KEYS = new Set(['providerType', 'models']);
+const MODEL_KEYS = new Set(['id', 'displayName', 'capabilities']);
+const FORBIDDEN_CAPABILITY_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
+
+export type ProviderCatalogSource = 'mock' | 'profile' | 'provider';
+
+export interface ProviderCatalogStatus {
+  readonly providerId: string;
+  readonly source: ProviderCatalogSource;
+  /** True when a live custom catalog failed and the static profile was used. */
+  readonly stale: boolean;
+  readonly adapterRef: CustomAdapterRef | null;
+}
+
+interface CatalogCacheEntry {
+  readonly providerId: string;
+  readonly capabilities: ProviderCapabilities;
+}
+
+interface CustomAdapterInternals {
+  readonly spec?: {
+    readonly catalog?: unknown;
+  };
+}
+
+function hasCustomAdapterInternals(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & CustomAdapterInternals {
+  return typeof adapter === 'object' && adapter !== null && 'spec' in adapter;
+}
 
 function parseProviderBaseUrl(value: string | null | undefined): string | null | undefined {
   if (value === undefined || value === null) return value;
@@ -114,15 +169,192 @@ function toProviderDto(record: ProviderStorageRecord): ProviderDto {
 }
 
 interface LiveCatalogProviderAdapter extends ProviderAdapter {
-  getLiveCapabilities?(context: ProviderContext): Promise<ProviderCapabilities>;
+  getLiveCapabilities(context: ProviderContext): Promise<ProviderCapabilities>;
 }
 
-function catalogSource(providerType: string, live: boolean): 'mock' | 'profile' | 'provider' {
+function hasLiveCapabilities(adapter: ProviderAdapter): adapter is LiveCatalogProviderAdapter {
+  const candidate: unknown = adapter;
+  return typeof candidate === 'object' && candidate !== null &&
+    'getLiveCapabilities' in candidate &&
+    typeof candidate.getLiveCapabilities === 'function';
+}
+
+function catalogSource(providerType: string, live: boolean): ProviderCatalogSource {
   if (providerType === 'mock') return 'mock';
   return live ? 'provider' : 'profile';
 }
 
+function customKindForProviderType(providerType: string): CustomAdapterRef['kind'] | null {
+  if (providerType === CUSTOM_HTTP_PROVIDER_TYPE) return 'declarative-http';
+  if (providerType === CUSTOM_JS_PROVIDER_TYPE) return 'trusted-javascript';
+  return null;
+}
+
+function adapterRefKey(ref: CustomAdapterRef | null | undefined): string {
+  if (ref === null || ref === undefined) return 'builtin';
+  return [ref.kind, ref.adapterId, ref.version, ref.digest].join('\u0000');
+}
+
+function copyAdapterRef(ref: CustomAdapterRef | null | undefined): CustomAdapterRef | null {
+  return ref === null || ref === undefined ? null : { ...ref };
+}
+
+function isCustomHttpCatalogConfigured(adapter: ProviderAdapter): boolean {
+  if (adapter.type !== CUSTOM_HTTP_PROVIDER_TYPE) return false;
+  // DeclarativeHttpAdapter keeps the immutable parsed spec private. This
+  // narrow read is intentionally fail-closed for test doubles and future
+  // adapters that do not expose the endpoint metadata.
+  return hasCustomAdapterInternals(adapter) &&
+    adapter.spec !== undefined &&
+    adapter.spec.catalog !== undefined;
+}
+
+function assertBoundedCapabilityValue(
+  value: unknown,
+  state: { nodes: number },
+  depth = 0,
+  seen = new Set<object>(),
+): void {
+  if (depth > MAX_CAPABILITY_DEPTH) throw new Error('Provider capabilities are too deeply nested.');
+  state.nodes += 1;
+  if (state.nodes > MAX_CAPABILITY_NODES) throw new Error('Provider capabilities contain too much data.');
+  if (value === null || typeof value === 'boolean') return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('Provider capabilities contain a non-finite number.');
+    return;
+  }
+  if (typeof value === 'string') {
+    if (value.length > MAX_CAPABILITY_STRING_LENGTH || CONTROL_CHARACTER_PATTERN.test(value)) {
+      throw new Error('Provider capabilities contain an invalid string.');
+    }
+    return;
+  }
+  if (typeof value !== 'object' || seen.has(value)) {
+    throw new Error('Provider capabilities are not bounded JSON.');
+  }
+  if (value instanceof Uint8Array || value instanceof Date) {
+    throw new Error('Provider capabilities contain a non-JSON value.');
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null && !Array.isArray(value)) {
+    throw new Error('Provider capabilities must contain plain objects.');
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (value.length > MAX_CAPABILITY_ARRAY_ITEMS) throw new Error('Provider capability arrays are too large.');
+    for (const child of value) assertBoundedCapabilityValue(child, state, depth + 1, seen);
+  } else {
+    const entries = Object.entries(value);
+    if (entries.length > MAX_CAPABILITY_KEYS) throw new Error('Provider capability objects are too large.');
+    for (const [key, child] of entries) {
+      if (
+        key.length > 255 ||
+        CONTROL_CHARACTER_PATTERN.test(key) ||
+        FORBIDDEN_CAPABILITY_KEYS.has(key)
+      ) {
+        throw new Error('Provider capability keys are invalid.');
+      }
+      assertBoundedCapabilityValue(child, state, depth + 1, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function freezeCapabilityValue<T>(value: T, seen = new Set<object>()): T {
+  if (value === null || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const child of value) freezeCapabilityValue(child, seen);
+  } else {
+    for (const child of Object.values(value)) freezeCapabilityValue(child, seen);
+  }
+  Object.freeze(value);
+  return value;
+}
+
+/** Convert schema-owned capabilities into the repository's JSON-record contract. */
+function toJsonCapabilitiesRecord(
+  value: ProviderModel['capabilities'],
+): Readonly<Record<string, unknown>> {
+  const parsed = ModelCapabilitiesSchema.safeParse(value);
+  if (!parsed.success || parsed.data.operations.length > MAX_CAPABILITY_OPERATIONS) {
+    throw new ModelRepositoryError(
+      'invalid_capabilities',
+      'Custom Provider model capabilities could not be synchronized.',
+    );
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(parsed.data);
+  } catch {
+    throw new ModelRepositoryError(
+      'invalid_capabilities',
+      'Custom Provider model capabilities could not be synchronized.',
+    );
+  }
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_CAPABILITY_BYTES) {
+    throw new ModelRepositoryError(
+      'invalid_capabilities',
+      'Custom Provider model capabilities could not be synchronized.',
+    );
+  }
+  const cloned: unknown = JSON.parse(serialized);
+  if (cloned === null || typeof cloned !== 'object' || Array.isArray(cloned)) {
+    throw new ModelRepositoryError(
+      'invalid_capabilities',
+      'Custom Provider model capabilities could not be synchronized.',
+    );
+  }
+  try {
+    assertBoundedCapabilityValue(cloned, { nodes: 0 });
+  } catch {
+    throw new ModelRepositoryError(
+      'invalid_capabilities',
+      'Custom Provider model capabilities could not be synchronized.',
+    );
+  }
+  const record: Record<string, unknown> = Object.create(null);
+  for (const [key, child] of Object.entries(cloned)) record[key] = child;
+  return freezeCapabilityValue(record);
+}
+
+function toProviderModelCapabilities(value: ModelCapabilities): ProviderModel['capabilities'] {
+  const inputImageConstraints = value.inputImageConstraints;
+  return {
+    operations: value.operations,
+    ...(value.aspectRatios === undefined ? {} : { aspectRatios: value.aspectRatios }),
+    ...(value.resolutions === undefined ? {} : { resolutions: value.resolutions }),
+    ...(value.durations === undefined ? {} : { durations: value.durations }),
+    ...(value.maxReferenceImages === undefined ? {} : { maxReferenceImages: value.maxReferenceImages }),
+    ...(inputImageConstraints === undefined
+      ? {}
+      : {
+          inputImageConstraints: {
+            ...(inputImageConstraints.mimeTypes === undefined ? {} : { mimeTypes: inputImageConstraints.mimeTypes }),
+            ...(inputImageConstraints.maxBytes === undefined ? {} : { maxBytes: inputImageConstraints.maxBytes }),
+            ...(inputImageConstraints.maxPixels === undefined ? {} : { maxPixels: inputImageConstraints.maxPixels }),
+            ...(inputImageConstraints.maxWidth === undefined ? {} : { maxWidth: inputImageConstraints.maxWidth }),
+            ...(inputImageConstraints.maxHeight === undefined ? {} : { maxHeight: inputImageConstraints.maxHeight }),
+          },
+        }),
+    ...(value.supportsMask === undefined ? {} : { supportsMask: value.supportsMask }),
+    ...(value.supportsNegativePrompt === undefined ? {} : { supportsNegativePrompt: value.supportsNegativePrompt }),
+    ...(value.supportsSeed === undefined ? {} : { supportsSeed: value.supportsSeed }),
+    ...(value.supportsAudio === undefined ? {} : { supportsAudio: value.supportsAudio }),
+    ...(value.supportsProgress === undefined ? {} : { supportsProgress: value.supportsProgress }),
+    ...(value.supportsCancel === undefined ? {} : { supportsCancel: value.supportsCancel }),
+    ...(value.supportsBatchCount === undefined ? {} : { supportsBatchCount: value.supportsBatchCount }),
+    ...(value.maxBatchCount === undefined ? {} : { maxBatchCount: value.maxBatchCount }),
+    ...(value.customFields === undefined ? {} : { customFields: value.customFields }),
+  };
+}
+
 export class ProviderService {
+  private readonly staticCapabilityCache = new Map<string, CatalogCacheEntry>();
+  private readonly activeStaticCacheKeyByProvider = new Map<string, string>();
+  private readonly providerTypeByAdapter = new Map<string, string>();
+  private readonly catalogStatuses = new Map<string, ProviderCatalogStatus>();
+
   public constructor(
     private readonly providers: ProviderRepository,
     private readonly models: ModelRepository,
@@ -171,16 +403,20 @@ export class ProviderService {
       ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
       ...(input.isDefault === undefined ? {} : { isDefault: input.isDefault }),
     });
+    if (updated !== null) this.invalidateProviderState(id);
     return updated ? toProviderDto(updated) : null;
   }
 
   public setDefault(id: string): ProviderDto | null {
     const provider = this.providers.setDefault(id);
+    if (provider !== null) this.invalidateProviderState(id);
     return provider ? toProviderDto(provider) : null;
   }
 
   public delete(id: string): boolean {
-    return this.providers.delete(id);
+    const deleted = this.providers.delete(id);
+    if (deleted) this.invalidateProviderState(id);
+    return deleted;
   }
 
   public ensureMockProvider(): ProviderDto {
@@ -206,17 +442,24 @@ export class ProviderService {
   }
 
   public saveManualModel(input: ManualModelInput): ModelRecord {
-    if (!this.providers.get(input.providerId)) {
+    const provider = this.providers.get(input.providerId);
+    if (!provider) {
       throw new ManualModelServiceError(
         'provider_not_found',
         `Provider ${input.providerId} was not found.`,
+      );
+    }
+    if (customKindForProviderType(provider.type) !== null) {
+      throw new ManualModelServiceError(
+        'invalid_model',
+        'Custom Provider models are managed by the adapter definition.',
       );
     }
     try {
       return this.models.saveManual(input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
-        throw new ManualModelServiceError('invalid_model', 'Manual model input is invalid.', { cause: error });
+        throw new ManualModelServiceError('invalid_model', 'Manual model input is invalid.');
       }
       throw error;
     }
@@ -233,12 +476,19 @@ export class ProviderService {
         `Model ${id} is managed by its Provider and cannot be edited manually.`,
       );
     }
+    const provider = this.providers.get(current.providerId);
+    if (provider !== null && customKindForProviderType(provider.type) !== null) {
+      throw new ManualModelServiceError(
+        'model_not_manual',
+        'Custom Provider models are managed by the adapter definition.',
+      );
+    }
     let updated: ModelRecord | null;
     try {
       updated = this.models.updateManual(id, input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
-        throw new ManualModelServiceError('invalid_model', 'Manual model input is invalid.', { cause: error });
+        throw new ManualModelServiceError('invalid_model', 'Manual model input is invalid.');
       }
       throw error;
     }
@@ -263,62 +513,115 @@ export class ProviderService {
   }
 
   public async refreshModels(providerId: string): Promise<readonly ModelRecord[]> {
-    const registration = this.registry.resolve(providerId);
-    const adapter = registration.adapter as LiveCatalogProviderAdapter;
-    const hasLiveCatalog = registration.http !== undefined && typeof adapter.getLiveCapabilities === 'function';
-    let capabilities: ProviderCapabilities;
-    try {
-      const context = { ...this.catalogContext(providerId, registration) };
-      capabilities = hasLiveCatalog
-        ? await adapter.getLiveCapabilities!(context)
-        : await adapter.getCapabilities(context);
-    } catch (error) {
+    const registration = await Promise.resolve(this.registry.resolve(providerId));
+    const provider = this.providers.get(providerId);
+    if (provider === null) {
       throw new ModelCatalogServiceError(
         'model_catalog_unavailable',
         'Provider model catalog could not be refreshed.',
-        { cause: error },
       );
     }
+    const adapter = registration.adapter;
+    const customKind = customKindForProviderType(registration.adapter.type);
+    const liveAdapter = hasLiveCapabilities(adapter) ? adapter : null;
+    const customCatalog = isCustomHttpCatalogConfigured(registration.adapter);
+    const hasLiveCatalog = registration.http !== undefined && liveAdapter !== null && (
+      customKind === null || customCatalog
+    );
+    const cacheKey = this.catalogCacheKey(provider, registration);
+    const context = { ...this.catalogContext(providerId, registration) };
+    let capabilities: ProviderCapabilities;
+    let source: ProviderCatalogSource;
+    let stale = false;
     try {
-      this.assertMatchingCapabilities(registration.adapter.type, capabilities);
+      this.assertCustomRegistration(registration.adapter.type, registration.adapterRef);
+      if (customKind === 'declarative-http') {
+        // The static definition is authoritative and doubles as a bounded
+        // fallback when an optional live catalog is unavailable or malformed.
+        const staticCapabilities = await this.getStaticCapabilities(cacheKey, registration, context);
+        if (hasLiveCatalog && liveAdapter !== null) {
+          try {
+            capabilities = this.assertMatchingCapabilities(
+              registration,
+              await liveAdapter.getLiveCapabilities(context),
+            );
+            source = 'provider';
+          } catch {
+            capabilities = staticCapabilities;
+            source = 'profile';
+            stale = true;
+          }
+        } else {
+          capabilities = staticCapabilities;
+          source = 'profile';
+        }
+      } else if (hasLiveCatalog && liveAdapter !== null) {
+        capabilities = this.assertMatchingCapabilities(
+          registration,
+          await liveAdapter.getLiveCapabilities(context),
+        );
+        source = catalogSource(registration.adapter.type, true);
+      } else {
+        capabilities = await this.getStaticCapabilities(cacheKey, registration, context);
+        source = catalogSource(registration.adapter.type, false);
+      }
     } catch (error) {
+      const invalid = error instanceof InvalidProviderCapabilitiesError;
       throw new ModelCatalogServiceError(
-        'model_capabilities_invalid',
-        'Provider returned an invalid model catalog.',
-        { cause: error },
+        invalid ? 'model_capabilities_invalid' : 'model_catalog_unavailable',
+        invalid
+          ? 'Provider returned an invalid model catalog.'
+          : 'Provider model catalog could not be refreshed.',
       );
     }
     try {
-      return this.models.replaceForProvider(
+      if (customKind !== null) {
+        this.synchronizeCustomManualCapabilities(providerId, capabilities);
+      }
+      const refreshed = this.models.replaceForProvider(
         providerId,
         capabilities.models.map((model) => ({
           modelId: model.id,
           displayName: model.displayName,
           capabilities: { ...model.capabilities },
-          capabilitySource: catalogSource(registration.adapter.type, hasLiveCatalog),
+          capabilitySource: source,
         })),
       );
+      this.catalogStatuses.set(providerId, {
+        providerId,
+        source,
+        stale,
+        adapterRef: copyAdapterRef(registration.adapterRef),
+      });
+      return refreshed;
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
         throw new ModelCatalogServiceError(
           'model_capabilities_invalid',
           'Provider returned an invalid model catalog.',
-          { cause: error },
+          undefined,
         );
       }
       throw new ModelCatalogServiceError(
         'model_catalog_unavailable',
         'Provider model catalog could not be refreshed.',
-        { cause: error },
+        undefined,
       );
     }
   }
 
   public async testConnection(providerId: string): Promise<ProviderConnectionTestResult> {
-    const registration = this.registry.resolve(providerId);
+    const registration = await Promise.resolve(this.registry.resolve(providerId));
     const startedAt = this.clock.now();
     try {
       if (registration.adapter.testConnection === undefined) {
+        if (registration.adapter.type === CUSTOM_JS_PROVIDER_TYPE) {
+          return {
+            ok: false,
+            latencyMs: Math.max(0, this.clock.now() - startedAt),
+            message: 'Provider connection test is not supported for this adapter.',
+          };
+        }
         throw new Error('Provider connection test is not configured.');
       }
       await registration.adapter.testConnection({
@@ -335,6 +638,108 @@ export class ProviderService {
         latencyMs: Math.max(0, this.clock.now() - startedAt),
         message: 'Provider connection test failed.',
       };
+    }
+  }
+
+  /** Returns the last in-process catalog state without exposing adapter data. */
+  public getCatalogStatus(providerId: string): ProviderCatalogStatus | null {
+    const status = this.catalogStatuses.get(providerId);
+    return status === undefined
+      ? null
+      : { ...status, adapterRef: copyAdapterRef(status.adapterRef) };
+  }
+
+  private invalidateProviderState(providerId: string): void {
+    this.activeStaticCacheKeyByProvider.delete(providerId);
+    for (const [key, entry] of this.staticCapabilityCache.entries()) {
+      if (entry.providerId === providerId) this.staticCapabilityCache.delete(key);
+    }
+    this.catalogStatuses.delete(providerId);
+  }
+
+  private catalogCacheKey(
+    provider: ProviderStorageRecord,
+    registration: ProviderRegistration,
+  ): string {
+    let config: string;
+    try {
+      config = JSON.stringify(registration.config ?? {});
+    } catch {
+      config = '<invalid>';
+    }
+    const ref = registration.adapterRef;
+    return JSON.stringify([
+      provider.id,
+      provider.updatedAt.toISOString(),
+      registration.adapter.type,
+      ref?.kind ?? null,
+      ref?.adapterId ?? null,
+      ref?.version ?? null,
+      ref?.digest ?? null,
+      registration.baseUrl ?? null,
+      config,
+    ]);
+  }
+
+  private async getStaticCapabilities(
+    cacheKey: string,
+    registration: ProviderRegistration,
+    context: ProviderContext,
+  ): Promise<ProviderCapabilities> {
+    const previousKey = this.activeStaticCacheKeyByProvider.get(context.providerId);
+    if (previousKey !== undefined && previousKey !== cacheKey) {
+      this.staticCapabilityCache.delete(previousKey);
+    }
+    this.activeStaticCacheKeyByProvider.set(context.providerId, cacheKey);
+    const cached = this.staticCapabilityCache.get(cacheKey);
+    if (cached !== undefined) return cached.capabilities;
+    const capabilities = this.assertMatchingCapabilities(
+      registration,
+      await registration.adapter.getCapabilities(context),
+    );
+    if (this.staticCapabilityCache.size >= 128) {
+      const oldest = this.staticCapabilityCache.keys().next().value;
+      if (typeof oldest === 'string') this.staticCapabilityCache.delete(oldest);
+    }
+    this.staticCapabilityCache.set(cacheKey, {
+      providerId: context.providerId,
+      capabilities,
+    });
+    return capabilities;
+  }
+
+  private assertCustomRegistration(
+    adapterType: string,
+    adapterRef: CustomAdapterRef | null | undefined,
+  ): void {
+    const expectedKind = customKindForProviderType(adapterType);
+    if (expectedKind === null) return;
+    if (adapterRef?.kind !== expectedKind) {
+      throw new InvalidProviderCapabilitiesError('Provider adapter reference is invalid.');
+    }
+  }
+
+  private synchronizeCustomManualCapabilities(
+    providerId: string,
+    capabilities: ProviderCapabilities,
+  ): void {
+    const authoritative = new Map(
+      capabilities.models.map((model) => [model.id, model.capabilities]),
+    );
+    for (const model of this.models.listForProvider(providerId)) {
+      if (model.capabilitySource !== 'manual') continue;
+      const declared = authoritative.get(model.modelId);
+      if (declared === undefined) continue;
+      if (JSON.stringify(model.capabilities) === JSON.stringify(declared)) continue;
+      const updated = this.models.updateManual(model.id, {
+        capabilities: toJsonCapabilitiesRecord(declared),
+      });
+      if (updated === null) {
+        throw new ModelRepositoryError(
+          'invalid_capabilities',
+          'Custom Provider model capabilities could not be synchronized.',
+        );
+      }
     }
   }
 
@@ -378,30 +783,93 @@ export class ProviderService {
   }
 
   private assertMatchingCapabilities(
-    adapterType: string,
+    registration: ProviderRegistration,
     capabilities: ProviderCapabilities,
-  ): void {
-    if (capabilities.providerType !== adapterType) {
-      throw new Error('Provider capability response did not match the registered adapter type.');
-    }
-    if (!Array.isArray(capabilities.models)) {
-      throw new Error('Provider capability response did not contain a model list.');
-    }
-    const modelIds = new Set<string>();
-    for (const model of capabilities.models) {
+  ): ProviderCapabilities {
+    try {
+      const boundedState = { nodes: 0 };
+      assertBoundedCapabilityValue(capabilities, boundedState);
+      const serialized = JSON.stringify(capabilities);
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_CAPABILITY_BYTES) {
+        throw new Error('Provider capabilities exceed the size limit.');
+      }
       if (
-        typeof model.id !== 'string' ||
-        model.id.trim().length === 0 ||
-        typeof model.displayName !== 'string' ||
-        model.displayName.trim().length === 0 ||
-        modelIds.has(model.id)
+        capabilities === null ||
+        typeof capabilities !== 'object' ||
+        Array.isArray(capabilities) ||
+        typeof capabilities.providerType !== 'string' ||
+        capabilities.providerType.length === 0 ||
+        capabilities.providerType.length > 255 ||
+        !Array.isArray(capabilities.models) ||
+        capabilities.models.length === 0 ||
+        capabilities.models.length > MAX_CAPABILITY_MODELS
       ) {
-        throw new Error('Provider capability response contained an invalid model.');
+        throw new Error('Provider capability response is invalid.');
       }
-      if (!ModelCapabilitiesSchema.safeParse(model.capabilities).success) {
-        throw new Error('Provider capability response contained invalid model capabilities.');
+      if (Object.keys(capabilities).some((key) => !CAPABILITY_KEYS.has(key))) {
+        throw new Error('Provider capability response contains unknown fields.');
       }
-      modelIds.add(model.id);
+      const customKind = customKindForProviderType(registration.adapter.type);
+      if (customKind === 'declarative-http' && capabilities.providerType !== registration.adapter.type) {
+        throw new Error('Provider capability response did not match the registered adapter type.');
+      }
+      if (customKind === null && capabilities.providerType !== registration.adapter.type) {
+        throw new Error('Provider capability response did not match the registered adapter type.');
+      }
+      if (customKind === 'trusted-javascript') {
+        const ref = registration.adapterRef;
+        if (ref === null || ref === undefined || ref.kind !== customKind) {
+          throw new Error('Provider adapter reference is invalid.');
+        }
+        const key = adapterRefKey(ref);
+        const previousType = this.providerTypeByAdapter.get(key);
+        if (previousType !== undefined && previousType !== capabilities.providerType) {
+          throw new Error('Provider capability response changed for the adapter revision.');
+        }
+      }
+      const modelIds = new Set<string>();
+      const models: ProviderModel[] = capabilities.models.map((model): ProviderModel => {
+        if (
+          model === null ||
+          typeof model !== 'object' ||
+          Object.keys(model).some((key) => !MODEL_KEYS.has(key)) ||
+          typeof model.id !== 'string' ||
+          model.id.trim().length === 0 ||
+          model.id.length > 255 ||
+          CONTROL_CHARACTER_PATTERN.test(model.id) ||
+          typeof model.displayName !== 'string' ||
+          model.displayName.trim().length === 0 ||
+          model.displayName.length > 255 ||
+          CONTROL_CHARACTER_PATTERN.test(model.displayName) ||
+          modelIds.has(model.id)
+        ) {
+          throw new Error('Provider capability response contained an invalid model.');
+        }
+        const parsed = ModelCapabilitiesSchema.safeParse(model.capabilities);
+        if (!parsed.success || parsed.data.operations.length > MAX_CAPABILITY_OPERATIONS) {
+          throw new Error('Provider capability response contained invalid model capabilities.');
+        }
+        modelIds.add(model.id);
+        return {
+          id: model.id,
+          displayName: model.displayName,
+          capabilities: toProviderModelCapabilities(parsed.data),
+        };
+      });
+      const normalized: ProviderCapabilities = {
+        providerType: capabilities.providerType,
+        models,
+      };
+      freezeCapabilityValue(normalized);
+      if (customKind === 'trusted-javascript') {
+        const ref = registration.adapterRef;
+        if (ref !== null && ref !== undefined) {
+          this.providerTypeByAdapter.set(adapterRefKey(ref), normalized.providerType);
+        }
+      }
+      return normalized;
+    } catch {
+      throw new InvalidProviderCapabilitiesError('Provider capability response is invalid.');
     }
   }
 }

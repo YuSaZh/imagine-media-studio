@@ -4,7 +4,14 @@ import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { AdapterStore } from './adapters/index.js';
+import {
+  AdapterWorkerHost,
+  createSafeHttpPort,
+  type AdapterWorkerFactory,
+} from './adapters/worker-host.js';
 import type { AppConfig } from './config.js';
+import { ProviderAdapterDefinitionRepository } from './database/adapter-definitions.js';
 import { AssetRepository } from './database/assets.js';
 import { createDatabase } from './database/client.js';
 import { CollectionRepository } from './database/collections.js';
@@ -24,9 +31,10 @@ import { SharpImageProcessor } from './media/image-processor.js';
 import { VideoProcessor } from './media/video-processor.js';
 import {
   createProviderHttpClient,
+  type ProviderHttpClient,
   type ProviderHttpExecutor,
 } from './providers/provider-http-client.js';
-import { ProviderRegistry } from './providers/provider-registry.js';
+import { ProviderRegistry, type ProviderHttpClientFactory } from './providers/provider-registry.js';
 import { ProviderInputLoader } from './providers/provider-input-loader.js';
 import { ProviderService } from './providers/provider-service.js';
 import { registerInternalRoutes } from './routes/internal.js';
@@ -47,16 +55,70 @@ export interface CreateServerOptions {
   migrationsDirectory?: string;
   startRunner?: boolean;
   providerHttpExecutor?: ProviderHttpExecutor;
+  adapterWorkerFactory?: AdapterWorkerFactory;
 }
+
+/** Internal adapter management view; runtime source stays behind runtimeReader. */
+export type AdapterStoreManagement = Pick<AdapterStore, 'close' | 'get' | 'install' | 'list' | 'remove'>;
 
 export interface ImagineServer {
   app: FastifyInstance;
+  adapterDefinitions: ProviderAdapterDefinitionRepository;
+  adapterStore: AdapterStoreManagement;
+  adapterWorkerHost: Pick<AdapterWorkerHost, 'close'>;
   jobs: JobRepository;
   assets: AssetRepository;
   collections: CollectionRepository;
   providers: ProviderService;
   settings: SettingsRepository;
   runner: JobRunner;
+}
+
+function effectivePort(url: URL): number {
+  if (url.port !== '') return Number(url.port);
+  return url.protocol === 'https:' ? 443 : 80;
+}
+
+function scopedProviderHttpFactory(
+  config: AppConfig,
+  fallback: ProviderHttpClient,
+  executor: ProviderHttpExecutor | undefined,
+): ProviderHttpClientFactory {
+  return (provider) => {
+    if (provider.type !== 'custom-http-v1') return fallback;
+    if (provider.baseUrl === null) {
+      throw new Error('Custom HTTP providers require a Base URL.');
+    }
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(provider.baseUrl);
+    } catch {
+      throw new Error('Custom HTTP provider Base URL is invalid.');
+    }
+    const policy = new NetworkPolicy({
+      allowInsecureHttp: config.allowInsecureProviderHttp,
+      allowPrivateNetwork: config.allowPrivateNetworkAccess,
+      allowedHosts: [baseUrl.hostname],
+      allowedPorts: [effectivePort(baseUrl)],
+    });
+    return createProviderHttpClient({
+      policy,
+      ...(executor === undefined ? {} : { executor }),
+    });
+  };
+}
+
+async function closeInOrder(
+  steps: readonly (() => Promise<void> | void)[],
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) {
+    const result = (await Promise.allSettled([Promise.resolve().then(step)]))[0]!;
+    if (result.status === 'rejected') failures.push(result.reason);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'One or more server resources failed to close.');
+  }
 }
 
 export async function createServer(options: CreateServerOptions): Promise<ImagineServer> {
@@ -100,7 +162,26 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     policy: providerNetworkPolicy,
     ...(options.providerHttpExecutor === undefined ? {} : { executor: options.providerHttpExecutor }),
   });
-  const providerRegistry = new ProviderRegistry(providerRepository, vault, { http: providerHttp });
+  const adapterDefinitions = new ProviderAdapterDefinitionRepository(database.orm);
+  const adapterStore = new AdapterStore(storage.adapters, {
+    adminEnabled: passwordAuth.required,
+    assertAdmin: () => undefined,
+  });
+  const adapterWorkerHost = new AdapterWorkerHost(
+    adapterStore.runtimeReader(),
+    createSafeHttpPort(providerHttp),
+    options.adapterWorkerFactory,
+  );
+  const providerRegistry = new ProviderRegistry(providerRepository, vault, {
+    adapterDefinitions,
+    adapterWorkerHost,
+    http: providerHttp,
+    httpFactory: scopedProviderHttpFactory(
+      options.config,
+      providerHttp,
+      options.providerHttpExecutor,
+    ),
+  });
   const providerService = new ProviderService(
     providerRepository,
     models,
@@ -153,11 +234,17 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   let databaseClosed = false;
 
   app.addHook('onClose', async () => {
-    await runner.stop();
-    if (!databaseClosed) {
-      database.sqlite.close();
-      databaseClosed = true;
-    }
+    await closeInOrder([
+      () => runner.stop(),
+      () => adapterWorkerHost.close(),
+      () => adapterStore.close(),
+      () => {
+        if (!databaseClosed) {
+          database.sqlite.close();
+          databaseClosed = true;
+        }
+      },
+    ]);
   });
 
   try {
@@ -285,9 +372,20 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       await runner.start();
     }
   } catch (error) {
-    await app.close();
+    await app.close().catch(() => undefined);
     throw error;
   }
 
-  return { app, jobs, assets, collections, providers: providerService, settings, runner };
+  return {
+    app,
+    adapterDefinitions,
+    adapterStore,
+    adapterWorkerHost,
+    jobs,
+    assets,
+    collections,
+    providers: providerService,
+    settings,
+    runner,
+  };
 }

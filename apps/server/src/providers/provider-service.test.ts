@@ -4,13 +4,21 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { ProviderCapabilities, ProviderContext } from '@imagine/provider-contract';
+import type {
+  ProviderAdapter,
+  ProviderCapabilities,
+  ProviderContext,
+  ProviderError,
+  SubmitResult,
+} from '@imagine/provider-contract';
+import type { CustomAdapterRef, GenerationRequest } from '@imagine/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createDatabase, type DatabaseClient } from '../database/client.js';
 import { ModelRepository } from '../database/models.js';
 import { ProviderRepository } from '../database/providers.js';
 import { SecretVault } from '../security/secret-vault.js';
+import type { ProviderRegistration } from '../jobs/ports.js';
 import { MockProviderAdapter } from './mock-provider.js';
 import {
   MOCK_PROVIDER_ID,
@@ -79,6 +87,109 @@ async function createHarness(
     now: () => times.shift() ?? 1_037,
   });
   return { database, providers, models, vault, registry, service };
+}
+
+function capabilities(providerType: string, modelId: string): ProviderCapabilities {
+  return {
+    providerType,
+    models: [{
+      id: modelId,
+      displayName: modelId,
+      capabilities: { operations: ['image.generate'] },
+    }],
+  };
+}
+
+class CustomServiceAdapter implements ProviderAdapter {
+  public readonly type: 'custom-http-v1' | 'custom-js-v1';
+  public readonly spec: { readonly catalog?: object };
+  public staticCapabilities: ProviderCapabilities;
+  public liveCapabilities: ProviderCapabilities;
+  public staticCalls = 0;
+  public liveCalls = 0;
+  public liveFailure = false;
+
+  public constructor(options: {
+    readonly type: 'custom-http-v1' | 'custom-js-v1';
+    readonly catalog?: boolean;
+    readonly staticCapabilities: ProviderCapabilities;
+    readonly liveCapabilities?: ProviderCapabilities;
+  }) {
+    this.type = options.type;
+    this.spec = options.catalog === true ? { catalog: {} } : {};
+    this.staticCapabilities = options.staticCapabilities;
+    this.liveCapabilities = options.liveCapabilities ?? options.staticCapabilities;
+  }
+
+  public async getCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
+    this.staticCalls += 1;
+    return this.staticCapabilities;
+  }
+
+  public async getLiveCapabilities(_context: ProviderContext): Promise<ProviderCapabilities> {
+    this.liveCalls += 1;
+    if (this.liveFailure) throw new Error('live catalog unavailable: secret material');
+    return this.liveCapabilities;
+  }
+
+  public async validate(_request: GenerationRequest, _context: ProviderContext): Promise<void> {}
+
+  public async submit(_request: GenerationRequest, _context: ProviderContext): Promise<SubmitResult> {
+    return { state: 'completed', assets: [] };
+  }
+
+  public normalizeError(_error: unknown): ProviderError {
+    return { code: 'fixture_error', kind: 'unknown', message: 'Fixture error.', retryable: false };
+  }
+}
+
+class CustomServiceConnectionAdapter extends CustomServiceAdapter {
+  public constructor(
+    options: ConstructorParameters<typeof CustomServiceAdapter>[0],
+    private readonly probe: () => Promise<void>,
+  ) {
+    super(options);
+  }
+
+  public async testConnection(_context: ProviderContext): Promise<void> {
+    await this.probe();
+  }
+}
+
+function customRef(
+  kind: CustomAdapterRef['kind'],
+  version: string,
+  digest: string,
+): CustomAdapterRef {
+  return { kind, adapterId: 'service-fixture', version, digest };
+}
+
+async function createCustomServiceHarness(
+  type: 'custom-http-v1' | 'custom-js-v1',
+  adapter: CustomServiceAdapter,
+  ref: CustomAdapterRef,
+  options: { readonly http?: boolean } = {},
+) {
+  const base = await createHarness();
+  const provider = base.service.create({ name: `Service ${type}`, type });
+  let registration: ProviderRegistration = {
+    adapter,
+    adapterRef: ref,
+    config: {},
+    secrets: {},
+    submitReplaySafe: false,
+    ...(options.http ? { http: {} as NonNullable<ProviderRegistration['http']> } : {}),
+  };
+  const registry = { resolve: () => registration } as unknown as ProviderRegistry;
+  const service = new ProviderService(base.providers, base.models, base.vault, registry);
+  return {
+    ...base,
+    provider,
+    service,
+    setRegistration(next: ProviderRegistration): void {
+      registration = next;
+    },
+  };
 }
 
 describe('ProviderService', () => {
@@ -711,6 +822,356 @@ describe('ProviderService', () => {
     expect(result.ok).toBe(false);
     expect(result.message).toBe('Provider connection test failed.');
     expect(JSON.stringify(result)).not.toContain('secret material');
+  });
+
+  it('uses custom HTTP catalog responses only when configured and marks static fallback stale', async () => {
+    const adapter = new CustomServiceAdapter({
+      type: 'custom-http-v1',
+      catalog: true,
+      staticCapabilities: capabilities('custom-http-v1', 'definition-model'),
+      liveCapabilities: capabilities('custom-http-v1', 'catalog-model'),
+    });
+    const ref = customRef('declarative-http', '1.0.0', 'a'.repeat(64));
+    const { provider, service } = await createCustomServiceHarness('custom-http-v1', adapter, ref, { http: true });
+
+    const live = await service.refreshModels(provider.id);
+    expect(live).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'catalog-model', capabilitySource: 'provider' }),
+    ]));
+    expect(service.getCatalogStatus(provider.id)).toEqual({
+      providerId: provider.id,
+      source: 'provider',
+      stale: false,
+      adapterRef: ref,
+    });
+
+    adapter.liveFailure = true;
+    const fallback = await service.refreshModels(provider.id);
+    expect(fallback).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'definition-model', capabilitySource: 'profile', enabled: true }),
+    ]));
+    expect(fallback.find((model) => model.modelId === 'catalog-model')).toMatchObject({ enabled: false });
+    expect(service.getCatalogStatus(provider.id)).toMatchObject({
+      source: 'profile',
+      stale: true,
+      adapterRef: ref,
+    });
+    expect(adapter.staticCalls).toBe(1);
+    expect(adapter.liveCalls).toBe(2);
+  });
+
+  it('does not treat a custom HTTP adapter without a catalog endpoint as live', async () => {
+    const adapter = new CustomServiceAdapter({
+      type: 'custom-http-v1',
+      staticCapabilities: capabilities('custom-http-v1', 'profile-model'),
+      liveCapabilities: capabilities('custom-http-v1', 'must-not-be-used'),
+    });
+    const ref = customRef('declarative-http', '1.0.0', 'b'.repeat(64));
+    const { provider, service } = await createCustomServiceHarness('custom-http-v1', adapter, ref, { http: true });
+
+    const refreshed = await service.refreshModels(provider.id);
+    expect(refreshed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'profile-model', capabilitySource: 'profile' }),
+    ]));
+    expect(adapter.liveCalls).toBe(0);
+    expect(service.getCatalogStatus(provider.id)).toMatchObject({ source: 'profile', stale: false });
+  });
+
+  it('accepts provider-specific custom JavaScript providerType and isolates static cache by exact ref', async () => {
+    const firstAdapter = new CustomServiceAdapter({
+      type: 'custom-js-v1',
+      staticCapabilities: capabilities('fixture-provider', 'first-model'),
+    });
+    const firstRef = customRef('trusted-javascript', '1.0.0', 'c'.repeat(64));
+    const { provider, service, setRegistration } = await createCustomServiceHarness('custom-js-v1', firstAdapter, firstRef);
+
+    await service.refreshModels(provider.id);
+    await service.refreshModels(provider.id);
+    expect(firstAdapter.staticCalls).toBe(1);
+
+    const secondAdapter = new CustomServiceAdapter({
+      type: 'custom-js-v1',
+      staticCapabilities: capabilities('another-fixture-provider', 'second-model'),
+    });
+    const secondRef = customRef('trusted-javascript', '2.0.0', 'd'.repeat(64));
+    setRegistration({
+      adapter: secondAdapter,
+      adapterRef: secondRef,
+      config: { models: ['spoofed-model'] },
+      secrets: {},
+      submitReplaySafe: false,
+    });
+    const replaced = await service.refreshModels(provider.id);
+    expect(replaced).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'second-model', capabilitySource: 'profile', enabled: true }),
+    ]));
+    expect(replaced.find((model) => model.modelId === 'first-model')).toMatchObject({ enabled: false });
+    expect(secondAdapter.staticCalls).toBe(1);
+    expect(service.getCatalogStatus(provider.id)).toMatchObject({
+      source: 'profile',
+      stale: false,
+      adapterRef: secondRef,
+    });
+
+    firstAdapter.staticCapabilities = capabilities('fixture-provider', 'first-model-reloaded');
+    setRegistration({
+      adapter: firstAdapter,
+      adapterRef: firstRef,
+      config: {},
+      secrets: {},
+      submitReplaySafe: false,
+    });
+    const reverted = await service.refreshModels(provider.id);
+    expect(reverted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'first-model-reloaded', capabilitySource: 'profile' }),
+    ]));
+    expect(firstAdapter.staticCalls).toBe(2);
+  });
+
+  it('does not reuse static or live catalog results across custom HTTP revisions', async () => {
+    const firstAdapter = new CustomServiceAdapter({
+      type: 'custom-http-v1',
+      catalog: true,
+      staticCapabilities: capabilities('custom-http-v1', 'http-definition-one'),
+      liveCapabilities: capabilities('custom-http-v1', 'http-live-one'),
+    });
+    const firstRef = customRef('declarative-http', '1.0.0', '3'.repeat(64));
+    const { provider, service, setRegistration } = await createCustomServiceHarness(
+      'custom-http-v1',
+      firstAdapter,
+      firstRef,
+      { http: true },
+    );
+
+    const first = await service.refreshModels(provider.id);
+    expect(first).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'http-live-one', capabilitySource: 'provider' }),
+    ]));
+
+    const secondAdapter = new CustomServiceAdapter({
+      type: 'custom-http-v1',
+      catalog: true,
+      staticCapabilities: capabilities('custom-http-v1', 'http-definition-two'),
+      liveCapabilities: capabilities('custom-http-v1', 'http-live-two'),
+    });
+    const secondRef = customRef('declarative-http', '2.0.0', '4'.repeat(64));
+    setRegistration({
+      adapter: secondAdapter,
+      adapterRef: secondRef,
+      config: {},
+      http: {} as NonNullable<ProviderRegistration['http']>,
+      secrets: {},
+      submitReplaySafe: false,
+    });
+
+    const second = await service.refreshModels(provider.id);
+    expect(second).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'http-live-two', capabilitySource: 'provider' }),
+    ]));
+    expect(second.find((model) => model.modelId === 'http-live-one')).toMatchObject({ enabled: false });
+    expect(firstAdapter.staticCalls).toBe(1);
+    expect(firstAdapter.liveCalls).toBe(1);
+    expect(secondAdapter.staticCalls).toBe(1);
+    expect(secondAdapter.liveCalls).toBe(1);
+    expect(service.getCatalogStatus(provider.id)).toMatchObject({ adapterRef: secondRef });
+  });
+
+  it('invalidates only the affected Provider catalog state on update, default, and delete', async () => {
+    const base = await createHarness();
+    const adapterA = new CustomServiceAdapter({
+      type: 'custom-js-v1',
+      staticCapabilities: capabilities('provider-a', 'model-a'),
+    });
+    const adapterB = new CustomServiceAdapter({
+      type: 'custom-js-v1',
+      staticCapabilities: capabilities('provider-b', 'model-b'),
+    });
+    const providerA = base.service.create({ name: 'Cache Provider A', type: 'custom-js-v1' });
+    const providerB = base.service.create({ name: 'Cache Provider B', type: 'custom-js-v1' });
+    const registrations = new Map<string, ProviderRegistration>([
+      [providerA.id, {
+        adapter: adapterA,
+        adapterRef: customRef('trusted-javascript', '1.0.0', '5'.repeat(64)),
+        config: {},
+        secrets: {},
+        submitReplaySafe: false,
+      }],
+      [providerB.id, {
+        adapter: adapterB,
+        adapterRef: customRef('trusted-javascript', '1.0.0', '6'.repeat(64)),
+        config: {},
+        secrets: {},
+        submitReplaySafe: false,
+      }],
+    ]);
+    const registry = {
+      resolve(providerId: string): ProviderRegistration {
+        const registration = registrations.get(providerId);
+        if (registration === undefined) throw new Error('fixture registration missing');
+        return registration;
+      },
+    } as unknown as ProviderRegistry;
+    const service = new ProviderService(base.providers, base.models, base.vault, registry);
+
+    await service.refreshModels(providerA.id);
+    await service.refreshModels(providerB.id);
+    await service.refreshModels(providerA.id);
+    await service.refreshModels(providerB.id);
+    expect(adapterA.staticCalls).toBe(1);
+    expect(adapterB.staticCalls).toBe(1);
+
+    service.update(providerA.id, { name: 'Cache Provider A updated' });
+    expect(service.getCatalogStatus(providerA.id)).toBeNull();
+    expect(service.getCatalogStatus(providerB.id)).not.toBeNull();
+    await service.refreshModels(providerB.id);
+    expect(adapterB.staticCalls).toBe(1);
+    await service.refreshModels(providerA.id);
+    expect(adapterA.staticCalls).toBe(2);
+
+    service.setDefault(providerA.id);
+    expect(service.getCatalogStatus(providerA.id)).toBeNull();
+    expect(service.getCatalogStatus(providerB.id)).not.toBeNull();
+    await service.refreshModels(providerB.id);
+    expect(adapterB.staticCalls).toBe(1);
+    await service.refreshModels(providerA.id);
+    expect(adapterA.staticCalls).toBe(3);
+
+    expect(service.delete(providerA.id)).toBe(true);
+    expect(service.getCatalogStatus(providerA.id)).toBeNull();
+    expect(service.getCatalogStatus(providerB.id)).not.toBeNull();
+    await service.refreshModels(providerB.id);
+    expect(adapterB.staticCalls).toBe(1);
+
+    base.providers.create({ id: providerA.id, name: 'Cache Provider A recreated', type: 'custom-js-v1' });
+    await service.refreshModels(providerA.id);
+    expect(adapterA.staticCalls).toBe(4);
+  });
+
+  it('evicts the oldest static catalog entry at the cache limit and reloads the current ref', async () => {
+    const base = await createHarness();
+    const registrations = new Map<string, ProviderRegistration>();
+    const adapters: CustomServiceAdapter[] = [];
+    const providers: string[] = [];
+    const registry = {
+      resolve(providerId: string): ProviderRegistration {
+        const registration = registrations.get(providerId);
+        if (registration === undefined) throw new Error('fixture registration missing');
+        return registration;
+      },
+    } as unknown as ProviderRegistry;
+    const service = new ProviderService(base.providers, base.models, base.vault, registry);
+
+    for (let index = 0; index <= 128; index += 1) {
+      const adapter = new CustomServiceAdapter({
+        type: 'custom-js-v1',
+        staticCapabilities: capabilities('cache-provider', `cache-model-${index}`),
+      });
+      const provider = base.service.create({
+        name: `Cache fill ${index}`,
+        type: 'custom-js-v1',
+      });
+      const ref = customRef(
+        'trusted-javascript',
+        '1.0.0',
+        index.toString(16).padStart(64, '0'),
+      );
+      registrations.set(provider.id, {
+        adapter,
+        adapterRef: ref,
+        config: {},
+        secrets: {},
+        submitReplaySafe: false,
+      });
+      adapters.push(adapter);
+      providers.push(provider.id);
+      await service.refreshModels(provider.id);
+    }
+
+    const firstAdapter = adapters[0];
+    const firstProviderId = providers[0];
+    if (firstAdapter === undefined || firstProviderId === undefined) {
+      throw new Error('Expected cache fixture providers.');
+    }
+    firstAdapter.staticCapabilities = capabilities('cache-provider', 'cache-model-current');
+    const reloaded = await service.refreshModels(firstProviderId);
+
+    expect(firstAdapter.staticCalls).toBe(2);
+    expect(reloaded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'cache-model-current', capabilitySource: 'profile' }),
+    ]));
+  });
+
+  it('keeps strict adapter type checks and rejects unknown capability fields', async () => {
+    const badHttp = new CustomServiceAdapter({
+      type: 'custom-http-v1',
+      staticCapabilities: {
+        ...capabilities('wrong-provider', 'bad-model'),
+        unknown: true,
+      } as ProviderCapabilities,
+    });
+    const { provider, service } = await createCustomServiceHarness(
+      'custom-http-v1',
+      badHttp,
+      customRef('declarative-http', '1.0.0', 'e'.repeat(64)),
+    );
+
+    await expect(service.refreshModels(provider.id)).rejects.toEqual(
+      expect.objectContaining<Partial<ModelCatalogServiceError>>({
+        code: 'model_capabilities_invalid',
+        message: 'Provider returned an invalid model catalog.',
+      }),
+    );
+    expect(service.getCatalogStatus(provider.id)).toBeNull();
+  });
+
+  it('uses an explicit custom HTTP connection endpoint and does not probe static custom JavaScript capabilities', async () => {
+    let probes = 0;
+    const httpAdapter = new CustomServiceConnectionAdapter({
+      type: 'custom-http-v1',
+      staticCapabilities: capabilities('custom-http-v1', 'connection-model'),
+    }, async () => { probes += 1; });
+    const httpHarness = await createCustomServiceHarness(
+      'custom-http-v1',
+      httpAdapter,
+      customRef('declarative-http', '1.0.0', 'f'.repeat(64)),
+    );
+    await expect(httpHarness.service.testConnection(httpHarness.provider.id)).resolves.toMatchObject({ ok: true });
+    expect(probes).toBe(1);
+
+    const jsAdapter = new CustomServiceAdapter({
+      type: 'custom-js-v1',
+      staticCapabilities: capabilities('fixture-provider', 'runtime-model'),
+    });
+    const jsHarness = await createCustomServiceHarness(
+      'custom-js-v1',
+      jsAdapter,
+      customRef('trusted-javascript', '1.0.0', '1'.repeat(64)),
+    );
+    await expect(jsHarness.service.testConnection(jsHarness.provider.id)).resolves.toEqual({
+      ok: false,
+      latencyMs: 0,
+      message: 'Provider connection test is not supported for this adapter.',
+    });
+    expect(jsAdapter.staticCalls).toBe(0);
+  });
+
+  it('does not allow manual model writes to override custom adapter definitions', async () => {
+    const adapter = new CustomServiceAdapter({
+      type: 'custom-http-v1',
+      staticCapabilities: capabilities('custom-http-v1', 'definition-model'),
+    });
+    const { provider, service } = await createCustomServiceHarness(
+      'custom-http-v1',
+      adapter,
+      customRef('declarative-http', '1.0.0', '2'.repeat(64)),
+    );
+
+    expect(() => service.saveManualModel({
+      providerId: provider.id,
+      modelId: 'definition-model',
+      displayName: 'Spoofed model',
+      capabilities: { operations: ['video.generate'] },
+    })).toThrowError(expect.objectContaining({ code: 'invalid_model' }));
   });
 });
 
