@@ -275,6 +275,53 @@ describe('ProviderAdapterDefinitionRepository', () => {
     expect(() => new JobRepository(reopened.orm).get(retry!.id)).toThrow('Job adapter reference is invalid.');
   });
 
+  it('atomically captures the validated current revision and fails closed for stale or built-in refs', async () => {
+    const database = await createTestDatabase();
+    const providers = new ProviderRepository(database.orm);
+    const provider = providers.create({ name: 'Current snapshot', type: 'custom-http-v1' });
+    const definitions = new ProviderAdapterDefinitionRepository(database.orm);
+    const first = await declarativeRef();
+    definitions.replace(provider.id, first);
+    const jobs = new JobRepository(database.orm);
+    const request = createMockGenerationRequest({ providerId: provider.id });
+
+    const firstJob = jobs.createAtCurrent(request, first.ref);
+    expect(firstJob.adapterRef).toEqual(first.ref);
+    expect(() => jobs.create(request)).toThrow(
+      expect.objectContaining({ code: 'adapter_ref_missing' }),
+    );
+    expect(() => jobs.createAtCurrent(request)).toThrow(
+      expect.objectContaining({ code: 'adapter_ref_missing' }),
+    );
+
+    const secondRef = { ...first.ref, version: '2.0.0' };
+    definitions.replace(provider.id, { ref: secondRef, definition: first.definition });
+    expect(() => jobs.createAtCurrent(request, first.ref)).toThrow(
+      expect.objectContaining({ code: 'adapter_ref_not_current' }),
+    );
+    expect(jobs.list()).toHaveLength(1);
+
+    const claimed = jobs.claimQueued(firstJob.id, firstJob.revision);
+    if (!claimed) throw new Error('Expected the current snapshot Job to be claimed.');
+    expect(jobs.compareAndSetStatus(firstJob.id, claimed.revision, ['submitting'], 'failed', 'failed')).not.toBeNull();
+    const retried = jobs.retry(firstJob.id);
+    expect(retried?.adapterRef).toEqual(first.ref);
+    expect(definitions.disable(provider.id)?.ref).toEqual(secondRef);
+    expect(() => jobs.createAtCurrent(request, secondRef)).toThrow(
+      expect.objectContaining({ code: 'adapter_ref_missing' }),
+    );
+
+    const builtin = providers.create({ name: 'Built-in snapshot', type: 'mock' });
+    expect(() => jobs.create(
+      createMockGenerationRequest({ providerId: builtin.id }),
+      first.ref,
+    )).toThrow(expect.objectContaining({ code: 'adapter_ref_provider_mismatch' }));
+    expect(() => jobs.createAtCurrent(
+      createMockGenerationRequest({ providerId: builtin.id }),
+      first.ref,
+    )).toThrow(expect.objectContaining({ code: 'adapter_ref_provider_mismatch' }));
+  });
+
   it('cascades definitions when the owning provider is deleted', async () => {
     const database = await createTestDatabase();
     const provider = new ProviderRepository(database.orm).create({ name: 'Declarative', type: 'custom-http-v1' });

@@ -188,6 +188,9 @@ export interface ProviderError {
   statusCode?: number;
 }
 
+/** Provider adapters may normalize locally or across an async worker boundary. */
+export type MaybePromise<T> = T | Promise<T>;
+
 export interface ProviderAdapter {
   readonly type: string;
 
@@ -200,5 +203,5 @@ export interface ProviderAdapter {
   cancel?(remoteJobId: string, context: ProviderContext): Promise<void>;
   /** Resolve a provider-owned result into an ephemeral authenticated target. */
   resolveResult?(asset: ProviderAssetReference, context: ProviderContext): Promise<ProviderResultTarget>;
-  normalizeError(error: unknown): ProviderError;
+  normalizeError(error: unknown): MaybePromise<ProviderError>;
 }

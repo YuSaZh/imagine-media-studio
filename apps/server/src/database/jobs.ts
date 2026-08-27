@@ -42,6 +42,7 @@ import {
   jobOutputs,
   jobs,
   providerAdapterDefinitions,
+  providers,
 } from './schema.js';
 import { parseStageRetryCounts, type StageRetryCounts } from '../jobs/retry-budget.js';
 import {
@@ -188,6 +189,10 @@ export class JobRepositoryError extends Error {
       | 'source_input_required'
       | 'adapter_ref_invalid'
       | 'adapter_definition_not_found'
+      | 'provider_not_found'
+      | 'adapter_ref_missing'
+      | 'adapter_ref_not_current'
+      | 'adapter_ref_provider_mismatch'
       | 'adapter_ref_corrupt'
       | 'persisted_data_corrupt',
     message: string,
@@ -342,6 +347,118 @@ function normalizeAdapterRef(value: CustomAdapterRef | null | undefined): Custom
   return parsed.data;
 }
 
+function adapterKindForProviderType(providerType: string): CustomAdapterRef['kind'] | null {
+  if (providerType === 'custom-http-v1') return 'declarative-http';
+  if (providerType === 'custom-js-v1') return 'trusted-javascript';
+  return null;
+}
+
+function sameAdapterRef(left: CustomAdapterRef, right: CustomAdapterRef): boolean {
+  return left.kind === right.kind &&
+    left.adapterId === right.adapterId &&
+    left.version === right.version &&
+    left.digest === right.digest;
+}
+
+/**
+ * Resolve and verify the adapter revision while the Job insert transaction is
+ * open. The expected ref comes from the registration used for validation;
+ * comparing it with the current row closes the route resolve/create race.
+ */
+function assertCurrentAdapterRef(
+  transaction: AppDatabase,
+  providerId: string,
+  expected: CustomAdapterRef | null,
+): CustomAdapterRef | null {
+  const provider = transaction
+    .select({ type: providers.type })
+    .from(providers)
+    .where(eq(providers.id, providerId))
+    .get();
+  if (provider === undefined) {
+    throw new JobRepositoryError('provider_not_found', 'Provider was not found.');
+  }
+
+  const expectedKind = adapterKindForProviderType(provider.type);
+  if (expectedKind === null) {
+    if (expected !== null) {
+      throw new JobRepositoryError(
+        'adapter_ref_provider_mismatch',
+        'Built-in Providers cannot use a custom adapter reference.',
+      );
+    }
+    return null;
+  }
+  if (expected === null) {
+    throw new JobRepositoryError(
+      'adapter_ref_missing',
+      'A custom Provider must have an adapter reference before creating a Job.',
+    );
+  }
+  if (expected.kind !== expectedKind) {
+    throw new JobRepositoryError(
+      'adapter_ref_provider_mismatch',
+      'The adapter reference kind does not match the Provider type.',
+    );
+  }
+
+  const current = transaction
+    .select({
+      kind: providerAdapterDefinitions.kind,
+      adapterId: providerAdapterDefinitions.adapterId,
+      version: providerAdapterDefinitions.version,
+      digest: providerAdapterDefinitions.digest,
+      disabled: providerAdapterDefinitions.disabled,
+    })
+    .from(providerAdapterDefinitions)
+    .where(and(
+      eq(providerAdapterDefinitions.providerId, providerId),
+      eq(providerAdapterDefinitions.isCurrent, true),
+    ))
+    .get();
+  if (current === undefined || current.disabled) {
+    throw new JobRepositoryError(
+      'adapter_ref_missing',
+      'The custom Provider has no enabled current adapter revision.',
+    );
+  }
+  const currentRef = CustomAdapterRefSchema.safeParse({
+    kind: current.kind,
+    adapterId: current.adapterId,
+    version: current.version,
+    digest: current.digest,
+  });
+  if (!currentRef.success) {
+    throw new JobRepositoryError('adapter_ref_corrupt', 'The current Provider adapter reference is invalid.');
+  }
+  if (!sameAdapterRef(currentRef.data, expected)) {
+    throw new JobRepositoryError(
+      'adapter_ref_not_current',
+      'The Provider adapter revision changed while the Job was being created.',
+    );
+  }
+
+  const exact = transaction
+    .select({ disabled: providerAdapterDefinitions.disabled })
+    .from(providerAdapterDefinitions)
+    .where(and(
+      eq(providerAdapterDefinitions.providerId, providerId),
+      eq(providerAdapterDefinitions.kind, expected.kind),
+      eq(providerAdapterDefinitions.adapterId, expected.adapterId),
+      eq(providerAdapterDefinitions.version, expected.version),
+      eq(providerAdapterDefinitions.digest, expected.digest),
+      eq(providerAdapterDefinitions.isCurrent, true),
+    ))
+    .get();
+  if (exact === undefined || exact.disabled) {
+    throw new JobRepositoryError(
+      'adapter_ref_not_current',
+      'The Provider adapter revision is no longer current.',
+    );
+  }
+  return expected;
+}
+
 function jobCursorCondition(cursor: { timestampMs: number; id: string }): SQL {
   const timestamp = new Date(cursor.timestampMs);
   return or(
@@ -400,10 +517,36 @@ export class JobRepository {
     );
   }
 
+  /**
+   * Create a Job using the Provider adapter revision that was validated by
+   * the caller. The expected ref is checked against the current row inside the
+   * same SQLite transaction as the Job insert.
+   */
+  public createAtCurrent(
+    request: GenerationRequest,
+    expectedAdapterRef?: CustomAdapterRef | null,
+  ): JobRecord {
+    return this.createWithInputsInternal(
+      request,
+      request.inputs.map((input, sortOrder) => ({ ...input, sortOrder })),
+      expectedAdapterRef,
+      true,
+    );
+  }
+
   public createWithInputs(
     rawRequest: GenerationRequest,
     inputs: readonly CreateJobInput[],
     adapterRef?: CustomAdapterRef | null,
+  ): JobRecord {
+    return this.createWithInputsInternal(rawRequest, inputs, adapterRef, false);
+  }
+
+  private createWithInputsInternal(
+    rawRequest: GenerationRequest,
+    inputs: readonly CreateJobInput[],
+    adapterRef: CustomAdapterRef | null | undefined,
+    requireCurrentAdapterRef: boolean,
   ): JobRecord {
     const request = GenerationRequestSchema.parse(rawRequest);
     const normalizedAdapterRef = normalizeAdapterRef(adapterRef);
@@ -425,7 +568,38 @@ export class JobRepository {
           );
         }
       }
-      if (normalizedAdapterRef !== null) {
+      const jobAdapterRef = requireCurrentAdapterRef
+        ? assertCurrentAdapterRef(transaction, request.providerId, normalizedAdapterRef)
+        : normalizedAdapterRef;
+      if (!requireCurrentAdapterRef) {
+        const provider = transaction
+          .select({ type: providers.type })
+          .from(providers)
+          .where(eq(providers.id, request.providerId))
+          .get();
+        if (provider !== undefined) {
+          const expectedKind = adapterKindForProviderType(provider.type);
+          if (expectedKind === null && jobAdapterRef !== null) {
+            throw new JobRepositoryError(
+              'adapter_ref_provider_mismatch',
+              'Built-in Providers cannot use a custom adapter reference.',
+            );
+          }
+          if (expectedKind !== null && jobAdapterRef === null) {
+            throw new JobRepositoryError(
+              'adapter_ref_missing',
+              'A custom Provider must have an adapter reference before creating a Job.',
+            );
+          }
+          if (expectedKind !== null && jobAdapterRef !== null && jobAdapterRef.kind !== expectedKind) {
+            throw new JobRepositoryError(
+              'adapter_ref_provider_mismatch',
+              'The adapter reference kind does not match the Provider type.',
+            );
+          }
+        }
+      }
+      if (!requireCurrentAdapterRef && jobAdapterRef !== null) {
         const definition = transaction
           .select({
             kind: providerAdapterDefinitions.kind,
@@ -436,10 +610,10 @@ export class JobRepository {
           .from(providerAdapterDefinitions)
           .where(and(
             eq(providerAdapterDefinitions.providerId, request.providerId),
-            eq(providerAdapterDefinitions.kind, normalizedAdapterRef.kind),
-            eq(providerAdapterDefinitions.adapterId, normalizedAdapterRef.adapterId),
-            eq(providerAdapterDefinitions.version, normalizedAdapterRef.version),
-            eq(providerAdapterDefinitions.digest, normalizedAdapterRef.digest),
+            eq(providerAdapterDefinitions.kind, jobAdapterRef.kind),
+            eq(providerAdapterDefinitions.adapterId, jobAdapterRef.adapterId),
+            eq(providerAdapterDefinitions.version, jobAdapterRef.version),
+            eq(providerAdapterDefinitions.digest, jobAdapterRef.digest),
           ))
           .get();
         if (definition === undefined) {
@@ -479,10 +653,10 @@ export class JobRepository {
           cancelRequestedAt: null,
           requestSha256: requestHash(requestJson),
           deletedAt: null,
-          adapterKind: normalizedAdapterRef?.kind ?? null,
-          adapterId: normalizedAdapterRef?.adapterId ?? null,
-          adapterVersion: normalizedAdapterRef?.version ?? null,
-          adapterDigest: normalizedAdapterRef?.digest ?? null,
+          adapterKind: jobAdapterRef?.kind ?? null,
+          adapterId: jobAdapterRef?.adapterId ?? null,
+          adapterVersion: jobAdapterRef?.version ?? null,
+          adapterDigest: jobAdapterRef?.digest ?? null,
         })
         .run();
       for (const input of inputs) {

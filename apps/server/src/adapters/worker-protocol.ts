@@ -6,6 +6,7 @@ import {
   type AdapterManifest,
   type AdapterResourceLimits,
 } from './manifest.js';
+import { isCredentialLikeQueryName as isCredentialLikeQueryNameShared } from '../security/network-policy.js';
 
 export const MAX_PROVIDER_ID_BYTES = 255;
 export const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -38,9 +39,6 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
-const CREDENTIAL_QUERY_TOKEN = /(?:^|[-_])(?:token|key|api[-_]?key|access[-_]?token|authorization|auth|credential|credentials|signature|sig|secret|password|idempotency[-_]?key)(?:$|[-_])/iu;
-const SIGNED_QUERY_PREFIX = /^x[-_]?(?:amz|goog|ms)(?:[-_].*)?$/iu;
-const OAUTH_QUERY_PREFIX = /^oauth(?:[-_].*)?$/iu;
 const SECRET_LIKE_KEY_PATTERN = /(?:^|[-_.])(?:api[-_.]?key|authorization|cookie|password|secret|token|credential|headers?)(?:$|[-_.])/iu;
 
 export type AdapterCall = 'capabilities' | 'submit' | 'poll' | 'cancel' | 'normalizeError';
@@ -88,9 +86,24 @@ export interface AdapterHttpResponse {
   readonly body: Uint8Array;
 }
 
+export interface AdapterHttpValidationOptions {
+  /** Protocols allowed by the installed adapter manifest. */
+  readonly allowedProtocols?: readonly ('http:' | 'https:' | 'http' | 'https')[];
+  /** Effective TCP ports allowed by the installed adapter manifest. */
+  readonly allowedPorts?: readonly number[];
+  /** Provider base URLs may opt into a non-default port before request checks. */
+  readonly allowNonDefaultPort?: boolean;
+}
+
 export interface SafeHttpPort {
   /** The host implementation must re-check redirect targets before following any redirect. */
   request(request: AdapterHttpRequest, signal: AbortSignal): Promise<AdapterHttpResponse>;
+  /** Optional provider-port facade hook for per-manifest response limits. */
+  requestWithLimit?(
+    request: AdapterHttpRequest,
+    signal: AbortSignal,
+    maxResponseBodyBytes: number,
+  ): Promise<AdapterHttpResponse>;
 }
 
 export interface AdapterWorkerData {
@@ -144,8 +157,10 @@ export class AdapterHttpRequestError extends AdapterProtocolError {
 
 export class AdapterWorkerFailure extends Error {
   public override readonly name: string = 'AdapterWorkerFailure';
-  public constructor(message: string, public readonly code = 'adapter_worker_failed', options?: ErrorOptions) {
-    super(message, options);
+  public constructor(message: string, public readonly code = 'adapter_worker_failed', _options?: ErrorOptions) {
+    // Never attach ErrorOptions/cause: adapter errors cross a public boundary
+    // and raw causes may contain provider credentials or request bodies.
+    super(message);
   }
 }
 
@@ -170,7 +185,16 @@ function boundedText(value: unknown, max: number, label: string): string {
   return value;
 }
 
-function safeUrl(value: unknown, label: string): string {
+function effectiveUrlPort(parsed: URL): number {
+  if (parsed.port !== '') return Number(parsed.port);
+  return parsed.protocol === 'https:' ? 443 : 80;
+}
+
+function safeUrl(
+  value: unknown,
+  label: string,
+  options: AdapterHttpValidationOptions = {},
+): string {
   const text = boundedText(value, 4_096, label);
   let parsed: URL;
   try {
@@ -178,8 +202,19 @@ function safeUrl(value: unknown, label: string): string {
   } catch {
     throw new AdapterProtocolError(`${label} is not an absolute URL.`);
   }
-  if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.port !== '' || parsed.hash !== '') {
-    throw new AdapterProtocolError(`${label} must be HTTPS without credentials, ports, or fragments.`);
+  const allowedProtocols = (options.allowedProtocols ?? ['https:']).map((protocol) =>
+    protocol.endsWith(':') ? protocol.toLowerCase() : `${protocol.toLowerCase()}:`,
+  );
+  if (!allowedProtocols.includes(parsed.protocol)) {
+    throw new AdapterProtocolError(`${label} uses a protocol that is not allowed by the adapter manifest.`);
+  }
+  const port = effectiveUrlPort(parsed);
+  const allowedPorts = options.allowedPorts ?? (options.allowNonDefaultPort === true ? undefined : [parsed.protocol === 'https:' ? 443 : 80]);
+  if (allowedPorts !== undefined && !allowedPorts.includes(port)) {
+    throw new AdapterProtocolError(`${label} uses a port that is not allowed by the adapter manifest.`);
+  }
+  if (parsed.username !== '' || parsed.password !== '' || parsed.hash !== '') {
+    throw new AdapterProtocolError(`${label} must not contain credentials or fragments.`);
   }
   for (const key of parsed.searchParams.keys()) if (isCredentialQueryName(key)) throw new AdapterProtocolError(`${label} contains a credential query parameter.`);
   return text;
@@ -236,7 +271,10 @@ function safeResponseHeaders(value: unknown): Record<string, string> {
   return output;
 }
 
-export function validateHttpRequest(value: unknown): AdapterHttpRequest {
+export function validateHttpRequest(
+  value: unknown,
+  options: AdapterHttpValidationOptions = {},
+): AdapterHttpRequest {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new AdapterHttpRequestError('HTTP request must be an object.');
   const input = value as Record<string, unknown>;
   if (typeof input.method !== 'string' || !SAFE_METHODS.includes(input.method as (typeof SAFE_METHODS)[number])) {
@@ -250,20 +288,23 @@ export function validateHttpRequest(value: unknown): AdapterHttpRequest {
   }
   return {
     method: input.method as (typeof SAFE_METHODS)[number],
-    url: safeUrl(input.url, 'HTTP URL'),
+    url: safeUrl(input.url, 'HTTP URL', options),
     headers,
     ...(body === undefined ? {} : { body }),
   };
 }
 
-export function validateHttpResponse(value: unknown): AdapterHttpResponse {
+export function validateHttpResponse(value: unknown, maxBodyBytes = MAX_HTTP_BODY_BYTES): AdapterHttpResponse {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new AdapterHttpRequestError('HTTP response must be an object.');
   const input = value as Record<string, unknown>;
   if (typeof input.status !== 'number' || !Number.isInteger(input.status) || input.status < 100 || input.status > 599) {
     throw new AdapterHttpRequestError('HTTP response status is invalid.');
   }
   const headers = safeResponseHeaders(input.headers);
-  if (!(input.body instanceof Uint8Array) || input.body.byteLength > MAX_HTTP_BODY_BYTES) throw new AdapterHttpRequestError('HTTP response body is too large or invalid.');
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > MAX_HTTP_BODY_BYTES) {
+    throw new AdapterHttpRequestError('HTTP response body limit is invalid.');
+  }
+  if (!(input.body instanceof Uint8Array) || input.body.byteLength > maxBodyBytes) throw new AdapterHttpRequestError('HTTP response body is too large or invalid.');
   return { status: input.status, headers, body: Uint8Array.from(input.body) };
 }
 
@@ -522,12 +563,15 @@ export function validateAdapterResult(
   throw new AdapterProtocolError('Unknown adapter call result.');
 }
 
-export function validateAdapterProvider(provider: AdapterProviderView | undefined): AdapterProviderView | undefined {
+export function validateAdapterProvider(
+  provider: AdapterProviderView | undefined,
+  httpOptions: AdapterHttpValidationOptions = {},
+): AdapterProviderView | undefined {
   if (provider === undefined) return undefined;
   const providerId = boundedText(provider.providerId, MAX_PROVIDER_ID_BYTES, 'providerId');
   let baseUrl: string | undefined;
   if (provider.baseUrl !== undefined) {
-    baseUrl = safeUrl(provider.baseUrl, 'provider base URL');
+    baseUrl = safeUrl(provider.baseUrl, 'provider base URL', httpOptions);
   }
   assertJson(provider.config);
   assertBoundedAdapterData(provider.config, MAX_REQUEST_BYTES);
@@ -542,8 +586,7 @@ export function validateAdapterProvider(provider: AdapterProviderView | undefine
 }
 
 export function isCredentialQueryName(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return CREDENTIAL_QUERY_TOKEN.test(normalized) || SIGNED_QUERY_PREFIX.test(normalized) || OAUTH_QUERY_PREFIX.test(normalized);
+  return isCredentialLikeQueryNameShared(value);
 }
 
 export type AdapterWorkerLimits = AdapterResourceLimits;

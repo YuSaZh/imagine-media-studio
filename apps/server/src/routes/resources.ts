@@ -268,16 +268,29 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
         secrets: registration.secrets,
       });
     } catch (error) {
-      const normalized = registration.adapter.normalizeError(error);
+      const normalized = await Promise.resolve()
+        .then(() => registration.adapter.normalizeError(error))
+        .catch(() => null);
+      if (normalized === null) {
+        return errorResponse(reply, 502, 'provider_unknown', 'The provider operation failed.');
+      }
       return errorResponse(reply, normalized.kind === 'rejected' ? 400 : 502, normalized.code, normalized.message);
     }
     try {
-      const job = await publishCommitted(options, () => options.jobs.create(input));
+      const job = await publishCommitted(options, () => options.jobs.createAtCurrent(
+        input,
+        registration.adapterRef ?? null,
+      ));
       await options.runner.enqueue(job.id);
       return reply.code(202).send({ job: toJobDto(job, options.jobs.listOutputs(job.id).length) });
     } catch (error) {
       if (error instanceof JobRepositoryError) {
-        return errorResponse(reply, 400, error.code, error.message);
+        return errorResponse(
+          reply,
+          error.code === 'adapter_ref_not_current' ? 409 : 400,
+          error.code,
+          error.message,
+        );
       }
       throw error;
     }

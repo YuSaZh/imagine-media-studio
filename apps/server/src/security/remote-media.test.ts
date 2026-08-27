@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureStorage, getStoragePaths } from '../storage/paths.js';
-import { NetworkPolicy, UnsafeRemoteUrlError } from './network-policy.js';
+import { NetworkPolicy, UnsafeRemoteUrlError, type DnsResolverOptions } from './network-policy.js';
 import { RemoteMediaDownloader } from './remote-download.js';
 import {
   RemoteHttpError,
@@ -106,6 +106,64 @@ describe('NetworkPolicy', () => {
       'not allowed',
     );
   });
+
+  it('matches effective default ports and enforces an explicit port allowlist before DNS', async () => {
+    const resolver = vi.fn(publicResolver);
+    const https443 = new NetworkPolicy({ allowedPorts: [443], resolver });
+    await expect(https443.validate('https://public.example/file')).resolves.toBeDefined();
+    await expect(https443.validate('https://public.example:443/file')).resolves.toBeDefined();
+    await expect(https443.validate('https://public.example:8443/file')).rejects.toThrow('port');
+    expect(resolver).toHaveBeenCalledTimes(2);
+
+    const http80 = new NetworkPolicy({ allowInsecureHttp: true, allowedPorts: [80], resolver: publicResolver });
+    await expect(http80.validate('http://public.example/file')).resolves.toBeDefined();
+    await expect(http80.validate('http://public.example:8080/file')).rejects.toThrow('port');
+  });
+
+  it('bounds DNS lookup by connect timeout and aborts with stable, redacted errors', async () => {
+    const timeoutPolicy = new NetworkPolicy({
+      dnsTimeoutMs: 5,
+      resolver: () => new Promise(() => undefined),
+    });
+    await expect(timeoutPolicy.validate('https://slow.example/file')).rejects.toMatchObject({
+      code: 'dns_timeout',
+      message: 'Remote hostname lookup timed out.',
+    });
+
+    const controller = new AbortController();
+    const abortPolicy = new NetworkPolicy({
+      resolver: () => new Promise(() => undefined),
+    });
+    const pending = abortPolicy.validate('https://abort.example/file', {
+      connectTimeoutMs: 1_000,
+      signal: controller.signal,
+    });
+    controller.abort('resolver secret must not cross');
+    await expect(pending).rejects.toMatchObject({
+      code: 'dns_aborted',
+      message: 'Remote hostname lookup was aborted.',
+    });
+
+    const failed = new NetworkPolicy({
+      resolver: () => Promise.reject(new Error('resolver secret=must-not-cross')),
+    });
+    await expect(failed.validate('https://failed.example/file')).rejects.toMatchObject({
+      code: 'dns_failed',
+      message: 'Remote hostname lookup failed.',
+    });
+  });
+
+  it('rejects credential-like query variants while allowing public parameters', async () => {
+    const policy = new NetworkPolicy({ resolver: publicResolver });
+    for (const name of ['api-key', 'api_key', 'api.key', 'access-token', 'access_token', 'access.token', 'oauth-token', 'oauth_token', 'oauth.token', 'x-amz-signature', 'x_amz_signature', 'x.amz.signature']) {
+      await expect(policy.validate(`https://public.example/file?${name}=signed`)).rejects.toMatchObject({
+        name: 'UnsafeRemoteUrlError',
+      });
+    }
+    for (const name of ['variant', 'format', 'tokenizer', 'authenticity', 'keynote']) {
+      await expect(policy.validate(`https://public.example/file?${name}=value`)).resolves.toBeDefined();
+    }
+  });
 });
 
 describe('SafeHttpTransport', () => {
@@ -186,6 +244,61 @@ describe('SafeHttpTransport', () => {
     ]);
     expect(first.disposed()).toBe(true);
     await response.dispose();
+  });
+
+  it('passes the caller signal and an explicit connect timeout to policy on every hop', async () => {
+    const controller = new AbortController();
+    const resolver = vi.fn(async (hostname: string, _options?: DnsResolverOptions) => [{
+      address: hostname === 'second.example' ? '1.1.1.1' : '8.8.8.8',
+      family: 4 as const,
+    }]);
+    const first = rawResponse(302, { location: 'https://second.example/final' });
+    const second = rawResponse(200, { 'content-type': 'image/png' }, PNG);
+    let calls = 0;
+    const transport = new SafeHttpTransport({
+      executor: async () => calls++ === 0 ? first : second,
+      policy: new NetworkPolicy({ resolver }),
+    });
+    await transport.fetch('https://public.example/start', { connectTimeoutMs: 25, signal: controller.signal });
+    expect(resolver).toHaveBeenCalledTimes(2);
+    for (const call of resolver.mock.calls) {
+      expect(call[1]?.signal).toBe(controller.signal);
+      expect(call[1]?.timeoutMs).toBe(25);
+    }
+    expect(first.disposed()).toBe(true);
+    await second.dispose();
+  });
+
+  it('returns stable abort/timeout errors during DNS and disposes late executor responses', async () => {
+    const abortController = new AbortController();
+    const abortTransport = new SafeHttpTransport({
+      executor: vi.fn<PinnedRequestExecutor>(),
+      policy: new NetworkPolicy({ resolver: () => new Promise(() => undefined) }),
+    });
+    const pendingAbort = abortTransport.fetch('https://slow.example/file', { signal: abortController.signal, connectTimeoutMs: 1_000 });
+    abortController.abort('secret abort reason');
+    await expect(pendingAbort).rejects.toMatchObject({ code: 'aborted', message: 'Remote media request was aborted.' });
+
+    const timeoutTransport = new SafeHttpTransport({
+      executor: vi.fn<PinnedRequestExecutor>(),
+      policy: new NetworkPolicy({ resolver: () => new Promise(() => undefined) }),
+    });
+    await expect(timeoutTransport.fetch('https://slow.example/file', { connectTimeoutMs: 5 })).rejects.toMatchObject({
+      code: 'timeout',
+      message: 'Remote media request timed out.',
+    });
+
+    let release: ((response: RawPinnedResponse) => void) | undefined;
+    const late = rawResponse(200, { 'content-type': 'image/png' }, PNG);
+    const lateTransport = new SafeHttpTransport({
+      executor: async () => new Promise<RawPinnedResponse>((resolve) => {
+        release = resolve;
+      }),
+      policy: new NetworkPolicy({ resolver: publicResolver }),
+    });
+    await expect(lateTransport.fetch('https://public.example/file', { connectTimeoutMs: 5 })).rejects.toMatchObject({ code: 'timeout' });
+    release?.(late);
+    await vi.waitFor(() => expect(late.disposed()).toBe(true));
   });
 
   it('blocks a redirect to a private target before the second request', async () => {

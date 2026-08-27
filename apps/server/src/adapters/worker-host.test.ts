@@ -30,7 +30,11 @@ import type {
   AdapterWorkerData,
   SafeHttpPort,
 } from './worker-protocol.js';
-import type { AdapterProviderContext } from './worker-host.js';
+import {
+  ProviderHttpSafePort,
+  type AdapterProviderContext,
+} from './worker-host.js';
+import type { ProviderHttpClientPort } from '@imagine/provider-contract';
 
 const source = "export const capabilities = { providerType: 'fixture', models: [{ id: 'model', displayName: 'Model', capabilities: { operations: ['image.generate'] } }] }; export async function submit() { return { state: 'completed', assets: [{ type: 'image', mimeType: 'image/png', source: 'base64', base64: 'aGVsbG8=' }] }; } export function normalizeError() { return { code: 'error', kind: 'unknown', message: 'error', retryable: false }; }\n";
 const limits = {
@@ -246,6 +250,63 @@ afterEach(async () => {
 });
 
 describe('AdapterWorkerHost', () => {
+  it('maps adapter bytes to the provider HTTP port and disposes bounded responses', async () => {
+    let requestInput: Parameters<ProviderHttpClientPort['request']>[0] | undefined;
+    let disposed = false;
+    const provider: ProviderHttpClientPort = {
+      async request(input) {
+        requestInput = input;
+        return {
+          body: new Uint8Array([0, 255, 1]),
+          dispose: async () => {
+            disposed = true;
+          },
+          headers: { 'content-type': 'application/octet-stream', 'x-api-key': 'must-not-cross' },
+          status: 200,
+          statusCode: 200,
+        };
+      },
+    };
+    const signal = new AbortController().signal;
+    const facade = new ProviderHttpSafePort(provider, 8);
+    await expect(facade.request({
+      body: new Uint8Array([0, 1, 255]),
+      headers: { 'content-type': 'application/octet-stream' },
+      method: 'POST',
+      url: 'https://api.example.com/upload',
+    }, signal)).resolves.toEqual({
+      body: new Uint8Array([0, 255, 1]),
+      headers: { 'content-type': 'application/octet-stream' },
+      status: 200,
+    });
+    expect(requestInput).toMatchObject({ bodyBytes: new Uint8Array([0, 1, 255]), maxResponseBodyBytes: 8, signal });
+    expect(requestInput?.body).toBeUndefined();
+    expect(disposed).toBe(true);
+  });
+
+  it('disposes provider responses when the facade response exceeds its manifest limit', async () => {
+    let disposed = false;
+    const provider: ProviderHttpClientPort = {
+      async request() {
+        return {
+          body: new Uint8Array([1, 2, 3, 4]),
+          dispose: async () => {
+            disposed = true;
+          },
+          headers: {},
+          status: 200,
+          statusCode: 200,
+        };
+      },
+    };
+    await expect(new ProviderHttpSafePort(provider, 3).request({
+      headers: {},
+      method: 'GET',
+      url: 'https://api.example.com/result',
+    }, new AbortController().signal)).rejects.toMatchObject({ code: 'response_body_too_large' });
+    expect(disposed).toBe(true);
+  });
+
   it('does not expose provider secrets to capabilities and filters them for submit', async () => {
     const store = await makeStore();
     const captured: AdapterWorkerData[] = [];
@@ -342,6 +403,11 @@ describe('AdapterWorkerHost', () => {
     expect(Object.getPrototypeOf(validatedResponse.headers)).toBeNull();
     expect(validatedResponse.headers).toMatchObject({ 'content-length': '2', 'set-cookie': 'cookie', 'x-request-id': 'id' });
     expect(Object.getPrototypeOf(validateHttpRequest({ method: 'GET', url: 'https://api.example.com/', headers: {} }).headers)).toBeNull();
+    expect(validateHttpRequest({ method: 'GET', url: 'https://api.example.com:8443/', headers: {} }, { allowedPorts: [8443] }).url)
+      .toBe('https://api.example.com:8443/');
+    expect(validateHttpRequest({ method: 'GET', url: 'http://api.example.com/', headers: {} }, { allowedProtocols: ['http'], allowedPorts: [80] }).url)
+      .toBe('http://api.example.com/');
+    expect(() => validateHttpRequest({ method: 'GET', url: 'https://api.example.com:8444/', headers: {} }, { allowedPorts: [8443] })).toThrow('port');
     expect(validateAdapterResult('poll', { state: 'remote_running', progress: 100 }, 1_048_576)).toMatchObject({ progress: 100 });
     expect(() => validateAdapterResult('poll', { state: 'completed', assets: [] }, 1_048_576)).toThrow(AdapterProtocolError);
     expect(() => validateAdapterResult('submit', { state: 'completed', assets: [{ type: 'image', mimeType: 'image/png', source: 'base64', base64: 'aGVsbG8=', metadata: { token: 'secret' } }] }, 1_048_576, ['secret'])).toThrow(AdapterProtocolError);
@@ -359,6 +425,8 @@ describe('AdapterWorkerHost', () => {
     expect(unknownError.message).not.toContain('auth-secret');
     expect(unknownError.message).not.toContain('cookie-secret');
     expect(unknownError.message).not.toContain('set-cookie-secret');
+    const failure = new AdapterWorkerFailure('safe message', 'adapter_worker_error');
+    expect(failure).not.toHaveProperty('cause');
   });
 
   it('resolves the production .js worker entry and permits explicit test injection', () => {

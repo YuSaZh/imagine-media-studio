@@ -182,9 +182,13 @@ describe('custom declarative HTTP parser and compiler', () => {
     expect(() => compileDeclarativeRequest(querySpec, request({ extra: { style: 'editorial' } }), context())).toThrow(/Secrets may not be placed in query/);
     querySpec.submit.query = { 'api-key': 'value' };
     expect(() => compileDeclarativeRequest(querySpec, request({ extra: { style: 'editorial' } }), context())).toThrow(/Credential-like query/);
-    for (const name of ['access-token', 'oauth_token', 'x_amz_signature', 'x-goog-signature', 'x-ms-credential']) {
+    for (const name of ['access-token', 'access.token', 'oauth_token', 'oauth.token', 'x_amz_signature', 'x.amz.signature', 'x-goog-signature', 'x-ms-credential', 'api.key']) {
       querySpec.submit.query = { [name]: 'value' };
       expect(() => compileDeclarativeRequest(querySpec, request({ extra: { style: 'editorial' } }), context())).toThrow(/Credential-like query/);
+    }
+    for (const name of ['tokenizer', 'authenticity', 'keynote', 'signatured', 'client_secretary']) {
+      querySpec.submit.query = { [name]: 'value' };
+      expect(() => compileDeclarativeRequest(querySpec, request({ extra: { style: 'editorial' } }), context())).not.toThrow();
     }
   });
 

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MediaOperationSchema, ModelCapabilitiesSchema } from '@imagine/shared';
+import { isCredentialLikeQueryName as isCredentialLikeQueryNameShared } from '../../security/network-policy.js';
 
 export const DECLARATIVE_HTTP_ADAPTER_TYPE = 'custom-http-v1' as const;
 
@@ -35,8 +36,6 @@ export const DECLARATIVE_OPERATIONS = [
 ] as const;
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const CREDENTIAL_QUERY_PATTERN = /(?:^|[-_])(?:token|key|api[-_]?key|access[-_]?token|authorization|auth|credential|credentials|signature|sig|secret|password|idempotency[-_]?key)(?:$|[-_])/iu;
-const SIGNED_QUERY_PREFIX_PATTERN = /^(?:x[-_]?(?:amz|goog|ms)[-_].+|oauth(?:[-_].*)?)$/iu;
 
 const safeKey = z.string().min(1).max(128).refine((value) => !DANGEROUS_KEYS.has(value), {
   message: 'Prototype-related keys are not allowed.',
@@ -329,6 +328,5 @@ export function isDangerousKey(value: string): boolean {
 }
 
 export function isCredentialLikeQueryName(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return CREDENTIAL_QUERY_PATTERN.test(normalized) || SIGNED_QUERY_PREFIX_PATTERN.test(normalized);
+  return isCredentialLikeQueryNameShared(value);
 }

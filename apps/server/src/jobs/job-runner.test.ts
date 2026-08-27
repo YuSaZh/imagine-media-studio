@@ -13,7 +13,7 @@ import type {
   SubmittedAsset,
   SubmitResult,
 } from '@imagine/provider-contract';
-import type { GenerationRequest } from '@imagine/shared';
+import type { CustomAdapterRef, GenerationRequest } from '@imagine/shared';
 import { createMockGenerationRequest } from '@imagine/testkit';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -168,6 +168,7 @@ function createRunnerJob(
     materializedAssets: overrides.materializedAssets ?? [],
     error: overrides.error ?? null,
     stageRetryCounts: overrides.stageRetryCounts ?? { poll: 0, download: 0, process: 0 },
+    adapterRef: overrides.adapterRef ?? null,
   };
 }
 
@@ -398,7 +399,7 @@ class CompletedTestProvider implements ProviderAdapter {
     return { state: 'completed', assets: this.assets };
   }
 
-  public normalizeError(error: unknown): ProviderError {
+  public normalizeError(error: unknown): ProviderError | Promise<ProviderError> {
     return {
       code: 'completed_test_error',
       kind: 'unknown',
@@ -494,13 +495,15 @@ class RetryingSubmitProvider extends CompletedTestProvider {
     throw new Error('transient submit failure');
   }
 
-  public override normalizeError(error: unknown): ProviderError {
+  public override async normalizeError(error: unknown): Promise<ProviderError> {
+    await Promise.resolve();
     return {
       code: 'transient_submit',
       kind: 'transient',
       message: error instanceof Error ? error.message : 'Transient submit failure',
       retryable: true,
       retryAfterMs: 0,
+      statusCode: 429,
     };
   }
 }
@@ -578,6 +581,7 @@ function createMemoryRunner(
   providerFor: (providerId: string) => {
     adapter: ProviderAdapter;
     submitReplaySafe: boolean;
+    adapterRef?: CustomAdapterRef | null;
     baseUrl?: string;
     config?: Readonly<Record<string, unknown>>;
     http?: ProviderHttpClientPort;
@@ -587,6 +591,7 @@ function createMemoryRunner(
   providerResolver?: (
     providerId: string,
     registration: ProviderRegistration,
+    adapterRef: CustomAdapterRef | null,
   ) => Promise<ProviderRegistration> | ProviderRegistration,
   mediaOverrides: {
     maxAttempts?: number;
@@ -617,9 +622,11 @@ function createMemoryRunner(
       },
     },
     providers: {
-      resolve: (providerId) => {
+      resolve: (providerId, adapterRef = null) => {
         const registration = { ...providerFor(providerId), secrets: {} };
-        return providerResolver ? providerResolver(providerId, registration) : registration;
+        return providerResolver
+          ? providerResolver(providerId, registration, adapterRef)
+          : registration;
       },
     },
     ...(inputLoader === undefined ? {} : { inputLoader }),
@@ -720,6 +727,84 @@ describe('JobRunner asynchronous state machine', () => {
     expect(provider.submitContext?.secrets).toEqual({});
     expect(jobs.records.get('input-context')?.status).toBe('completed');
     await runner.stop();
+  });
+
+  it('passes each Job adapter revision to submit, poll, materialize, process, recovery, and cancel', async () => {
+    const adapterRef: CustomAdapterRef = {
+      kind: 'declarative-http',
+      adapterId: 'fixture-adapter',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    const provider = new CompletedTestProvider([submittedBase64Asset()]);
+    const resolveCalls: Array<{ providerId: string; adapterRef: CustomAdapterRef | null }> = [];
+    const processingAsset: MaterializedAsset = {
+      type: 'image',
+      mimeType: 'image/png',
+      filePath: 'processing/exact-ref.png',
+      fileSize: 1,
+      sha256: 'exact-ref-sha',
+    };
+    const { runner, jobs } = createMemoryRunner(
+      [
+        createRunnerJob('exact-queued', { adapterRef }),
+        createRunnerJob('exact-submitting', {
+          adapterRef,
+          status: 'submitting',
+        }),
+        createRunnerJob('exact-remote', {
+          adapterRef,
+          status: 'remote_pending',
+          remoteJobId: 'remote-exact',
+          remoteDeadlineAt: new Date(Date.now() + 60_000),
+        }),
+        createRunnerJob('exact-processing', {
+          adapterRef,
+          status: 'processing',
+          materializedAssets: [processingAsset],
+        }),
+      ],
+      () => ({ adapter: provider, adapterRef, submitReplaySafe: true }),
+      [],
+      undefined,
+      async (providerId, registration, resolvedRef) => {
+        resolveCalls.push({ providerId, adapterRef: resolvedRef });
+        return registration;
+      },
+    );
+
+    await runner.start();
+    await runner.waitForIdle();
+
+    expect(jobs.records.get('exact-queued')?.status).toBe('completed');
+    expect(jobs.records.get('exact-submitting')?.status).toBe('completed');
+    expect(jobs.records.get('exact-remote')?.status).toBe('completed');
+    expect(jobs.records.get('exact-processing')?.status).toBe('completed');
+    expect(resolveCalls).toHaveLength(11);
+    expect(resolveCalls.every((call) => call.providerId.startsWith('mock'))).toBe(true);
+    expect(resolveCalls.map((call) => call.adapterRef)).toEqual(Array(11).fill(adapterRef));
+    await runner.stop();
+
+    const cancelProvider = new AsyncTestProvider();
+    const cancelCalls: Array<CustomAdapterRef | null> = [];
+    const cancelCase = createMemoryRunner(
+      [createRunnerJob('exact-cancel', {
+        adapterRef,
+        status: 'remote_running',
+        remoteJobId: 'cancel-exact',
+        remoteDeadlineAt: new Date(Date.now() + 60_000),
+      })],
+      () => ({ adapter: cancelProvider, adapterRef, submitReplaySafe: false }),
+      [],
+      undefined,
+      async (_providerId, registration, resolvedRef) => {
+        cancelCalls.push(resolvedRef);
+        return registration;
+      },
+    );
+    await cancelCase.runner.cancel('exact-cancel');
+    expect(cancelCase.jobs.records.get('exact-cancel')?.status).toBe('cancelled');
+    expect(cancelCalls).toEqual([adapterRef]);
   });
 
   it('cancels a submit blocked in provider resolution before validation or submit', async () => {
@@ -961,7 +1046,13 @@ describe('JobRunner asynchronous state machine', () => {
     expect(jobs.records.get('retry-limit')).toMatchObject({
       status: 'failed',
       attempt: 3,
-      error: { code: 'transient_submit' },
+      error: {
+        code: 'transient_submit',
+        kind: 'transient',
+        retryable: true,
+        retryAfterMs: 0,
+        statusCode: 429,
+      },
     });
     await runner.stop();
   });

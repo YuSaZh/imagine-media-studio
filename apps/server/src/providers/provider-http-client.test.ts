@@ -370,11 +370,22 @@ describe('ProviderHttpClient', () => {
       await expect(client.request(baseRequest({ url: `https://public.example/v1/content?${name}=value` })))
         .resolves.toMatchObject({ status: 200 });
     }
-    for (const name of ['token', 'api_key', 'api-key', 'apikey', 'APIKEY', 'access_token', 'access-token', 'access.key', 'authorization', 'credential_id', 'signature', 'signature.id', 'client_secret', 'client-secret', 'x-api-key', 'x_api_key', 'x-amz-signature', 'x_goog_credential', 'x-ms-token', 'oauth_token', 'oauth']) {
+    for (const name of ['token', 'api_key', 'api-key', 'api.key', 'apikey', 'APIKEY', 'access_token', 'access-token', 'access.token', 'authorization', 'credential_id', 'signature', 'signature.id', 'client_secret', 'client-secret', 'x-api-key', 'x_api_key', 'x.api.key', 'x-amz-signature', 'x_goog_credential', 'x.ms.token', 'oauth_token', 'oauth.token', 'oauth']) {
       await expect(client.request(baseRequest({ url: `https://public.example/v1/content?${name}=secret` })))
         .rejects.toMatchObject({ code: 'invalid_request' });
     }
     expect(executor).toHaveBeenCalledTimes(7);
+  });
+
+  it('enforces provider port policy using effective HTTPS/HTTP defaults', async () => {
+    const executor = vi.fn<ProviderHttpExecutor>().mockResolvedValue(jsonResponse({ ok: true }));
+    const https = new ProviderHttpClient({ allowedPorts: [8443], executor, resolver: PUBLIC_RESOLVER });
+    await expect(https.request(baseRequest({ url: 'https://public.example:8443/v1/images' }))).resolves.toMatchObject({ status: 200 });
+    await expect(https.request(baseRequest({ url: 'https://public.example/v1/images' }))).rejects.toMatchObject({ name: 'UnsafeRemoteUrlError' });
+
+    const http = new ProviderHttpClient({ allowInsecureHttp: true, allowedPorts: [80], executor, resolver: PUBLIC_RESOLVER });
+    await expect(http.request(baseRequest({ url: 'http://public.example/v1/images' }))).resolves.toMatchObject({ status: 200 });
+    await expect(http.request(baseRequest({ url: 'http://public.example:8080/v1/images' }))).rejects.toMatchObject({ name: 'UnsafeRemoteUrlError' });
   });
 
   it('rejects redirects and always disposes the redirect response', async () => {

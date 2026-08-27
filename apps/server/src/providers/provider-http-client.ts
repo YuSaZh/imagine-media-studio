@@ -11,6 +11,7 @@ import type {
 import {
   NetworkPolicy,
   UnsafeRemoteUrlError,
+  isCredentialLikeQueryName as isCredentialLikeQueryNameShared,
   type DnsResolver,
   type NetworkPolicyOptions,
   type ValidatedRemoteTarget,
@@ -35,8 +36,6 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
-const CREDENTIAL_QUERY_TOKEN_PATTERN = /(?:^|[-_.])(?:token|key|api[-_.]?key|access[-_.]?token|auth|authorization|credential|credentials|signature|sig|secret|password|idempotency[-_.]?key|bearer)(?:$|[-_.])/iu;
-const CREDENTIAL_QUERY_PREFIX_PATTERN = /^(?:x[-_.]?(?:amz|goog|ms)(?:[-_.].+)?|oauth(?:[-_.].*)?)$/iu;
 
 export const PROVIDER_HTTP_DEFAULTS = Object.freeze({
   bodyTimeoutMs: 30_000,
@@ -70,6 +69,27 @@ export interface ProviderHttpRawResponse {
  */
 export type ProviderHttpResponse = ContractProviderHttpResponse;
 
+// JSON/text responses intentionally keep their parsed convenience fields while
+// retaining the exact bounded bytes privately for the worker HTTP facade.
+// This avoids re-serializing JSON (which could change bytes) at a security
+// boundary without widening the shared provider contract.
+const rawResponseBodies = new WeakMap<object, Uint8Array>();
+
+export function getProviderHttpResponseBody(response: ProviderHttpResponse): Uint8Array {
+  const retained = rawResponseBodies.get(response);
+  if (retained !== undefined) return Uint8Array.from(retained);
+  if (response.body !== undefined) return Uint8Array.from(response.body);
+  if (response.text !== undefined) return new TextEncoder().encode(response.text);
+  if (response.json !== undefined) {
+    try {
+      return new TextEncoder().encode(JSON.stringify(response.json));
+    } catch {
+      return new Uint8Array();
+    }
+  }
+  return new Uint8Array();
+}
+
 export interface ProviderHttpExecutorOptions {
   readonly signal: AbortSignal;
   readonly headersTimeoutMs: number;
@@ -89,6 +109,7 @@ export interface ProviderHttpClientOptions {
   readonly allowLoopback?: boolean;
   readonly allowPrivateNetwork?: boolean;
   readonly allowedHosts?: readonly string[];
+  readonly allowedPorts?: readonly number[];
   readonly resolver?: DnsResolver;
   readonly executor?: ProviderHttpExecutor;
   readonly maxRequestBodyBytes?: number;
@@ -145,8 +166,7 @@ function requestLimit(value: number | undefined, configured: number, name: strin
 }
 
 function isCredentialLikeQueryName(name: string): boolean {
-  const normalized = name.trim();
-  return CREDENTIAL_QUERY_TOKEN_PATTERN.test(normalized) || CREDENTIAL_QUERY_PREFIX_PATTERN.test(normalized);
+  return isCredentialLikeQueryNameShared(name);
 }
 
 function assertSafeQuery(urlValue: string): void {
@@ -441,21 +461,36 @@ function parsedResponse(
     status: statusCode,
     statusCode,
   };
-  if (bytes.byteLength === 0) return base;
+  if (bytes.byteLength === 0) {
+    rawResponseBodies.set(base, Uint8Array.from(bytes));
+    return base;
+  }
   const contentType = headerValue(headers, 'content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   if (!isJsonContentType(contentType) && !isTextContentType(contentType)) {
-    return { ...base, body: bytes };
+    const response = { ...base, body: bytes };
+    rawResponseBodies.set(response, Uint8Array.from(bytes));
+    return response;
   }
   const text = new TextDecoder().decode(bytes);
   if (isJsonContentType(contentType)) {
     try {
-      return { ...base, json: JSON.parse(text) as unknown };
+      const response = { ...base, json: JSON.parse(text) as unknown };
+      rawResponseBodies.set(response, Uint8Array.from(bytes));
+      return response;
     } catch {
-      return { ...base, text };
+      const response = { ...base, text };
+      rawResponseBodies.set(response, Uint8Array.from(bytes));
+      return response;
     }
   }
-  if (isTextContentType(contentType)) return { ...base, text };
-  return { ...base, body: bytes };
+  if (isTextContentType(contentType)) {
+    const response = { ...base, text };
+    rawResponseBodies.set(response, Uint8Array.from(bytes));
+    return response;
+  }
+  const response = { ...base, body: bytes };
+  rawResponseBodies.set(response, Uint8Array.from(bytes));
+  return response;
 }
 
 async function disposeRaw(response: ProviderHttpRawResponse): Promise<void> {
@@ -494,6 +529,7 @@ export class ProviderHttpClient implements ProviderHttpClientPort {
       ...(options.allowLoopback === undefined ? {} : { allowLoopback: options.allowLoopback }),
       ...(options.allowPrivateNetwork === undefined ? {} : { allowPrivateNetwork: options.allowPrivateNetwork }),
       ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts }),
+      ...(options.allowedPorts === undefined ? {} : { allowedPorts: options.allowedPorts }),
       ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
     };
     this.policy = options.policy ?? new NetworkPolicy(policyOptions);
@@ -543,7 +579,10 @@ export class ProviderHttpClient implements ProviderHttpClientPort {
     let bodyTimedOut = false;
     try {
       const target = await waitFor(
-        this.policy.validate(input.url),
+        this.policy.validate(input.url, {
+          connectTimeoutMs,
+          signal: controller.signal,
+        }),
         controller.signal,
         undefined,
         undefined,
@@ -616,7 +655,11 @@ export class ProviderHttpClient implements ProviderHttpClientPort {
     } catch (error) {
       if (bodyTimedOut) throw new ProviderHttpError('timeout', 'Provider HTTP request timed out.');
       if (input.signal?.aborted) throw abortError();
-      if (error instanceof UnsafeRemoteUrlError) throw error;
+      if (error instanceof UnsafeRemoteUrlError) {
+        if (error.code === 'dns_aborted') throw abortError();
+        if (error.code === 'dns_timeout') throw new ProviderHttpError('timeout', 'Provider HTTP request timed out.');
+        throw error;
+      }
       if (error instanceof ProviderHttpError) throw error;
       throw safeExecutorError(error);
     } finally {

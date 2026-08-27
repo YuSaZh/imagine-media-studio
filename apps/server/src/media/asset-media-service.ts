@@ -16,6 +16,7 @@ import {
 } from '../storage/atomic-file.js';
 import { assertNoSymlinkTraversal, resolveStoredPath, toStoredPath } from '../storage/path-safety.js';
 import type { StoragePaths } from '../storage/paths.js';
+import { isCredentialLikeQueryName } from '../security/network-policy.js';
 import type { RemoteMediaDownloader } from '../security/remote-download.js';
 import type { SharpImageProcessor } from './image-processor.js';
 import {
@@ -103,23 +104,6 @@ const PROVIDER_HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
   'host',
 ]);
-const PROVIDER_CREDENTIAL_QUERY_NAMES = new Set([
-  'access_token',
-  'api_key',
-  'apikey',
-  'auth',
-  'authorization',
-  'bearer',
-  'credential',
-  'credentials',
-  'key',
-  'password',
-  'secret',
-  'sig',
-  'signature',
-  'token',
-]);
-
 const ProviderOutputManifestSchema = z.object({
   version: z.literal(1),
   durationMs: z.number().int().nonnegative().nullable(),
@@ -203,14 +187,7 @@ function validateProviderDownloadTarget(
   }
   for (const [name] of url.searchParams) {
     const normalized = name.trim().toLowerCase();
-    if (
-      normalized !== 'variant' &&
-      (PROVIDER_CREDENTIAL_QUERY_NAMES.has(normalized) ||
-        normalized.startsWith('x-amz-') ||
-        normalized.startsWith('x-goog-') ||
-        normalized.startsWith('x-ms-') ||
-        normalized.startsWith('oauth_'))
-    ) {
+    if (normalized !== 'variant' && isCredentialLikeQueryName(name)) {
       throw new InvalidProviderDownloadTargetError('Provider result URL contains credential-like query data.');
     }
   }

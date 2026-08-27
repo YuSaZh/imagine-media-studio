@@ -82,6 +82,28 @@ function runnerError(
   return { code, kind, message, retryable: false };
 }
 
+/**
+ * Provider resolution errors can originate in a custom adapter/runtime. Keep
+ * only a bounded, namespaced code and a fixed public message before storing
+ * the failure in SQLite; adapter errors must not become durable log leaks.
+ */
+function providerResolutionError(error: unknown): ProviderError {
+  const candidate = error !== null && typeof error === 'object' && 'code' in error
+    ? (error as { readonly code?: unknown }).code
+    : undefined;
+  const code = typeof candidate === 'string' &&
+    /^(?:provider|adapter)_[A-Za-z0-9_.:-]{1,127}$/u.test(candidate)
+    ? candidate
+    : 'provider_unavailable';
+  const kind: ProviderErrorKind = code.includes('adapter') || code === 'provider_type_unsupported'
+    ? 'rejected'
+    : 'unknown';
+  const message = code.includes('adapter')
+    ? 'The Provider adapter revision could not be resolved.'
+    : 'The Provider could not be resolved.';
+  return runnerError(code, message, kind);
+}
+
 function validDate(value: Date | undefined): value is Date {
   return value instanceof Date && Number.isFinite(value.getTime());
 }
@@ -145,6 +167,20 @@ function deterministicOutputError(error: unknown): ProviderError | null {
     );
   }
   return null;
+}
+
+async function normalizeProviderError(
+  adapter: ProviderAdapter,
+  error: unknown,
+): Promise<ProviderError> {
+  try {
+    return await adapter.normalizeError(error);
+  } catch {
+    return runnerError(
+      'provider_error_normalization_failed',
+      'The provider failed to classify its error.',
+    );
+  }
 }
 
 function inputLoaderError(error: ProviderInputLoaderError): ProviderError {
@@ -441,7 +477,10 @@ export class JobRunner {
     }
 
     try {
-      const registration = await this.options.providers.resolve(job.request.providerId);
+      const registration = await this.options.providers.resolve(
+        job.request.providerId,
+        job.adapterRef ?? null,
+      );
       if (registration.submitReplaySafe) {
         const committed = await this.commitTransition(job, {
           expectedStatuses: ['submitting'],
@@ -455,8 +494,9 @@ export class JobRunner {
         }
         return;
       }
-    } catch {
-      // The durable failure below is more actionable than a startup exception.
+    } catch (error) {
+      await this.fail(job, providerResolutionError(error));
+      return;
     }
 
     await this.fail(
@@ -561,17 +601,17 @@ export class JobRunner {
       }
 
       try {
-        registration = await this.options.providers.resolve(claimed.job.request.providerId);
+        registration = await this.options.providers.resolve(
+          claimed.job.request.providerId,
+          claimed.job.adapterRef ?? null,
+        );
       } catch (error) {
         if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
           return;
         }
         await this.fail(
           claimed.job,
-          runnerError(
-            'provider_unavailable',
-            error instanceof Error ? error.message : 'Provider unavailable',
-          ),
+          providerResolutionError(error),
         );
         return;
       }
@@ -653,7 +693,7 @@ export class JobRunner {
       if (registration && await this.isOperationActive(jobId, ['submitting'], controller)) {
         const normalized = error instanceof ProviderInputLoaderError
           ? inputLoaderError(error)
-          : deterministicOutputError(error) ?? registration.adapter.normalizeError(error);
+          : deterministicOutputError(error) ?? await normalizeProviderError(registration.adapter, error);
         await this.handleSubmitError(claimed.job, registration, normalized);
       }
     } finally {
@@ -674,7 +714,10 @@ export class JobRunner {
     const controller = this.beginOperation(jobId);
     let registration: ProviderRegistration | undefined;
     try {
-      registration = await this.options.providers.resolve(job.request.providerId);
+      registration = await this.options.providers.resolve(
+        job.request.providerId,
+        job.adapterRef ?? null,
+      );
       if (!await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
         return;
       }
@@ -799,12 +842,13 @@ export class JobRunner {
         return;
       }
       if (!registration) {
-        throw error;
+        await this.fail(job, providerResolutionError(error));
+        return;
       }
       if (await this.isOperationActive(jobId, ['remote_pending', 'remote_running'], controller)) {
         await this.handlePollError(
           job,
-          deterministicOutputError(error) ?? registration.adapter.normalizeError(error),
+          deterministicOutputError(error) ?? await normalizeProviderError(registration.adapter, error),
         );
       }
     } finally {
@@ -821,7 +865,10 @@ export class JobRunner {
     let registration: ProviderRegistration | undefined;
     let materialized: readonly MaterializedAsset[] | undefined;
     try {
-      registration = await this.options.providers.resolve(job.request.providerId);
+      registration = await this.options.providers.resolve(
+        job.request.providerId,
+        job.adapterRef ?? null,
+      );
       if (!await this.isOperationActive(jobId, ['downloading'], controller)) {
         return;
       }
@@ -892,7 +939,8 @@ export class JobRunner {
         return;
       }
       if (!registration) {
-        throw error;
+        await this.fail(job, providerResolutionError(error));
+        return;
       }
       if (materialized !== undefined) {
         await this.settleProvisionalAfterCasLoss(job, materialized);
@@ -901,7 +949,7 @@ export class JobRunner {
         await this.retryStage(
           job,
           'download',
-          deterministicOutputError(error) ?? registration.adapter.normalizeError(error),
+          deterministicOutputError(error) ?? await normalizeProviderError(registration.adapter, error),
         );
       }
     } finally {
@@ -918,7 +966,10 @@ export class JobRunner {
     let registration: ProviderRegistration | undefined;
     let processed: readonly MaterializedAsset[] | undefined;
     try {
-      registration = await this.options.providers.resolve(job.request.providerId);
+      registration = await this.options.providers.resolve(
+        job.request.providerId,
+        job.adapterRef ?? null,
+      );
       if (!await this.isOperationActive(jobId, ['processing'], controller)) {
         return;
       }
@@ -966,7 +1017,8 @@ export class JobRunner {
         return;
       }
       if (!registration) {
-        throw error;
+        await this.fail(job, providerResolutionError(error));
+        return;
       }
       if (processed !== undefined) {
         await this.settleProvisionalAfterCasLoss(job, processed);
@@ -975,7 +1027,7 @@ export class JobRunner {
         await this.retryStage(
           job,
           'process',
-          deterministicOutputError(error) ?? registration.adapter.normalizeError(error),
+          deterministicOutputError(error) ?? await normalizeProviderError(registration.adapter, error),
         );
       }
     } finally {
@@ -1158,7 +1210,10 @@ export class JobRunner {
   }
 
   private async cancelRemote(job: RunnerJob): Promise<void> {
-    const registration = await this.options.providers.resolve(job.request.providerId);
+    const registration = await this.options.providers.resolve(
+      job.request.providerId,
+      job.adapterRef ?? null,
+    );
     if (!registration.adapter.cancel || !job.remoteJobId) {
       return;
     }

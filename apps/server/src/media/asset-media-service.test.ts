@@ -201,6 +201,15 @@ describe('AssetMediaService', () => {
       providerOwned: true,
       url: 'https://provider.example/video.mp4?token=secret',
     })).rejects.toBeInstanceOf(InvalidProviderDownloadTargetError);
+    for (const name of ['api-key', 'api_key', 'api.key', 'oauth.token', 'x-amz-signature', 'x_amz_signature', 'x.amz.signature']) {
+      await expect(service.materializeProviderUrl({
+        expectedKind: 'video',
+        jobId: `provider-owned-invalid-${name}`,
+        outputSlot: 0,
+        providerOwned: true,
+        url: `https://provider.example/video.mp4?${name}=secret`,
+      })).rejects.toBeInstanceOf(InvalidProviderDownloadTargetError);
+    }
     await service.materializeProviderUrl({
       claimedMimeType: 'image/png',
       expectedKind: 'image',
@@ -210,7 +219,15 @@ describe('AssetMediaService', () => {
       providerOwned: true,
       url: 'https://provider.example/video.mp4?variant=video&format=fixture',
     });
-    expect(providerDownloader.download).toHaveBeenCalledTimes(1);
+    await service.materializeProviderUrl({
+      claimedMimeType: 'image/png',
+      expectedKind: 'image',
+      jobId: 'provider-owned-public-query',
+      outputSlot: 1,
+      providerOwned: true,
+      url: 'https://provider.example/video.mp4?tokenizer=fixture',
+    });
+    expect(providerDownloader.download).toHaveBeenCalledTimes(2);
     expect(providerDownloader.download.mock.calls[0]?.[0].headers).toEqual({
       authorization: 'Bearer last',
       Accept: 'image/*',

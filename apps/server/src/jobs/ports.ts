@@ -117,6 +117,14 @@ export interface RunnerEventPort {
 export interface ProviderRegistration {
   adapter: ProviderAdapter;
   secrets: Readonly<Record<string, string>>;
+  /**
+   * The immutable adapter revision used to create this registration. Built-in
+   * Provider profiles have no custom revision and use null.
+   *
+   * Optional for the legacy in-process test/PR0 adapter ports; production
+   * registries should always return the normalized nullable value.
+   */
+  adapterRef?: CustomAdapterRef | null;
   /** Persisted provider endpoint, forwarded to every adapter operation. */
   baseUrl?: string;
   /** Persisted non-secret provider settings. Never contains decrypted credentials. */
@@ -128,7 +136,15 @@ export interface ProviderRegistration {
 }
 
 export interface ProviderRegistryPort {
-  resolve(providerId: string): Promise<ProviderRegistration> | ProviderRegistration;
+  /**
+   * Without a ref, resolve the Provider's current adapter for management and
+   * new-job validation. A supplied ref is an exact durable Job snapshot and
+   * must never fall back to the current revision.
+   */
+  resolve(
+    providerId: string,
+    adapterRef?: CustomAdapterRef | null,
+  ): Promise<ProviderRegistration> | ProviderRegistration;
 }
 
 export interface ProviderInputLoaderPort {

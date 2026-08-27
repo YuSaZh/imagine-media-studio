@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 import type { SubmittedAsset } from '@imagine/provider-contract';
+import { isCredentialLikeQueryName } from '../security/network-policy.js';
 import { MAX_GENERATION_COUNT } from '@imagine/shared';
 
 /**
@@ -19,7 +20,6 @@ const MAX_METADATA_DEPTH = 4;
 const MAX_METADATA_KEYS = 64;
 const MAX_METADATA_ARRAY_ITEMS = 32;
 const MAX_METADATA_NODES = 512;
-const CREDENTIAL_QUERY_NAME = /^(?:access[_-]?token|api[_-]?key|apikey|auth|authorization|bearer|credential|cookie|key|password|secret|sig|signature|token)$/iu;
 const CREDENTIAL_KEY = /(?:access[_-]?token|api[_-]?key|authorization|bearer|credential|cookie|password|secret|token)/iu;
 const CREDENTIAL_VALUE = /(?:bearer|basic)\s+[^\s]+|(?:api[_-]?key|access[_-]?token|authorization|password|secret|token|credential)\s*[:=]\s*[^\s]+/iu;
 
@@ -113,13 +113,7 @@ function assertSafeUrl(value: unknown): asserts value is string {
     throw new SubmittedAssetValidationError('Submitted asset URL must not contain credentials or fragments.');
   }
   for (const name of parsed.searchParams.keys()) {
-    if (
-      CREDENTIAL_QUERY_NAME.test(name) ||
-      name.toLowerCase().startsWith('x-amz-') ||
-      name.toLowerCase().startsWith('x-goog-') ||
-      name.toLowerCase().startsWith('x-ms-') ||
-      name.toLowerCase().startsWith('oauth_')
-    ) {
+    if (isCredentialLikeQueryName(name)) {
       throw new SubmittedAssetValidationError('Submitted asset URL contains credential-like query data.');
     }
   }

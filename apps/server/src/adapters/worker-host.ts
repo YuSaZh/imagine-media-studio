@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import type {
+  ProviderHttpClientPort,
+  ProviderHttpResponse,
+} from '@imagine/provider-contract';
 
 import type { AdapterRecord, AdapterRuntimeReader, AdapterRuntimeReference } from './store.js';
+import {
+  getProviderHttpResponseBody,
+  ProviderHttpError,
+} from '../providers/provider-http-client.js';
 import type { AdapterOperation } from './manifest.js';
 import {
+  MAX_HTTP_BODY_BYTES,
   AdapterHttpRequestError,
   AdapterProtocolError,
   AdapterWorkerAbortError,
@@ -16,6 +25,8 @@ import {
   validateAdapterResult,
   validateHttpRequest,
   validateHttpResponse,
+  type AdapterHttpRequest,
+  type AdapterHttpValidationOptions,
   type AdapterCall,
   type AdapterErrorView,
   type AdapterFileView,
@@ -47,6 +58,7 @@ const RESPONSE_STRIPPED_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
+const CREDENTIAL_RESPONSE_HEADER = /(?:^|[-_.])(?:api[-_.]?key|authorization|cookie|password|secret|token|credential|signature|set[-_.]?cookie)(?:$|[-_.])/iu;
 
 interface AdapterProviderContext {
   readonly providerId: string;
@@ -202,7 +214,7 @@ function providerView(record: AdapterRecord, context: AdapterProviderContext): A
     config: config as Readonly<Record<string, unknown>>,
     secrets: requestedSecrets,
   };
-  return validateAdapterProvider(candidate) as AdapterProviderView;
+  return validateAdapterProvider(candidate, manifestHttpPolicy(record)) as AdapterProviderView;
 }
 
 function filesView(files: readonly AdapterFileView[] | undefined, secrets: readonly string[]): readonly AdapterFileView[] {
@@ -228,17 +240,157 @@ function filesView(files: readonly AdapterFileView[] | undefined, secrets: reado
   });
 }
 
+interface ManifestHttpPolicy {
+  readonly allowedProtocols?: readonly ('http:' | 'https:')[];
+  readonly allowedPorts?: readonly number[];
+}
+
+function manifestHttpPolicy(record: AdapterRecord): ManifestHttpPolicy {
+  // The current manifest format is HTTPS/443 by default. Reading optional
+  // fields here keeps the worker boundary forward-compatible with manifests
+  // that declare an explicit protocol/port allowlist, while unknown fields
+  // remain rejected by the installer until that format is enabled there.
+  const candidate = record.manifest as AdapterRecord['manifest'] & {
+    readonly allowedProtocols?: readonly string[];
+    readonly allowedProtocol?: string;
+    readonly protocol?: string;
+    readonly allowedPorts?: readonly number[];
+  };
+  const protocolValues = candidate.allowedProtocols
+    ?? (candidate.allowedProtocol === undefined
+      ? (candidate.protocol === undefined ? undefined : [candidate.protocol])
+      : [candidate.allowedProtocol]);
+  const allowedProtocols = protocolValues?.flatMap((value) => {
+    const normalized = value.endsWith(':') ? value.toLowerCase() : `${value.toLowerCase()}:`;
+    return normalized === 'http:' || normalized === 'https:' ? [normalized] : [];
+  }) as ('http:' | 'https:')[] | undefined;
+  const allowedPorts = candidate.allowedPorts?.filter((port) => Number.isSafeInteger(port) && port >= 1 && port <= 65_535);
+  return {
+    ...(allowedProtocols === undefined ? {} : { allowedProtocols }),
+    ...(allowedPorts === undefined ? {} : { allowedPorts }),
+  };
+}
+
 function validHostForUrl(url: string, allowedHosts: readonly string[]): boolean {
   const parsed = new URL(url);
   const host = parsed.hostname.toLowerCase().replace(/\.$/u, '');
   return allowedHosts.includes(host);
 }
 
+function httpBodyLimit(record: AdapterRecord): number {
+  return Math.min(record.manifest.resourceLimits.maxOutputBytes, MAX_HTTP_BODY_BYTES);
+}
+
+function flattenProviderHeaders(response: ProviderHttpResponse): Record<string, string> {
+  const headers = Object.create(null) as Record<string, string>;
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (typeof value === 'string') headers[name] = value;
+    else if (Array.isArray(value)) headers[name] = value.filter((item): item is string => typeof item === 'string').join(', ');
+  }
+  return headers;
+}
+
+function validHttpBodyLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_HTTP_BODY_BYTES) {
+    throw new RangeError('HTTP response body limit is invalid.');
+  }
+  return value;
+}
+
+export interface ProviderHttpSafePortOptions {
+  readonly maxResponseBodyBytes?: number;
+}
+
+/**
+ * Adapts the worker-facing byte-only port to the server provider HTTP port.
+ * A provider response is copied into bounded bytes before its disposer runs,
+ * so no stream or response object can cross the worker boundary.
+ */
+export class ProviderHttpSafePort implements SafeHttpPort {
+  private readonly defaultMaxResponseBodyBytes: number;
+
+  public constructor(
+    private readonly client: ProviderHttpClientPort,
+    options: number | ProviderHttpSafePortOptions = MAX_HTTP_BODY_BYTES,
+  ) {
+    this.defaultMaxResponseBodyBytes = validHttpBodyLimit(
+      typeof options === 'number' ? options : options.maxResponseBodyBytes ?? MAX_HTTP_BODY_BYTES,
+    );
+  }
+
+  public request(request: AdapterHttpRequest, signal: AbortSignal): Promise<AdapterHttpResponse> {
+    return this.requestWithLimit(request, signal, this.defaultMaxResponseBodyBytes);
+  }
+
+  public async requestWithLimit(
+    request: AdapterHttpRequest,
+    signal: AbortSignal,
+    maxResponseBodyBytes: number,
+  ): Promise<AdapterHttpResponse> {
+    const limit = validHttpBodyLimit(maxResponseBodyBytes);
+    let response: ProviderHttpResponse | undefined;
+    try {
+      response = await this.client.request({
+        headers: request.headers,
+        method: request.method,
+        ...(request.body === undefined ? {} : { bodyBytes: Uint8Array.from(request.body) }),
+        maxResponseBodyBytes: limit,
+        signal,
+        url: request.url,
+      });
+      const body = getProviderHttpResponseBody(response);
+      if (body.byteLength > limit) {
+        throw new ProviderHttpError('response_body_too_large', 'Provider HTTP response body is too large.');
+      }
+      return {
+        body,
+        headers: redactResponseHeaders(flattenProviderHeaders(response)),
+        status: response.status,
+      };
+    } finally {
+      // A response may own a dispatcher/socket even when byte conversion or
+      // limit validation fails. Disposal errors must not hide the primary
+      // provider result or safety error.
+      try {
+        await response?.dispose?.();
+      } catch {
+        // The client owns disposal semantics; the adapter boundary stays
+        // reason-free if a custom disposer itself fails.
+      }
+    }
+  }
+}
+
+/** Explicit factory for callers that prefer composition over subclassing. */
+export function createProviderHttpSafePort(
+  client: ProviderHttpClientPort,
+  maxResponseBodyBytes: number | ProviderHttpSafePortOptions = MAX_HTTP_BODY_BYTES,
+): ProviderHttpSafePort {
+  return new ProviderHttpSafePort(client, maxResponseBodyBytes);
+}
+
+/** Named facade form for integrations that use the worker-facing terminology. */
+export class SafeHttpPortFacade extends ProviderHttpSafePort {
+  public constructor(
+    client: ProviderHttpClientPort,
+    options: number | ProviderHttpSafePortOptions = MAX_HTTP_BODY_BYTES,
+  ) {
+    super(client, options);
+  }
+}
+
+export function createSafeHttpPort(
+  client: ProviderHttpClientPort,
+  options: number | ProviderHttpSafePortOptions = MAX_HTTP_BODY_BYTES,
+): SafeHttpPortFacade {
+  return new SafeHttpPortFacade(client, options);
+}
+
 function redactResponseHeaders(headers: Readonly<Record<string, string>>): Record<string, string> {
   const result = Object.create(null) as Record<string, string>;
   for (const [name, value] of Object.entries(headers)) {
     const normalized = name.toLowerCase();
-    if (RESPONSE_STRIPPED_HEADERS.has(normalized)) continue;
+    if (RESPONSE_STRIPPED_HEADERS.has(normalized) || CREDENTIAL_RESPONSE_HEADER.test(normalized)) continue;
     result[name] = value;
   }
   return result;
@@ -329,8 +481,8 @@ export class AdapterWorkerHost {
     if (signal?.aborted) {
       try {
         await terminateWithGrace(worker);
-      } catch (error) {
-        throw new AdapterWorkerFailure('Adapter worker termination failed.', 'adapter_terminate_failed', { cause: error });
+      } catch {
+        throw new AdapterWorkerFailure('Adapter worker termination failed.', 'adapter_terminate_failed');
       }
       throw new AdapterWorkerAbortError();
     }
@@ -390,8 +542,8 @@ export class AdapterWorkerHost {
         worker.stderr?.off?.('data', onLog);
         try {
           await terminateWithGrace(worker);
-        } catch (terminationError) {
-          if (error === undefined) error = new AdapterWorkerFailure('Adapter worker termination failed.', 'adapter_terminate_failed', { cause: terminationError });
+        } catch {
+          if (error === undefined) error = new AdapterWorkerFailure('Adapter worker termination failed.', 'adapter_terminate_failed');
         } finally {
           this.activeWorkers.delete(worker);
         }
@@ -456,12 +608,12 @@ export class AdapterWorkerHost {
           const result = validateAdapterResult(data.call, value.value, record.manifest.resourceLimits.maxOutputBytes, secrets, record.manifest);
           void finish(undefined, result);
         } catch (error) {
-          void finish(new AdapterWorkerFailure(error instanceof Error ? error.message : 'Adapter result is invalid.', 'adapter_result_invalid', { cause: error }));
+          void finish(new AdapterWorkerFailure(error instanceof Error ? error.message : 'Adapter result is invalid.', 'adapter_result_invalid'));
         }
       };
 
       const onError = (error: Error): void => {
-        void finish(new AdapterWorkerFailure(sanitizeError(error, secrets).message, 'adapter_worker_error', { cause: error }));
+        void finish(new AdapterWorkerFailure(sanitizeError(error, secrets).message, 'adapter_worker_error'));
       };
       const onExit = (code: number): void => {
         if (!settled) void finish(new AdapterWorkerFailure(`Adapter worker exited before responding (code ${code}).`, 'adapter_worker_exit'));
@@ -489,11 +641,15 @@ export class AdapterWorkerHost {
     const requestId = typeof message.requestId === 'string' ? message.requestId : '';
     try {
       if (requestId.length === 0 || !requestId.startsWith(`${callRequestId}:http:`)) throw new AdapterHttpRequestError('HTTP request id is invalid.');
-      const input = validateHttpRequest(message.input);
+      const httpPolicy: AdapterHttpValidationOptions = manifestHttpPolicy(record);
+      const input = validateHttpRequest(message.input, httpPolicy);
       if (!validHostForUrl(input.url, record.manifest.allowedHosts)) throw new AdapterHttpRequestError('HTTP URL host is not allowed by the adapter manifest.');
-      const response = await this.http.request(input, signal ?? new AbortController().signal);
+      const requestSignal = signal ?? new AbortController().signal;
+      const response = this.http.requestWithLimit === undefined
+        ? await this.http.request(input, requestSignal)
+        : await this.http.requestWithLimit(input, requestSignal, httpBodyLimit(record));
       if (isSettled()) return;
-      const validated = validateHttpResponse(response);
+      const validated = validateHttpResponse(response, httpBodyLimit(record));
       if (validated.status >= 300 && validated.status < 400) throw new AdapterHttpRequestError('Redirect responses are not accepted from an adapter HTTP port.');
       const safeResponse: AdapterHttpResponse = {
         status: validated.status,

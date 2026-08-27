@@ -90,6 +90,22 @@ describe('submitted asset validator', () => {
       remoteJobId: 'remote-1',
       variant: 'thumbnail',
     }])).toThrow('variant');
+    for (const name of ['api.key', 'access.token', 'x.amz.signature', 'x_ms_token', 'oauth-token']) {
+      expect(() => validateSubmittedAssets([{
+        type: 'image',
+        mimeType: 'image/png',
+        source: 'url',
+        url: `https://provider.invalid/image.png?${name}=secret`,
+      }])).toThrow('URL');
+    }
+    for (const name of ['tokenizer', 'authenticity', 'keynote']) {
+      expect(() => validateSubmittedAssets([{
+        type: 'image',
+        mimeType: 'image/png',
+        source: 'url',
+        url: `https://provider.invalid/image.png?${name}=value`,
+      }])).not.toThrow();
+    }
   });
 
   it('bounds metadata shape and rejects sensitive keys or values', () => {

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "trusted-js-fixture",
+  "version": "1.0.0",
+  "displayName": "Trusted JavaScript fixture",
+  "sha256": "69e4467570286272a24da7d4fe5f5fb2d65057e1695f8f7afba1c36a5093fdb5",
+  "operations": ["image.generate", "video.generate"],
+  "capabilities": {
+    "providerType": "fixture-provider",
+    "models": [{
+      "id": "fixture-model",
+      "displayName": "Fixture model",
+      "capabilities": {
+        "operations": ["image.generate", "video.generate"],
+        "supportsProgress": true,
+        "supportsCancel": true
+      }
+    }]
+  },
+  "allowedHosts": ["api.example.com"],
+  "requiredSecrets": [],
+  "resourceLimits": {
+    "timeoutMs": 5000,
+    "maxMessageBytes": 1048576,
+    "maxOutputBytes": 1048576,
+    "maxLogBytes": 65536,
+    "maxOldGenerationSizeMb": 64,
+    "maxYoungGenerationSizeMb": 16,
+    "stackSizeMb": 4
+  }
+}
