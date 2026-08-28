@@ -143,6 +143,20 @@ const loginRef = actionRef(actionRefs[4]);
 const metadataRef = actionRef(actionRefs[5]);
 const buildRef = actionRef(actionRefs[6]);
 const attestRef = actionRef(actionRefs[7]);
+for (const [jobName, job] of [
+  ['publish', publish],
+  ['smoke', smoke],
+  ['github-release', githubRelease],
+]) {
+  const setupNode = action(job, nodeRef);
+  assert.equal(setupNode.with['node-version'], 24, `${jobName} must use Node.js 24.`);
+  assert.equal(
+    setupNode.with['package-manager-cache'],
+    false,
+    `${jobName} must disable setup-node automatic package-manager caching.`,
+  );
+}
+assert.doesNotMatch(workflowText, /pnpm\/action-setup@/u);
 
 const guard = step(publish, (candidate) => candidate.id === 'release', 'release guard');
 assert.equal(guard.run, 'node .github/scripts/release-guard.mjs');
