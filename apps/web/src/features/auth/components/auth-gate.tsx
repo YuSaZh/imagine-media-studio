@@ -7,18 +7,75 @@ import {
   InternalApiError,
   subscribeToAuthRequired,
 } from '../../../api/internal-client.js';
+import {
+  isBrowserExplicitlyOffline,
+  isNetworkFailure,
+  markNetworkAvailable,
+  markNetworkFailure,
+  markOfflineBootstrapActive,
+  offlineBootstrapMode,
+} from '../../../pwa-offline-snapshot.js';
 
 const FIXTURE_AUTH_STATUS = { authenticated: true, required: false } as const satisfies AuthStatus;
+const OFFLINE_AUTH_STATUS = { authenticated: true, required: true } as const satisfies AuthStatus;
+const OFFLINE_PUBLIC_STATUS = { authenticated: false, required: false } as const satisfies AuthStatus;
 let initialStatusRequest: Promise<AuthStatus> | undefined;
 
-export async function loadInitialAuthStatus(fixtureMode: boolean): Promise<AuthStatus> {
-  if (fixtureMode) return FIXTURE_AUTH_STATUS;
-  initialStatusRequest ??= internalClient.getAuthStatus();
-  return initialStatusRequest;
+export interface InitialAuthResolution {
+  readonly status: AuthStatus;
+  readonly offlineBootstrap: boolean;
 }
 
-function resetInitialStatusRequest(): void {
+export async function resolveInitialAuthStatus(fixtureMode: boolean): Promise<InitialAuthResolution> {
+  if (fixtureMode) return { status: FIXTURE_AUTH_STATUS, offlineBootstrap: false };
+  if (isBrowserExplicitlyOffline()) {
+    markNetworkFailure();
+    const bootstrapMode = offlineBootstrapMode();
+    if (bootstrapMode === null) {
+      throw new Error('Authentication status is unavailable while offline.');
+    }
+    markOfflineBootstrapActive(true);
+    return {
+      status: bootstrapMode === 'public' ? OFFLINE_PUBLIC_STATUS : OFFLINE_AUTH_STATUS,
+      offlineBootstrap: true,
+    };
+  }
+  initialStatusRequest ??= internalClient.getAuthStatus();
+  try {
+    const status = await initialStatusRequest;
+    markNetworkAvailable();
+    markOfflineBootstrapActive(false);
+    return { status, offlineBootstrap: false };
+  } catch (error) {
+    resetInitialStatusRequest();
+    const bootstrapMode = offlineBootstrapMode();
+    if (!isNetworkFailure(error) || bootstrapMode === null) throw error;
+    markNetworkFailure();
+    markOfflineBootstrapActive(true);
+    return {
+      status: bootstrapMode === 'public' ? OFFLINE_PUBLIC_STATUS : OFFLINE_AUTH_STATUS,
+      offlineBootstrap: true,
+    };
+  }
+}
+
+export async function loadInitialAuthStatus(fixtureMode: boolean): Promise<AuthStatus> {
+  return (await resolveInitialAuthStatus(fixtureMode)).status;
+}
+
+export function resetInitialStatusRequest(): void {
   initialStatusRequest = undefined;
+}
+
+export function subscribeToOnlineAuthRetry(retry: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  const handleOnline = () => {
+    markNetworkAvailable();
+    markOfflineBootstrapActive(false);
+    retry();
+  };
+  window.addEventListener('online', handleOnline);
+  return () => window.removeEventListener('online', handleOnline);
 }
 
 interface AuthPromptProps {
@@ -107,6 +164,7 @@ export function AuthGate({
   const [status, setStatus] = useState<AuthStatus | null>(() =>
     fixtureMode ? FIXTURE_AUTH_STATUS : null,
   );
+  const [, setOfflineBootstrap] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -116,9 +174,12 @@ export function AuthGate({
     if (fixtureMode) return;
     let active = true;
     setStatusError(false);
-    void loadInitialAuthStatus(false).then(
-      (response) => {
-        if (active) setStatus(response);
+    void resolveInitialAuthStatus(false).then(
+      (resolution) => {
+        if (active) {
+          setStatus(resolution.status);
+          setOfflineBootstrap(resolution.offlineBootstrap);
+        }
       },
       () => {
         if (active) setStatusError(true);
@@ -130,9 +191,31 @@ export function AuthGate({
   }, [attempt, fixtureMode]);
 
   useEffect(() => {
-    if (fixtureMode) return;
-    return subscribeToAuthRequired(() => {
+    if (fixtureMode || typeof window === 'undefined') return;
+    return subscribeToOnlineAuthRetry(() => {
       resetInitialStatusRequest();
+      setOfflineBootstrap(false);
+      setStatusError(false);
+      setStatus(null);
+      setAttempt((current) => current + 1);
+    });
+  }, [fixtureMode]);
+
+  useEffect(() => {
+    if (fixtureMode) return;
+    return subscribeToAuthRequired((reason) => {
+      resetInitialStatusRequest();
+      markOfflineBootstrapActive(false);
+      setOfflineBootstrap(false);
+      if (reason === 'login') {
+        setStatus(null);
+        setStatusError(false);
+        setLoginError(null);
+        setLoginPending(false);
+        setPassword('');
+        setAttempt((current) => current + 1);
+        return;
+      }
       setStatus({ authenticated: false, required: true });
       setStatusError(false);
       setLoginError(null);
@@ -153,6 +236,8 @@ export function AuthGate({
     try {
       const response = await internalClient.login(password);
       initialStatusRequest = Promise.resolve(response);
+      markOfflineBootstrapActive(false);
+      setOfflineBootstrap(false);
       setStatus(response);
       setPassword('');
     } catch (error) {

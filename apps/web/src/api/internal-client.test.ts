@@ -6,6 +6,7 @@ import {
   internalClient,
   InternalApiError,
   subscribeToAuthRequired,
+  subscribeToAuthSessionChanged,
 } from './internal-client.js';
 
 afterEach(() => {
@@ -92,6 +93,76 @@ describe('internalClient', () => {
       expect(deleteCache).toHaveBeenNthCalledWith(index + 1, 'imagine-derived-media-v2');
       expect(deleteCache).toHaveBeenNthCalledWith(index + 2, 'imagine-derived-media-v1');
     }
+  });
+
+  it('fans remote login and logout boundaries out to auth/query observers', async () => {
+    const storageValues = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      removeItem: (key: string) => { storageValues.delete(key); },
+      setItem: (key: string, value: string) => { storageValues.set(key, value); },
+    });
+    vi.stubGlobal('window', new EventTarget());
+    class FakeBroadcastChannel {
+      static readonly instances: FakeBroadcastChannel[] = [];
+      readonly listeners = new Set<(event: { readonly data: unknown }) => void>();
+
+      public constructor(_name: string) {
+        FakeBroadcastChannel.instances.push(this);
+      }
+
+      public postMessage(message: unknown): void {
+        for (const instance of FakeBroadcastChannel.instances) {
+          if (instance === this) continue;
+          for (const listener of instance.listeners) listener({ data: message });
+        }
+      }
+
+      public addEventListener(_type: 'message', listener: (event: { readonly data: unknown }) => void): void {
+        this.listeners.add(listener);
+      }
+
+      public removeEventListener(_type: 'message', listener: (event: { readonly data: unknown }) => void): void {
+        this.listeners.delete(listener);
+      }
+
+      public close(): void {
+        // No-op test transport.
+      }
+    }
+    vi.stubGlobal('BroadcastChannel', FakeBroadcastChannel);
+
+    const authRequired = vi.fn();
+    const sessionChanged = vi.fn();
+    const unsubscribeRequired = subscribeToAuthRequired(authRequired);
+    const unsubscribeSession = subscribeToAuthSessionChanged(sessionChanged);
+    const remote = new FakeBroadcastChannel('imagine-media-studio-session-v1');
+    remote.postMessage({
+      version: 1,
+      change: 'login',
+      source: 'remote',
+      nonce: 'login-1',
+      sessionScope: 'remote-session',
+      mode: 'authenticated',
+      generation: 2,
+    });
+    await vi.waitFor(() => expect(authRequired).toHaveBeenCalledWith('login'));
+    expect(sessionChanged).toHaveBeenCalledWith('login');
+
+    remote.postMessage({
+      version: 1,
+      change: 'logout',
+      source: 'remote',
+      nonce: 'logout-1',
+      sessionScope: null,
+      mode: null,
+      generation: 3,
+    });
+    await vi.waitFor(() => expect(authRequired).toHaveBeenCalledTimes(2));
+    expect(authRequired).toHaveBeenLastCalledWith();
+    expect(sessionChanged).toHaveBeenCalledWith('logout');
+    unsubscribeRequired();
+    unsubscribeSession();
   });
 
   it('preserves derived media while the existing cookie session remains authenticated', async () => {

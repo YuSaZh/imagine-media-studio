@@ -22,7 +22,12 @@ export const GENERAL_SETTING_DEFAULTS = {
   'composer.default_mode': 'image',
   'gallery.autoplay_previews': false,
   'gallery.initial_filter': 'all',
+  'pwa.update_notifications': true,
   'ui.reduce_motion': 'system',
+} as const satisfies Readonly<Record<string, JsonValue>>;
+
+export const PWA_SETTING_DEFAULTS = {
+  'pwa.update_notifications': true,
 } as const satisfies Readonly<Record<string, JsonValue>>;
 
 const FIXTURE_PROVIDER: ProviderDto = {
@@ -80,6 +85,10 @@ export interface GeneralSettingsValues {
   reduceMotion: 'always' | 'never' | 'system';
 }
 
+export interface PwaSettingsValues {
+  updateNotifications: boolean;
+}
+
 function oneOf<T extends string>(value: JsonValue | undefined, allowed: readonly T[], fallback: T): T {
   if (typeof value !== 'string') return fallback;
   return allowed.find((candidate) => candidate === value) ?? fallback;
@@ -106,6 +115,13 @@ export function readGeneralSettings(settings: JsonObject | undefined): GeneralSe
       ['system', 'always', 'never'],
       'system',
     ),
+  };
+}
+
+export function readPwaSettings(settings: JsonObject | undefined): PwaSettingsValues {
+  const value = settings?.['pwa.update_notifications'];
+  return {
+    updateNotifications: typeof value === 'boolean' ? value : PWA_SETTING_DEFAULTS['pwa.update_notifications'],
   };
 }
 

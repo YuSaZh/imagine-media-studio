@@ -7,6 +7,7 @@ import { App } from './app';
 import { subscribeToAuthRequired } from './api/internal-client';
 import { subscribeToInternalEvents } from './api/internal-events';
 import { AuthGate } from './features/auth/components/auth-gate';
+import { flushPromptDraft } from './features/composer/model/composer-draft';
 import { registerPwa } from './pwa-registration';
 import { isVisualFixtureMode } from './visual-fixture';
 import './styles/tokens.css';
@@ -67,4 +68,4 @@ createRoot(rootElement).render(
   </StrictMode>,
 );
 
-registerPwa();
+registerPwa({ draftFlushHook: flushPromptDraft });

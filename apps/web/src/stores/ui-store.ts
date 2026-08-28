@@ -28,6 +28,7 @@ interface UiActions {
   toggleComposerExpanded: () => void;
   setComposerParamsOpen: (open: boolean) => void;
   addComposerInput: (input: AssetInput) => void;
+  setComposerInputs: (inputs: readonly AssetInput[]) => void;
   removeComposerInput: (input: AssetInput) => void;
   setComposerPrimaryInput: (input: AssetInput & { role: 'first_frame' | 'source' }) => void;
   openViewer: (assetId: string) => void;
@@ -61,6 +62,7 @@ export const useUiStore = create<UiStore>()((set) => ({
   toggleComposerExpanded: () =>
     set((state) => ({ composerExpanded: !state.composerExpanded })),
   setComposerParamsOpen: (composerParamsOpen) => set({ composerParamsOpen }),
+  setComposerInputs: (composerInputs) => set({ composerInputs: [...composerInputs] }),
   addComposerInput: (input) =>
     set((state) => {
       const sameAsset = state.composerInputs.find(

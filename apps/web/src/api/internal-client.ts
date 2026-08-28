@@ -59,6 +59,7 @@ import {
   MAX_ADAPTER_DOCUMENT_BYTES,
   MAX_ADAPTER_RESPONSE_BYTES,
   type AssetDto,
+  type AuthStatus,
   type CollectionDto,
   type CustomAdapterCapabilityPreviewRequest,
   type CustomAdapterDryRunRequest,
@@ -79,6 +80,19 @@ import {
 } from '@imagine/shared';
 import { readExportedYamlEnvelopeVersion } from './adapter-document.js';
 import { clearDerivedMediaRuntimeCache } from '../pwa-media-cache.js';
+import {
+  assertOnlineForWrite,
+  broadcastOfflineSessionChange,
+  clearOfflineBootstrapState,
+  initializeOfflineSessionSync,
+  isNetworkFailure,
+  markNetworkAvailable,
+  markNetworkFailure,
+  markNetworkFailureError,
+  rememberPublicOfflineBootstrap,
+  rememberAuthenticatedSession,
+  subscribeToOfflineSessionChange,
+} from '../pwa-offline-snapshot.js';
 
 interface Parser<T> {
   parse(value: unknown): T;
@@ -120,12 +134,49 @@ export interface TrustedAdapterInstallInput {
   readonly providerId?: string;
 }
 
-type AuthRequiredListener = () => void;
+export type AuthRequiredReason = 'login';
+type AuthRequiredListener = (reason?: AuthRequiredReason) => void;
 const authRequiredListeners = new Set<AuthRequiredListener>();
 
+export type AuthSessionChange = 'login' | 'logout';
+type AuthSessionChangeListener = (change: AuthSessionChange) => void;
+const authSessionChangeListeners = new Set<AuthSessionChangeListener>();
+let crossTabAuthSyncUnsubscribe: (() => void) | undefined;
+
+function ensureCrossTabAuthSync(): void {
+  initializeOfflineSessionSync();
+  crossTabAuthSyncUnsubscribe ??= subscribeToOfflineSessionChange((change) => {
+    // The PWA module has already cleared this realm's volatile and persistent
+    // offline state. These events only fan out observable auth/query changes.
+    void clearDerivedMediaRuntimeCache().catch(() => undefined);
+    if (change === 'login') {
+      for (const listener of authRequiredListeners) listener('login');
+      publishAuthSessionChanged('login');
+      return;
+    }
+    for (const listener of authRequiredListeners) listener();
+    if (change === 'logout') publishAuthSessionChanged('logout');
+  });
+}
+
 export function subscribeToAuthRequired(listener: AuthRequiredListener): () => void {
+  ensureCrossTabAuthSync();
   authRequiredListeners.add(listener);
   return () => authRequiredListeners.delete(listener);
+}
+
+/**
+ * Publishes payload-free session transitions for browser-only state that must
+ * never cross an authenticated session boundary.
+ */
+export function subscribeToAuthSessionChanged(listener: AuthSessionChangeListener): () => void {
+  ensureCrossTabAuthSync();
+  authSessionChangeListeners.add(listener);
+  return () => authSessionChangeListeners.delete(listener);
+}
+
+function publishAuthSessionChanged(change: AuthSessionChange): void {
+  for (const listener of authSessionChangeListeners) listener(change);
 }
 
 async function publishAuthRequired(path: string, status: number): Promise<void> {
@@ -137,13 +188,26 @@ async function publishAuthRequired(path: string, status: number): Promise<void> 
     return;
   }
   try {
-    await clearDerivedMediaRuntimeCache();
+    await Promise.all([
+      clearDerivedMediaRuntimeCache(),
+      clearOfflineBootstrapState({ broadcast: true, change: 'unauthorized' }),
+    ]);
   } catch {
     // The original 401 remains authoritative; login retries cleanup before
     // asking the server to create a replacement session.
   } finally {
     for (const listener of authRequiredListeners) listener();
   }
+}
+
+function publishAuthBoundary(reason?: AuthRequiredReason): void {
+  for (const listener of authRequiredListeners) listener(reason);
+}
+
+function assertRequestNetworkAvailable(init: RequestInit): void {
+  const method = (init.method ?? 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
+  assertOnlineForWrite();
 }
 
 export class InternalApiError extends Error {
@@ -289,16 +353,25 @@ async function requestJson<T>(
   parser: Parser<T>,
   init: RequestInit = {},
 ): Promise<T> {
+  assertRequestNetworkAvailable(init);
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   if (init.body !== undefined && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      headers,
+    });
+  } catch (error) {
+    markNetworkFailureError(error);
+    if (isNetworkFailure(error)) markNetworkFailure();
+    throw error;
+  }
+  markNetworkAvailable();
   await publishAuthRequired(path, response.status);
   const contentType = response.headers.get('content-type') ?? '';
   const body: unknown = contentType.toLowerCase().includes('application/json')
@@ -317,11 +390,20 @@ async function requestJson<T>(
 }
 
 async function requestEmpty(path: string, init: RequestInit): Promise<void> {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json', ...init.headers },
-  });
+  assertRequestNetworkAvailable(init);
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', ...init.headers },
+    });
+  } catch (error) {
+    markNetworkFailureError(error);
+    if (isNetworkFailure(error)) markNetworkFailure();
+    throw error;
+  }
+  markNetworkAvailable();
   await publishAuthRequired(path, response.status);
   if (!response.ok) {
     let code = 'internal_api_error';
@@ -341,13 +423,22 @@ async function requestExport(
   path: string,
   init: RequestInit = {},
 ): Promise<CustomAdapterExportDownload> {
+  assertRequestNetworkAvailable(init);
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json, application/yaml, text/yaml, text/plain');
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      headers,
+    });
+  } catch (error) {
+    markNetworkFailureError(error);
+    if (isNetworkFailure(error)) markNetworkFailure();
+    throw error;
+  }
+  markNetworkAvailable();
   await publishAuthRequired(path, response.status);
   if (!response.ok) {
     const body = await readJsonSafely(response);
@@ -537,23 +628,58 @@ function requestSignal(options: InternalRequestOptions): Pick<RequestInit, 'sign
 
 export const internalClient = {
   getAuthStatus: async () => {
-    const status = await requestJson('/internal/auth/status', AuthStatusSchema);
-    if (status.required && !status.authenticated) await clearDerivedMediaRuntimeCache();
+    let status: AuthStatus;
+    try {
+      status = await requestJson('/internal/auth/status', AuthStatusSchema);
+    } catch (error) {
+      if (error instanceof InternalApiError && error.status === 401) {
+        await Promise.allSettled([
+          clearDerivedMediaRuntimeCache(),
+          clearOfflineBootstrapState({ broadcast: true, change: 'unauthorized' }),
+        ]);
+      }
+      throw error;
+    }
+    if (!status.required) {
+      // Public deployments get an explicit, identity-free offline marker. A
+      // required=false response is never treated as an authenticated user.
+      await clearOfflineBootstrapState({ broadcast: false });
+      await clearDerivedMediaRuntimeCache();
+      rememberPublicOfflineBootstrap();
+    } else if (!status.authenticated) {
+      await clearOfflineBootstrapState({ broadcast: true, change: 'logout' });
+      await clearDerivedMediaRuntimeCache();
+      publishAuthSessionChanged('logout');
+      publishAuthBoundary();
+    } else {
+      rememberAuthenticatedSession();
+    }
     return status;
   },
   login: async (password: string) => {
     const input = AuthLoginSchema.parse({ password });
+    await clearOfflineBootstrapState({ broadcast: true, change: 'logout' });
     await clearDerivedMediaRuntimeCache();
     const status = await requestJson('/internal/auth/login', AuthStatusSchema, {
       method: 'POST',
       body: jsonBody(input),
     });
     await clearDerivedMediaRuntimeCache();
+    await clearOfflineBootstrapState();
+    if (status.required && status.authenticated) rememberAuthenticatedSession();
+    if (!status.required) rememberPublicOfflineBootstrap();
+    broadcastOfflineSessionChange('login');
+    publishAuthSessionChanged('login');
+    publishAuthBoundary('login');
     return status;
   },
   logout: async () => {
+    await clearOfflineBootstrapState({ broadcast: true, change: 'logout' });
     await clearDerivedMediaRuntimeCache();
     await requestEmpty('/internal/auth/logout', { method: 'POST' });
+    publishAuthSessionChanged('logout');
+    publishAuthBoundary();
+    await clearOfflineBootstrapState({ broadcast: false });
     await clearDerivedMediaRuntimeCache();
   },
   getSettings: async () =>

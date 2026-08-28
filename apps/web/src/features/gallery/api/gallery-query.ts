@@ -14,6 +14,12 @@ import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
 
 import { internalClient } from '../../../api/internal-client.js';
 import { internalQueryKeys } from '../../../api/query-keys.js';
+import {
+  isNetworkFailure,
+  loadOfflineGallerySnapshot,
+  markNetworkFailure,
+  saveOfflineGallerySnapshot,
+} from '../../../pwa-offline-snapshot.js';
 import { isVisualFixtureMode } from '../../../visual-fixture.js';
 import {
   PR1_MOCK_FOLDERS,
@@ -248,29 +254,55 @@ export async function loadProviderData(): Promise<FixtureProvider | null> {
 
 export async function loadGalleryData(): Promise<readonly FixtureGalleryItem[]> {
   if (isVisualFixtureMode()) return PR1_MOCK_GALLERY_ITEMS;
-  const [assets, jobs] = await Promise.all([
-    collectPages((cursor) => internalClient.listAssets(withCursor(cursor))),
-    collectPages((cursor) => internalClient.listJobs(withCursor(cursor))),
-  ]);
-  return mapInternalGallery(assets, jobs);
+  try {
+    const [assets, jobs] = await Promise.all([
+      collectPages((cursor) => internalClient.listAssets(withCursor(cursor))),
+      collectPages((cursor) => internalClient.listJobs(withCursor(cursor))),
+    ]);
+    const items = mapInternalGallery(assets, jobs);
+    try {
+      await saveOfflineGallerySnapshot(items);
+    } catch {
+      // A storage failure must not make an authoritative response unusable.
+    }
+    return items;
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    markNetworkFailure();
+    const fallback = await loadOfflineGallerySnapshot();
+    if (fallback === null) throw error;
+    return fallback;
+  }
 }
 
 export function useGalleryQuery() {
-  return useQuery({ queryKey: galleryQueryKey, queryFn: () => loadGalleryData() });
+  return useQuery({
+    queryKey: galleryQueryKey,
+    queryFn: () => loadGalleryData(),
+    retry: false,
+  });
 }
 
 export async function loadInputAssetInventoryData(): Promise<readonly FixtureGalleryItem[]> {
   if (isVisualFixtureMode()) {
     return PR1_MOCK_GALLERY_ITEMS.filter((item) => item.kind === 'image');
   }
-  const [visibleImages, masks] = await Promise.all([
-    collectPages((cursor) => internalClient.listAssets({ ...withCursor(cursor), type: 'image' })),
-    collectPages((cursor) =>
-      internalClient.listAssets({ ...withCursor(cursor), role: 'mask', type: 'image' }),
-    ),
-  ]);
-  const assetsById = new Map([...visibleImages, ...masks].map((asset) => [asset.id, asset]));
-  return mapInternalGallery([...assetsById.values()], []).filter((item) => item.kind === 'image');
+  try {
+    const [visibleImages, masks] = await Promise.all([
+      collectPages((cursor) => internalClient.listAssets({ ...withCursor(cursor), type: 'image' })),
+      collectPages((cursor) =>
+        internalClient.listAssets({ ...withCursor(cursor), role: 'mask', type: 'image' }),
+      ),
+    ]);
+    const assetsById = new Map([...visibleImages, ...masks].map((asset) => [asset.id, asset]));
+    return mapInternalGallery([...assetsById.values()], []).filter((item) => item.kind === 'image');
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    markNetworkFailure();
+    const fallback = await loadOfflineGallerySnapshot();
+    if (fallback === null) throw error;
+    return fallback.filter((item) => item.kind === 'image');
+  }
 }
 
 export function useInputAssetInventoryQuery() {

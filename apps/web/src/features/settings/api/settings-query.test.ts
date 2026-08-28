@@ -7,6 +7,7 @@ import {
   loadSettingsData,
   patchSettingsData,
   readGeneralSettings,
+  readPwaSettings,
   refreshProviderModels,
   testProviderConnection,
 } from './settings-query.js';
@@ -88,5 +89,17 @@ describe('readGeneralSettings', () => {
       initialFilter: 'all',
       reduceMotion: 'system',
     });
+  });
+});
+
+describe('readPwaSettings', () => {
+  it('reads the persisted update notification preference and defaults safely', () => {
+    expect(readPwaSettings({ 'pwa.update_notifications': false })).toEqual({
+      updateNotifications: false,
+    });
+    expect(readPwaSettings({ 'pwa.update_notifications': 'off' })).toEqual({
+      updateNotifications: true,
+    });
+    expect(readPwaSettings(undefined)).toEqual({ updateNotifications: true });
   });
 });

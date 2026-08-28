@@ -13,6 +13,8 @@ import {
 const port = E2E_PORT;
 const baseURL = E2E_BASE_URL;
 const pr6TestMatch = /pr6\.spec\.ts/;
+const pr7TestMatch = /pr7\.spec\.ts/;
+const pr6AndPr7TestMatch = /pr[67]\.spec\.ts/;
 const localChromium = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const localLaunchOptions = localChromium
   ? { launchOptions: { executablePath: localChromium } }
@@ -42,7 +44,7 @@ export default defineConfig({
         deviceScaleFactor: 1,
         viewport: { width: 1920, height: 1080 },
       },
-      testIgnore: pr6TestMatch,
+      testIgnore: pr6AndPr7TestMatch,
     },
     {
       name: 'pr1-desktop-1440x900',
@@ -51,7 +53,7 @@ export default defineConfig({
         deviceScaleFactor: 1,
         viewport: { width: 1440, height: 900 },
       },
-      testIgnore: pr6TestMatch,
+      testIgnore: pr6AndPr7TestMatch,
     },
     {
       name: 'pr1-mobile-430x932',
@@ -62,7 +64,7 @@ export default defineConfig({
         isMobile: true,
         viewport: { width: 430, height: 932 },
       },
-      testIgnore: pr6TestMatch,
+      testIgnore: pr6AndPr7TestMatch,
     },
     {
       name: 'pr1-mobile-390x844',
@@ -73,7 +75,7 @@ export default defineConfig({
         isMobile: true,
         viewport: { width: 390, height: 844 },
       },
-      testIgnore: pr6TestMatch,
+      testIgnore: pr6AndPr7TestMatch,
     },
     {
       name: 'pr6-desktop-1440x900',
@@ -149,6 +151,88 @@ export default defineConfig({
     {
       name: 'pr6-mobile-360x800',
       testMatch: pr6TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 360, height: 800 },
+      },
+    },
+    {
+      name: 'pr7-desktop-1920x1080',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        viewport: { width: 1920, height: 1080 },
+      },
+    },
+    {
+      name: 'pr7-desktop-1440x900',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        viewport: { width: 1440, height: 900 },
+      },
+    },
+    {
+      name: 'pr7-desktop-1280x800',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        viewport: { width: 1280, height: 800 },
+      },
+    },
+    {
+      name: 'pr7-tablet-1024x1366',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 1024, height: 1366 },
+      },
+    },
+    {
+      name: 'pr7-tablet-834x1194',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 834, height: 1194 },
+      },
+    },
+    {
+      name: 'pr7-mobile-430x932',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 430, height: 932 },
+      },
+    },
+    {
+      name: 'pr7-mobile-390x844',
+      testMatch: pr7TestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 390, height: 844 },
+      },
+    },
+    {
+      name: 'pr7-mobile-360x800',
+      testMatch: pr7TestMatch,
       use: {
         ...devices['Desktop Chrome'],
         deviceScaleFactor: 1,

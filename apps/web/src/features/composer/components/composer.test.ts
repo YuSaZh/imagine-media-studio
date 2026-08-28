@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { PR1_MOCK_PROVIDER } from '../../gallery/model/fixtures.js';
-import { supportedVideoInputModes, uploadRoleForMode } from './composer.js';
+import {
+  promptAfterSuccessfulSubmit,
+  promptAfterSuccessfulSubmitSnapshot,
+  supportedVideoInputModes,
+  uploadRoleForMode,
+} from './composer.js';
 
 describe('Composer video input capabilities', () => {
   it('exposes only operations declared by the selected video model', () => {
@@ -28,5 +33,17 @@ describe('Composer video input capabilities', () => {
     expect(uploadRoleForMode('video', 'references')).toBe('reference');
     expect(uploadRoleForMode('video', 'text')).toBe('reference');
     expect(uploadRoleForMode('image', 'first_frame')).toBe('reference');
+  });
+
+  it('clears or retains the prompt according to the submit setting', () => {
+    expect(promptAfterSuccessfulSubmit('keep this prompt', false)).toBe('keep this prompt');
+    expect(promptAfterSuccessfulSubmit('clear this prompt', true)).toBe('');
+  });
+
+  it('keeps a prompt edited while a deferred submission is in flight', () => {
+    expect(promptAfterSuccessfulSubmitSnapshot('A', 'A', true)).toBe('');
+    expect(promptAfterSuccessfulSubmitSnapshot('A', 'A', false)).toBe('A');
+    expect(promptAfterSuccessfulSubmitSnapshot('B', 'A', true)).toBe('B');
+    expect(promptAfterSuccessfulSubmitSnapshot('B', 'A', false)).toBe('B');
   });
 });

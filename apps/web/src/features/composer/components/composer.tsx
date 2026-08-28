@@ -35,6 +35,13 @@ import {
   useModelsQuery,
 } from '../../gallery/api/gallery-query';
 import type { FixtureAspectRatio, FixtureModel } from '../../gallery/model/types';
+import {
+  COMPOSER_DRAFT_MAX_PROMPT_LENGTH,
+  createComposerDraftPersistence,
+  readComposerDraft,
+  type ComposerDraftPersistence,
+} from '../model/composer-draft.js';
+import { readGeneralSettings, useSettingsQuery } from '../../settings/api/settings-query.js';
 
 interface ComposerProps {
   isOnline: boolean;
@@ -66,8 +73,35 @@ export function supportedVideoInputModes(model: FixtureModel | undefined): reado
   return modes;
 }
 
+export function promptAfterSuccessfulSubmit(
+  prompt: string,
+  clearPromptAfterSubmit: boolean,
+): string {
+  return clearPromptAfterSubmit ? '' : prompt;
+}
+
+export function promptAfterSuccessfulSubmitSnapshot(
+  currentPrompt: string,
+  submittedPrompt: string,
+  clearPromptAfterSubmit: boolean,
+): string {
+  return currentPrompt === submittedPrompt
+    ? promptAfterSuccessfulSubmit(submittedPrompt, clearPromptAfterSubmit)
+    : currentPrompt;
+}
+
 export function Composer({ isOnline }: ComposerProps) {
-  const [prompt, setPrompt] = useState('');
+  const visualFixtures = isVisualFixtureMode();
+  const initialPromptRef = useRef<string | undefined>(undefined);
+  if (initialPromptRef.current === undefined) {
+    initialPromptRef.current = visualFixtures ? '' : readComposerDraft()?.prompt ?? '';
+  }
+  const draftPersistenceRef = useRef<ComposerDraftPersistence | null>(null);
+  draftPersistenceRef.current ??= createComposerDraftPersistence();
+  const draftPersistence = draftPersistenceRef.current;
+  const [prompt, setPrompt] = useState(() => initialPromptRef.current ?? '');
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
   const [count, setCount] = useState(1);
   const [aspectRatio, setAspectRatio] = useState<FixtureAspectRatio>('2:3');
   const [duration, setDuration] = useState(5);
@@ -91,7 +125,8 @@ export function Composer({ isOnline }: ComposerProps) {
   const inputInventory = inputInventoryQuery.data ?? [];
   const { data: models = [] } = useModelsQuery();
   const queryClient = useQueryClient();
-  const visualFixtures = isVisualFixtureMode();
+  const settingsQuery = useSettingsQuery(visualFixtures);
+  const generalSettings = readGeneralSettings(settingsQuery.data?.settings);
   const submission = useGallerySubmission();
   const selectedModel =
     models.find((model) => model.id === modelId && model.mediaKind === composerMode) ??
@@ -230,6 +265,17 @@ export function Composer({ isOnline }: ComposerProps) {
     !submission.isPending;
 
   useEffect(() => {
+    if (visualFixtures) return;
+    if (prompt.length === 0) {
+      draftPersistence.clear();
+      return;
+    }
+    draftPersistence.schedule(prompt);
+  }, [draftPersistence, prompt, visualFixtures]);
+
+  useEffect(() => () => draftPersistence.dispose(), [draftPersistence]);
+
+  useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
     const updateOffset = () => {
@@ -364,10 +410,11 @@ export function Composer({ isOnline }: ComposerProps) {
 
   const submit = () => {
     if (!canSubmit || !selectedModel) return;
+    const submittedPrompt = prompt.trim();
     submission.mutate(
       {
         mode: composerMode,
-        prompt: prompt.trim(),
+        prompt: submittedPrompt,
         modelId: selectedModel.id,
         providerId: selectedModel.providerId,
         count,
@@ -381,7 +428,20 @@ export function Composer({ isOnline }: ComposerProps) {
       },
       {
         onSuccess: () => {
-          setPrompt('');
+          const clearPrompt = generalSettings.clearPromptAfterSubmit;
+          const currentPrompt = promptRef.current;
+          const promptChangedDuringSubmit = currentPrompt !== submittedPrompt;
+          setPrompt(promptAfterSuccessfulSubmitSnapshot(
+            currentPrompt,
+            submittedPrompt,
+            clearPrompt,
+          ));
+          if (promptChangedDuringSubmit || !clearPrompt) {
+            draftPersistence.schedule(currentPrompt);
+            draftPersistence.flush();
+          } else {
+            draftPersistence.clear();
+          }
           setComposerExpanded(false);
         },
       },
@@ -518,6 +578,7 @@ export function Composer({ isOnline }: ComposerProps) {
       )}
       <textarea
         aria-label="Prompt"
+        maxLength={COMPOSER_DRAFT_MAX_PROMPT_LENGTH}
         onChange={(event) => setPrompt(event.target.value)}
         onFocus={() => setComposerExpanded(true)}
         onKeyDown={handleKeyDown}
