@@ -77,7 +77,6 @@ export function validateExistingRelease({
 
 export async function publishGitHubRelease({
   digest,
-  notesPath,
   ref,
   repository,
   runGh = defaultRunGh,
@@ -92,7 +91,7 @@ export async function publishGitHubRelease({
   if (!REPOSITORY.test(repository)) {
     throw new Error('GITHUB_REPOSITORY has an unexpected shape.');
   }
-  const safeNotesPath = resolveTaskOwnedReleaseNotesPath(notesPath, runnerTemp);
+  const safeNotesPath = resolveTaskOwnedReleaseNotesPath(runnerTemp);
   const notesStat = await lstat(safeNotesPath);
   if (!notesStat.isFile() || notesStat.isSymbolicLink() ||
       (notesStat.mode & 0o777) !== 0o600 || notesStat.size > MAX_NOTES_BYTES) {
@@ -148,7 +147,6 @@ export async function main() {
   }
   const result = await publishGitHubRelease({
     digest: process.env.RELEASE_DIGEST ?? '',
-    notesPath: process.env.RELEASE_NOTES_PATH ?? '',
     ref: process.env.GITHUB_REF ?? '',
     repository: process.env.GITHUB_REPOSITORY ?? '',
     runnerTemp: process.env.RUNNER_TEMP ?? '',

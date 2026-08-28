@@ -199,7 +199,6 @@ jobs:
     env:
       RELEASE_DIGEST: ${{ needs.publish.outputs.digest }}
       RELEASE_VERSION: ${{ needs.publish.outputs.version }}
-      RELEASE_NOTES_PATH: ${{ runner.temp }}/imagine-media-release-notes.md
     steps:
       - name: Check out release source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

@@ -12,7 +12,10 @@ import {
   validateReleaseTag,
   validateReleaseVersions,
 } from './release-guard.mjs';
-import { formatReleaseNotes } from './release-notes.mjs';
+import {
+  formatReleaseNotes,
+  resolveTaskOwnedReleaseNotesPath,
+} from './release-notes.mjs';
 import { publishGitHubRelease } from './release-publish.mjs';
 import {
   main as verifyReleaseAttestationFiles,
@@ -65,6 +68,18 @@ assert.match(githubRelease.if, /needs\.promote\.result == 'success'/u);
 assert.equal(publish.outputs.digest, '${{ steps.push.outputs.digest }}');
 assert.equal(workflow.concurrency.group, 'stable-release');
 assert.equal(workflow.concurrency['cancel-in-progress'], false);
+assert.doesNotMatch(workflowText, /\$\{\{\s*runner(?:\.|\[)/u);
+const jobEnvContexts = new Set(['github', 'inputs', 'matrix', 'needs', 'secrets', 'strategy', 'vars']);
+for (const [jobName, job] of Object.entries(workflow.jobs)) {
+  for (const value of Object.values(job.env ?? {})) {
+    for (const match of String(value).matchAll(/\$\{\{\s*([A-Za-z_][A-Za-z0-9_-]*)/gu)) {
+      assert.ok(
+        jobEnvContexts.has(match[1]),
+        `Context ${match[1]} is unavailable in jobs.${jobName}.env.`,
+      );
+    }
+  }
+}
 
 const step = (job, predicate, label) => {
   const match = job.steps.find(predicate);
@@ -218,10 +233,7 @@ assert.equal(cleanupNotes.if, 'always()');
 assert.equal(githubRelease.steps.at(-1), cleanupNotes);
 assert.equal(githubRelease.env.RELEASE_DIGEST, '${{ needs.publish.outputs.digest }}');
 assert.equal(githubRelease.env.RELEASE_VERSION, '${{ needs.publish.outputs.version }}');
-assert.equal(
-  githubRelease.env.RELEASE_NOTES_PATH,
-  '${{ runner.temp }}/imagine-media-release-notes.md',
-);
+assert.equal(githubRelease.env.RELEASE_NOTES_PATH, undefined);
 
 const packageJson = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
 const serverPackageJson = JSON.parse(await readFile(new URL('../../apps/server/package.json', import.meta.url), 'utf8'));
@@ -266,8 +278,9 @@ assert.throws(() => formatReleaseNotes(changelogText, packageJson.version, 'sha2
 const notesOuter = await mkdtemp(join(tmpdir(), 'imagine-release-notes-test-'));
 try {
   const runnerTemp = join(notesOuter, 'runner');
-  const notesPath = join(runnerTemp, 'imagine-media-release-notes.md');
-  const escapedPath = join(notesOuter, 'escaped.md');
+  const notesPath = resolveTaskOwnedReleaseNotesPath(runnerTemp);
+  assert.equal(notesPath, join(runnerTemp, 'imagine-media-release-notes.md'));
+  assert.throws(() => resolveTaskOwnedReleaseNotesPath('relative/runner'), /absolute/u);
   await mkdir(runnerTemp, { mode: 0o700 });
   const notesScript = fileURLToPath(new URL('./release-notes.mjs', import.meta.url));
   const notesEnvironment = {
@@ -278,7 +291,7 @@ try {
   };
   const notesResult = spawnSync(process.execPath, [notesScript], {
     encoding: 'utf8',
-    env: { ...notesEnvironment, RELEASE_NOTES_PATH: notesPath },
+    env: notesEnvironment,
   });
   assert.equal(notesResult.status, 0, `${notesResult.stdout}${notesResult.stderr}`);
   assert.equal((await stat(notesPath)).mode & 0o777, 0o600);
@@ -286,7 +299,6 @@ try {
 
   const publishOptions = {
     digest: releaseDigest,
-    notesPath,
     repository: 'YuSaZh/imagine-media-studio',
     runnerTemp,
     tag: 'v0.1.0',
@@ -365,23 +377,9 @@ try {
     /could not be read/u,
   );
 
-  const escapedResult = spawnSync(process.execPath, [notesScript], {
-    encoding: 'utf8',
-    env: { ...notesEnvironment, RELEASE_NOTES_PATH: escapedPath },
-  });
-  assert.notEqual(escapedResult.status, 0, 'A notes path outside RUNNER_TEMP must fail closed.');
-  await assert.rejects(readFile(escapedPath), { code: 'ENOENT' });
-
-  const escapedCleanupResult = spawnSync(process.execPath, [notesScript, '--cleanup'], {
-    encoding: 'utf8',
-    env: { ...notesEnvironment, RELEASE_NOTES_PATH: escapedPath },
-  });
-  assert.notEqual(escapedCleanupResult.status, 0, 'Cleanup outside RUNNER_TEMP must fail closed.');
-  await assert.rejects(readFile(escapedPath), { code: 'ENOENT' });
-
   const cleanupResult = spawnSync(process.execPath, [notesScript, '--cleanup'], {
     encoding: 'utf8',
-    env: { ...notesEnvironment, RELEASE_NOTES_PATH: notesPath },
+    env: notesEnvironment,
   });
   assert.equal(cleanupResult.status, 0, `${cleanupResult.stdout}${cleanupResult.stderr}`);
   await assert.rejects(readFile(notesPath), { code: 'ENOENT' });

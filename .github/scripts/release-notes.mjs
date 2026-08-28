@@ -1,5 +1,5 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
-import { relative, resolve, sep } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import process from 'node:process';
 import { URL } from 'node:url';
 
@@ -41,33 +41,23 @@ export function formatReleaseNotes(changelog, version, digest) {
     `[RELEASE.md](https://github.com/YuSaZh/imagine-media-studio/blob/v${version}/RELEASE.md).\n`;
 }
 
-export function resolveTaskOwnedReleaseNotesPath(outputPath, runnerTemp) {
-  const normalizedRoot = resolve(runnerTemp);
-  const normalizedOutput = resolve(outputPath);
-  const relationship = relative(normalizedRoot, normalizedOutput);
-  if (
-    relationship !== RELEASE_NOTES_FILENAME ||
-    relationship.startsWith(`..${sep}`)
-  ) {
-    throw new Error(`Release notes path must be RUNNER_TEMP/${RELEASE_NOTES_FILENAME}.`);
+export function resolveTaskOwnedReleaseNotesPath(runnerTemp) {
+  if (typeof runnerTemp !== 'string' || !isAbsolute(runnerTemp)) {
+    throw new Error('RUNNER_TEMP must be an absolute directory.');
   }
-  return normalizedOutput;
+  return resolve(runnerTemp, RELEASE_NOTES_FILENAME);
 }
 
-export async function cleanupReleaseNotes(outputPath, runnerTemp) {
-  await rm(resolveTaskOwnedReleaseNotesPath(outputPath, runnerTemp), { force: true });
+export async function cleanupReleaseNotes(runnerTemp) {
+  await rm(resolveTaskOwnedReleaseNotesPath(runnerTemp), { force: true });
 }
 
 export async function main(args = process.argv.slice(2)) {
   const version = process.env.RELEASE_VERSION ?? '';
   const digest = process.env.RELEASE_DIGEST ?? '';
   const runnerTemp = process.env.RUNNER_TEMP ?? '';
-  const output = process.env.RELEASE_NOTES_PATH ?? '';
-  if (runnerTemp.length === 0 || output.length === 0) {
-    throw new Error('RUNNER_TEMP and RELEASE_NOTES_PATH are required.');
-  }
   if (args.length === 1 && args[0] === '--cleanup') {
-    await cleanupReleaseNotes(output, runnerTemp);
+    await cleanupReleaseNotes(runnerTemp);
     return;
   }
   if (args.length !== 0) {
@@ -75,7 +65,7 @@ export async function main(args = process.argv.slice(2)) {
   }
   const changelog = await readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8');
   const notes = formatReleaseNotes(changelog, version, digest);
-  await writeFile(resolveTaskOwnedReleaseNotesPath(output, runnerTemp), notes, {
+  await writeFile(resolveTaskOwnedReleaseNotesPath(runnerTemp), notes, {
     encoding: 'utf8',
     flag: 'wx',
     mode: 0o600,
