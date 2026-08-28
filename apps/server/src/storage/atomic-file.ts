@@ -105,14 +105,27 @@ export async function commitStagedFile(
   dataRoot: string,
   staged: StagedFile,
   destinationPath: string,
+  signal?: AbortSignal,
 ): Promise<void> {
-  toStoredPath(dataRoot, destinationPath);
-  await assertNoSymlinkTraversal(dataRoot, dirname(destinationPath), true);
-  await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 });
-  await assertNoSymlinkTraversal(dataRoot, dirname(destinationPath), false);
-  await assertNoSymlinkTraversal(dataRoot, destinationPath, true);
-  await link(staged.temporaryPath, destinationPath);
-  await rm(staged.temporaryPath, { force: true }).catch(() => undefined);
+  try {
+    signal?.throwIfAborted();
+    toStoredPath(dataRoot, destinationPath);
+    await assertNoSymlinkTraversal(dataRoot, dirname(destinationPath), true);
+    signal?.throwIfAborted();
+    await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 });
+    signal?.throwIfAborted();
+    await assertNoSymlinkTraversal(dataRoot, dirname(destinationPath), false);
+    signal?.throwIfAborted();
+    await assertNoSymlinkTraversal(dataRoot, destinationPath, true);
+    signal?.throwIfAborted();
+    await link(staged.temporaryPath, destinationPath);
+    await rm(staged.temporaryPath, { force: true }).catch(() => undefined);
+  } catch (error) {
+    if (signal?.aborted === true) {
+      await rm(staged.temporaryPath, { force: true }).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 export async function discardStagedFile(staged: StagedFile): Promise<void> {

@@ -11,6 +11,10 @@ import type {
   MediaRepairListResult,
   MediaRepairReconcileResult,
 } from '../media/media-repair-coordinator.js';
+import {
+  MediaRepairInProgressError,
+  type MediaRepairRunResult,
+} from '../media/media-repair-worker.js';
 import type { MediaConsistencyReport } from '../media/maintenance.js';
 import type { DatabaseBackupResult } from '../maintenance/database-backup.js';
 import {
@@ -80,6 +84,14 @@ const MEDIA_REPAIRS_RESULT: MediaRepairListResult = {
   truncated: false,
 };
 
+const MEDIA_REPAIR_RUN_RESULT: MediaRepairRunResult = {
+  attempted: 2,
+  manual: 1,
+  repaired: 1,
+  retried: 0,
+  truncated: false,
+};
+
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
   await Promise.all(
@@ -95,6 +107,7 @@ async function createRouteApp(options: {
     audit(): Promise<MediaConsistencyReport>;
     listRepairs(): Promise<MediaRepairListResult>;
     reconcile(): Promise<MediaRepairReconcileResult>;
+    runRepairs(): Promise<MediaRepairRunResult>;
   }>;
   readonly assertAdmin?: (request: FastifyRequest) => void;
 } = {}): Promise<FastifyInstance> {
@@ -106,6 +119,7 @@ async function createRouteApp(options: {
     audit: vi.fn().mockResolvedValue(MEDIA_RESULT),
     listRepairs: vi.fn().mockResolvedValue(MEDIA_REPAIRS_RESULT),
     reconcile: vi.fn().mockResolvedValue(MEDIA_RECONCILE_RESULT),
+    runRepairs: vi.fn().mockResolvedValue(MEDIA_REPAIR_RUN_RESULT),
     ...options.media,
   };
   const app = Fastify({ logger: false });
@@ -346,6 +360,59 @@ describe('maintenance routes', () => {
     expect(repairsQuery.statusCode).toBe(400);
     expect(reconcile).toHaveBeenCalledOnce();
     expect(listRepairs).toHaveBeenCalledOnce();
+  });
+
+  it('runs only the fixed bounded repair batch and accepts no request options', async () => {
+    const runRepairs = vi.fn().mockResolvedValue(MEDIA_REPAIR_RUN_RESULT);
+    const app = await createRouteApp({ media: { runRepairs } });
+    const headers = { authorization: 'Basic admin' };
+    const unauthenticated = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers,
+    });
+    const body = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers,
+      payload: {},
+    });
+    const query = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run?limit=1',
+      headers,
+    });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ repairs: MEDIA_REPAIR_RUN_RESULT });
+    expect(body.statusCode).toBe(400);
+    expect(query.statusCode).toBe(400);
+    expect(runRepairs).toHaveBeenCalledOnce();
+  });
+
+  it('maps an active media repair run to a safe conflict response', async () => {
+    const runRepairs = vi.fn().mockRejectedValue(
+      new MediaRepairInProgressError('private path /data/app.db'),
+    );
+    const app = await createRouteApp({ media: { runRepairs } });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers: { authorization: 'Basic admin' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'media_repair_in_progress',
+      message: 'A media repair run is already in progress.',
+    });
+    expect(response.body).not.toContain('private path');
+    expect(response.body).not.toContain('/data/app.db');
   });
 
   it.each([

@@ -391,6 +391,24 @@ export class MediaRepairQueueRepository {
     return row?.value ?? 0;
   }
 
+  public hasDue(now?: Date): boolean {
+    const checkedAt = requiredDate(now, 'Due time');
+    try {
+      return this.database
+        .select({ issueKey: mediaRepairQueue.issueKey })
+        .from(mediaRepairQueue)
+        .where(and(
+          eq(mediaRepairQueue.state, 'open'),
+          lte(mediaRepairQueue.nextAttemptAt, checkedAt),
+          lt(mediaRepairQueue.attempts, MEDIA_REPAIR_MAX_ATTEMPTS),
+        ))
+        .limit(1)
+        .get() !== undefined;
+    } catch {
+      throw new MediaRepairQueueError('storage_failure', 'Due media repair rows could not be inspected.');
+    }
+  }
+
   public upsertScan(
     issues: readonly MediaRepairIssueInput[],
     options: MediaRepairScanOptions = {},

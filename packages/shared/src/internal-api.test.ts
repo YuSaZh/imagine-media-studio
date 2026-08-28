@@ -56,6 +56,7 @@ import {
   MaintenanceMediaResponseSchema,
   MaintenanceMediaReconcileResponseSchema,
   MaintenanceMediaRepairsResponseSchema,
+  MaintenanceMediaRepairRunResponseSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
@@ -226,6 +227,27 @@ describe('internal API schemas', () => {
         ...repairs.repairs,
         items: [{ ...repairs.repairs.items[0], storedPath: '/data/app.db', rawError: 'secret' }],
       },
+    }).success).toBe(false);
+
+    const run = { repairs: { attempted: 2, manual: 1, repaired: 1, retried: 0, truncated: false } };
+    expect(run.repairs.attempted).toBeGreaterThanOrEqual(
+      run.repairs.manual + run.repairs.repaired + run.repairs.retried,
+    );
+    expect(MaintenanceMediaRepairRunResponseSchema.parse(run)).toEqual(run);
+    expect(MaintenanceMediaRepairRunResponseSchema.safeParse({
+      repairs: { ...run.repairs, attempted: -1, rawError: 'secret' },
+    }).success).toBe(false);
+    expect(MaintenanceMediaRepairRunResponseSchema.safeParse({
+      repairs: { ...run.repairs, attempted: 1 },
+    }).success).toBe(false);
+    expect(MaintenanceMediaRepairRunResponseSchema.safeParse({
+      repairs: { attempted: 2, manual: 1, repaired: 0, retried: 0, truncated: false },
+    }).success).toBe(false);
+    expect(MaintenanceMediaRepairRunResponseSchema.safeParse({
+      repairs: { attempted: 2, manual: 1, repaired: 0, retried: 0, truncated: true },
+    }).success).toBe(true);
+    expect(MaintenanceMediaRepairRunResponseSchema.safeParse({
+      repairs: { ...run.repairs, attempted: 11 },
     }).success).toBe(false);
   });
 

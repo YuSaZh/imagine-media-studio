@@ -39,6 +39,7 @@ import {
   MaintenanceMediaResponseSchema,
   MaintenanceMediaReconcileResponseSchema,
   MaintenanceMediaRepairsResponseSchema,
+  MaintenanceMediaRepairRunResponseSchema,
   ManualModelCreateSchema,
   ManualModelPatchSchema,
   ModelPageSchema,
@@ -703,6 +704,10 @@ export const internalClient = {
     }),
   getMediaRepairs: async () =>
     requestJson('/internal/maintenance/media/repairs', MaintenanceMediaRepairsResponseSchema),
+  runMediaRepairs: async () =>
+    requestJson('/internal/maintenance/media/repairs/run', MaintenanceMediaRepairRunResponseSchema, {
+      method: 'POST',
+    }),
   createDatabaseBackup: async () =>
     requestJson('/internal/maintenance/backups', MaintenanceBackupResponseSchema, {
       method: 'POST',

@@ -5,6 +5,7 @@ import {
   MaintenanceMediaResponseSchema,
   MaintenanceMediaReconcileResponseSchema,
   MaintenanceMediaRepairsResponseSchema,
+  MaintenanceMediaRepairRunResponseSchema,
 } from '@imagine/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -21,6 +22,10 @@ import type {
   MediaRepairReconcileResult,
 } from '../media/media-repair-coordinator.js';
 import type { MediaConsistencyReport } from '../media/maintenance.js';
+import {
+  MediaRepairInProgressError,
+  type MediaRepairRunResult,
+} from '../media/media-repair-worker.js';
 
 export class MaintenanceUnauthenticatedError extends Error {
   public override readonly name = 'MaintenanceUnauthenticatedError';
@@ -39,6 +44,7 @@ export interface MaintenanceMediaPort {
   audit(): Promise<MediaConsistencyReport>;
   listRepairs(): Promise<MediaRepairListResult>;
   reconcile(): Promise<MediaRepairReconcileResult>;
+  runRepairs(): Promise<MediaRepairRunResult>;
 }
 
 export interface MaintenanceRoutesOptions {
@@ -177,6 +183,10 @@ function mediaRepairsResponse(result: MediaRepairListResult): unknown {
   });
 }
 
+function mediaRepairRunResponse(result: MediaRepairRunResult): unknown {
+  return MaintenanceMediaRepairRunResponseSchema.parse({ repairs: result });
+}
+
 function backupFailure(reply: FastifyReply, error: unknown): void {
   if (error instanceof BackupInProgressError) {
     void reply.code(409).send({
@@ -194,6 +204,17 @@ function backupFailure(reply: FastifyReply, error: unknown): void {
   }
   if (error instanceof DatabaseBackupClosedError) {
     safeFailure(reply, 503);
+    return;
+  }
+  safeFailure(reply);
+}
+
+function mediaRepairFailure(reply: FastifyReply, error: unknown): void {
+  if (error instanceof MediaRepairInProgressError) {
+    void reply.code(409).send({
+      error: 'media_repair_in_progress',
+      message: 'A media repair run is already in progress.',
+    });
     return;
   }
   safeFailure(reply);
@@ -243,6 +264,17 @@ export async function registerMaintenanceRoutes(
       return mediaRepairsResponse(await options.media.listRepairs());
     } catch {
       safeFailure(reply);
+      return;
+    }
+  });
+
+  app.post('/internal/maintenance/media/repairs/run', async (request, reply) => {
+    if (!await requireAdmin(request, reply, options.authorization)) return;
+    if (!ensureEmptyRequest(request, reply)) return;
+    try {
+      return mediaRepairRunResponse(await options.media.runRepairs());
+    } catch (error) {
+      mediaRepairFailure(reply, error);
       return;
     }
   });

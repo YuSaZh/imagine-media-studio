@@ -35,6 +35,7 @@ import {
   inspectMediaConsistency,
 } from './media/maintenance.js';
 import { MediaRepairCoordinator } from './media/media-repair-coordinator.js';
+import { MediaRepairWorker } from './media/media-repair-worker.js';
 import { VideoProcessor } from './media/video-processor.js';
 import {
   createProviderHttpClient,
@@ -403,10 +404,18 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     audit: mediaAudit,
     queue: mediaRepairQueue,
   });
+  const mediaRepairWorker = new MediaRepairWorker({
+    assets: mediaRepository,
+    imageProcessor,
+    paths: storage,
+    queue: mediaRepairQueue,
+    videoProcessor,
+  });
   const mediaMaintenance = {
     ...mediaAudit,
     listRepairs: () => mediaRepairCoordinator.listRepairs(),
     reconcile: () => mediaRepairCoordinator.reconcile(),
+    runRepairs: () => mediaRepairWorker.run(),
   };
   await cleanupTerminalProviderOutputs({
     jobs,

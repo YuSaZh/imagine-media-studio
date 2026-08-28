@@ -25,8 +25,8 @@ This file records non-blocking work that cannot currently be proven or completed
 ### PR 8 provider-output cleanup reconciliation
 
 - **Affects:** PR 8 media consistency and repair.
-- **Status:** PR 8 now has bounded audit reporting, startup reconciliation, a durable repair queue, and authenticated scan/queue report endpoints. A process crash can still leave provider-result files that are not represented by a durable cleanup action, and media-service repair execution remains a later milestone.
-- **Current handling:** At startup, delete only deterministic provider provisional outputs for a known terminal Job when no Asset references any derived path. Preserve active, unknown, referenced, unsafe, or ambiguous entries. Reconcile persists safe issue records but does not execute repairs or delete managed-tree orphans.
+- **Status:** PR 8 now has bounded audit reporting, startup reconciliation, a durable repair queue, authenticated scan/queue report endpoints, and a fixed-batch one-shot action for safe missing derived media. A process crash can still leave provider-result files that are not represented by a durable cleanup action, and primary/orphan/unsafe media still require manual handling.
+- **Current handling:** At startup, delete only deterministic provider provisional outputs for a known terminal Job when no Asset references any derived path. Preserve active, unknown, referenced, unsafe, or ambiguous entries. Reconcile persists safe issue records; the repair action only regenerates a missing thumbnail/poster after strict Asset/path/primary validation, never deletes managed-tree orphans, and never runs as a resident worker.
 
 ### Dynamic model catalog pagination
 
@@ -39,6 +39,12 @@ This file records non-blocking work that cannot currently be proven or completed
 - **Affects:** PR 8 maintenance settings.
 - **Status:** PR 7 connected the update-notification preference to durable settings and the Service Worker update lifecycle. The Storage page's original-media and temporary-file retention controls remain presentational.
 - **Current handling:** Connect retention and maintenance behavior with the PR 8 backup/media consistency work.
+
+### PR 8 offline restore same-UID replacement window
+
+- **Affects:** PR 8 offline restore publication and cleanup.
+- **Status:** The restore records and rechecks canonical parent and reservation device/inode identities, and preserves a replacement detected at a check point. Node's promise filesystem API does not provide an atomic `renameat2`-style no-replace directory operation.
+- **Current handling:** Restore requires an absent target and uses an empty 0700 reservation before renaming. A same-UID process can still replace that reservation between the final identity check and `rename`; this narrow TOCTOU window is outside the current atomicity guarantee and must not be described as fully race-proof.
 
 ## Resolved
 

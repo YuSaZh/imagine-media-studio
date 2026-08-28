@@ -187,6 +187,27 @@ describe('media repair queue migration', () => {
 });
 
 describe('MediaRepairQueueRepository', () => {
+  it('reports only due open rows for bounded worker truncation checks', async () => {
+    const { database } = await databaseFixture('imagine-media-repair-due-');
+    const queue = new MediaRepairQueueRepository(database.orm);
+    const current = issue('due');
+
+    queue.upsertScan([current], { now: at(1_000) });
+    expect(queue.hasDue(at(999))).toBe(false);
+    expect(queue.hasDue(at(1_000))).toBe(true);
+    const claimed = queue.claimNext({ now: at(1_000), leaseMs: 1_000 });
+    expect(claimed).not.toBeNull();
+    expect(queue.hasDue(at(1_000))).toBe(false);
+    expect(queue.retry(mediaRepairIssueKey(current), {
+      errorCode: 'repair_failed',
+      expectedAttempts: claimed!.attempts,
+      expectedLeaseUntil: claimed!.leaseUntil!,
+      now: at(1_100),
+    })).not.toBeNull();
+    expect(queue.hasDue(at(1_100))).toBe(false);
+    expect(queue.hasDue(at(3_100))).toBe(true);
+  });
+
   it('upserts duplicate issues deterministically and keeps a bounded issue key', async () => {
     const { database } = await databaseFixture('imagine-media-repair-upsert-');
     const queue = new MediaRepairQueueRepository(database.orm);

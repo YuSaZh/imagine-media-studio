@@ -221,6 +221,29 @@ export const MaintenanceMediaRepairsResponseSchema = z.object({
 }).strict();
 export type MaintenanceMediaRepairsResponse = z.infer<typeof MaintenanceMediaRepairsResponseSchema>;
 
+export const MAINTENANCE_MEDIA_REPAIR_RUN_MAX_COUNT = 10;
+const MaintenanceMediaRepairRunCountSchema = z.number()
+  .int()
+  .nonnegative()
+  .max(MAINTENANCE_MEDIA_REPAIR_RUN_MAX_COUNT);
+const MaintenanceMediaRepairRunStatsSchema = z.object({
+  attempted: MaintenanceMediaRepairRunCountSchema,
+  manual: MaintenanceMediaRepairRunCountSchema,
+  repaired: MaintenanceMediaRepairRunCountSchema,
+  retried: MaintenanceMediaRepairRunCountSchema,
+  truncated: z.boolean(),
+}).strict().refine(
+  (stats) => stats.attempted >= stats.repaired + stats.manual + stats.retried,
+  { message: 'Repair outcome counts cannot exceed attempted claims.' },
+).refine(
+  (stats) => stats.truncated || stats.attempted === stats.repaired + stats.manual + stats.retried,
+  { message: 'A complete repair run must account for every attempted claim.' },
+);
+export const MaintenanceMediaRepairRunResponseSchema = z.object({
+  repairs: MaintenanceMediaRepairRunStatsSchema,
+}).strict();
+export type MaintenanceMediaRepairRunResponse = z.infer<typeof MaintenanceMediaRepairRunResponseSchema>;
+
 // Stable aliases for server-side callers that describe the same wire DTOs as
 // database maintenance responses.
 export const DatabaseIntegrityResponseSchema = MaintenanceIntegrityResponseSchema;

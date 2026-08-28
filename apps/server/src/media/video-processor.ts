@@ -311,7 +311,8 @@ export class VideoProcessor {
         staged = await this.stagePoster(rawPoster, options);
       }
       try {
-        await commitStagedFile(options.dataRoot, staged, options.destinationPath);
+        options.signal?.throwIfAborted();
+        await commitStagedFile(options.dataRoot, staged, options.destinationPath, options.signal);
         return staged;
       } catch (error) {
         await discardStagedFile(staged);

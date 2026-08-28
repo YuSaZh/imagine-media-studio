@@ -1,13 +1,12 @@
 # PR 8 Media Consistency
 
-Status: **Media audit and repair queue core implemented; full PR 8 acceptance remains pending.**
+Status: **Bounded media audit, repair queue, and one-shot derived repair implemented; full PR 8 acceptance remains pending.**
 
 This milestone provides a bounded media consistency audit, an authenticated
 administrator report, startup cleanup for deterministic Provider provisional
-output, and the independent durable repair queue core from migration `0007`.
-It does not connect the queue to a repair worker or administrator repair
-action, and it never automatically deletes an orphan or an Asset-referenced
-managed media file.
+output, the independent durable repair queue core from migration `0007`, and a
+bounded one-shot administrator repair action. It never automatically deletes
+an orphan or an Asset-referenced managed media file.
 
 ## Audit boundary
 
@@ -62,9 +61,10 @@ entries are preserved. An incomplete Job or Asset query disables deletion for
 that startup pass and reports truncation in the cleanup result.
 
 The cleanup is deliberately narrow: it does not recursively remove arbitrary
-temporary files, scan unmanaged roots, or repair managed-tree orphans. Durable
-repair, operator-selected actions, and additional retention controls remain
-future work.
+temporary files, scan unmanaged roots, or repair managed-tree orphans. The
+repair worker is intentionally not resident: an administrator invokes one
+fixed-size batch at a time. Broader operator-selected actions, automatic
+orphan handling, and additional retention controls remain future work.
 
 ## Durable repair queue core
 
@@ -100,10 +100,46 @@ and total count of safe queue DTOs; it accepts no state or limit query
 parameters. Both responses are `no-store` and inherit the server CSP and
 same-origin write policy.
 
-The coordinator and queue core have no resident worker and do not execute
-repairs. Media-service repair execution, administrator state actions, and
-additional retention controls remain separate integration work; no automatic
-orphan deletion is introduced.
+## Bounded derived repair
+
+`POST /internal/maintenance/media/repairs/run` requires the configured
+administrator and an empty request body/query. It claims one fixed-size batch
+from the queue and returns only `attempted`, `repaired`, `manual`, `retried`,
+and `truncated` counts. The endpoint has no caller-controlled limit and does
+not start a resident worker. One process accepts only one active run: a
+concurrent administrator request receives a safe `409` response before it can
+claim another batch.
+
+Only `missing` issues with a live Asset can be considered for automatic repair.
+The queue path must exactly match the Asset thumbnail/poster reference, the
+primary file must be a regular no-symlink file in the role-specific tree with
+the recorded size and SHA-256. Deterministic missing/symlink/path/size/hash
+problems, deleted Assets, orphan issues, invalid metadata, and collisions are
+sent to manual review; transient primary open/read I/O failures use a safe
+bounded retry code. Transient derived-path inspection failures likewise retry
+with a fixed safe code rather than becoming manual work. Before generation,
+the primary is opened and checked
+again, including its device/inode identity and hash, to narrow the same-UID
+path-replacement window.
+Image thumbnails and video posters use the existing processor staging,
+fsync, and no-replace hard-link publication paths. The deadline signal is
+checked after each publication preparation await and immediately before the
+hard link; an abort removes the staged file without publishing the destination.
+The worker verifies the published file before a guarded queue resolve. A claim deadline aborts the
+processor one second before lease expiry; claims with less than that margin
+are left unsettled and are not started. Tool and transient storage failures
+retain only a bounded error code and use the queue's bounded retry backoff.
+An expired lease is never used to publish a file, and a stale worker cannot
+resolve a newer claim. If a queue transition fails or loses its lease, the
+run reports `truncated` without falsely counting the row as repaired, manual,
+or retried. Wire counts are capped at the endpoint batch size of ten; a
+non-truncated response accounts for every attempted claim. The action does not
+delete user media or repair primary files.
+
+The coordinator and queue core have no resident worker. Media-service repair
+execution is limited to the safe derived cases above; administrator state
+actions, primary-file repair, and additional retention controls remain
+separate work. No automatic orphan deletion is introduced.
 
 ## Acceptance evidence
 
@@ -113,7 +149,12 @@ referenced completed output preservation, unknown-directory preservation, and
 incomplete-reference fail-closed behavior. Queue tests verify new/old database
 migration, manifest drift, schema checks, foreign-key nulling, deterministic
 idempotent upsert, concurrent claims, lease expiry/restart, bounded retry,
-manual/resolve transitions, and truncated-scan behavior. Coordinator, route,
-server, and client tests verify truncated propagation, active-lease retention,
-strict request boundaries, administrator/CSRF protection, restart persistence,
-no-store/CSP headers, and safe DTO projection.
+manual/resolve transitions, and truncated-scan behavior. Worker tests verify
+real image thumbnail generation, video poster integration, primary and
+deleted-Asset safety, collisions, safe retries, stale leases, fixed-batch
+truncation, deadline aborts, and unsettled queue transitions. Primary
+revalidation compares the path, device/inode identity, size, and hash before
+the processor opens the source. Coordinator, route, server, and client tests
+verify truncated propagation, active-lease retention, strict request
+boundaries, administrator/CSRF protection, restart persistence, no-store/CSP
+headers, safe DTO projection, and bounded repair outcome invariants.

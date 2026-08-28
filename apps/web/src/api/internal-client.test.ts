@@ -152,6 +152,9 @@ describe('internalClient', () => {
           }],
           truncated: false,
         },
+      }), { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        repairs: { attempted: 2, manual: 1, repaired: 1, retried: 0, truncated: false },
       }), { headers: { 'Content-Type': 'application/json' }, status: 200 }));
 
     await expect(internalClient.getDatabaseIntegrity()).resolves.toMatchObject({
@@ -168,6 +171,9 @@ describe('internalClient', () => {
     });
     await expect(internalClient.getMediaRepairs()).resolves.toMatchObject({
       repairs: { count: 1, items: [{ storedPath: 'media/uploads/missing.png' }] },
+    });
+    await expect(internalClient.runMediaRepairs()).resolves.toMatchObject({
+      repairs: { attempted: 2, manual: 1, repaired: 1 },
     });
 
     expect(fetchMock.mock.calls[0]).toEqual([
@@ -192,6 +198,11 @@ describe('internalClient', () => {
       '/internal/maintenance/media/repairs',
       expect.objectContaining({ credentials: 'same-origin' }),
     ]);
+    expect(fetchMock.mock.calls[5]).toEqual([
+      '/internal/maintenance/media/repairs/run',
+      expect.objectContaining({ credentials: 'same-origin', method: 'POST' }),
+    ]);
+    expect(fetchMock.mock.calls[5]?.[1]).not.toHaveProperty('body');
   });
 
   it('fans remote login and logout boundaries out to auth/query observers', async () => {

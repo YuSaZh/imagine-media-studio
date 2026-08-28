@@ -79,6 +79,36 @@ describe('media storage safety', () => {
     ).rejects.toMatchObject({ code: 'EEXIST' });
   });
 
+  it('aborts at the final publication guard without publishing and cleans the staged file', async () => {
+    const paths = await storageFixture();
+    const staged = await stageReadable({
+      dataRoot: paths.root,
+      maxBytes: 1024,
+      source: Readable.from(['deadline payload']),
+      temporaryDirectory: paths.temporary,
+    });
+    const destination = join(paths.uploads, 'deadline.bin');
+    const controller = new AbortController();
+    let checks = 0;
+    const signal = {
+      get aborted() {
+        return controller.signal.aborted;
+      },
+      throwIfAborted() {
+        checks += 1;
+        if (checks === 5) controller.abort();
+        controller.signal.throwIfAborted();
+      },
+    } as AbortSignal;
+
+    await expect(commitStagedFile(paths.root, staged, destination, signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(checks).toBe(5);
+    await expect(lstat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(staged.temporaryPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('enforces the byte limit and removes partial files', async () => {
     const paths = await storageFixture();
     await expect(

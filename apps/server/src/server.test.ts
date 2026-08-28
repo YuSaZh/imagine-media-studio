@@ -1220,6 +1220,31 @@ describe('Imagine server PR 0 skeleton', () => {
       url: '/internal/maintenance/media/repairs?state=open',
       headers: adminHeaders,
     });
+    const unauthenticatedRun = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+    });
+    const crossOriginRun = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers: { ...adminHeaders, host: 'studio.local', origin: 'http://evil.example' },
+    });
+    const runBody = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers: adminHeaders,
+      payload: {},
+    });
+    const runQuery = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run?limit=1',
+      headers: adminHeaders,
+    });
+    const run = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers: adminHeaders,
+    });
 
     expect(unauthenticated.statusCode).toBe(401);
     expect(crossOrigin.statusCode).toBe(403);
@@ -1273,6 +1298,22 @@ describe('Imagine server PR 0 skeleton', () => {
       },
     });
     expect(repairsQuery.statusCode).toBe(400);
+    expect(unauthenticatedRun.statusCode).toBe(401);
+    expect(crossOriginRun.statusCode).toBe(403);
+    expect(runBody.statusCode).toBe(400);
+    expect(runQuery.statusCode).toBe(400);
+    expect(run.statusCode).toBe(200);
+    expect(run.headers['cache-control']).toContain('no-store');
+    expect(run.headers['content-security-policy']).toContain("object-src 'none'");
+    expect(run.json()).toEqual({
+      repairs: {
+        attempted: 1,
+        manual: 1,
+        repaired: 0,
+        retried: 0,
+        truncated: false,
+      },
+    });
     expect(server.mediaRepairQueue.count()).toBe(1);
 
     await server.app.close();
