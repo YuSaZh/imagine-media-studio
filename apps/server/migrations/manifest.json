@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "migrations": {
+    "0000_pr0.sql": "1c5d2c899f167ef3f5b167122a567195fa794006c683edf17781af77ce732b4a",
+    "0001_pr2_core.sql": "66b5e5e2445abfd89829f35ae28b5e8184fdb990e5d22c0ed497d564d1e2a643",
+    "0002_pr4_runtime_safety.sql": "d06ef9369c4cf4c3c7a79ab9d1ef26e0b6ad9dc3af7a3b0f6a63783f510462c1",
+    "0003_pr5_video_runtime.sql": "cc07c09c49ff7ae6b2c521d5316bbe3a1be8de04d172f509bf8d1112f33669d5",
+    "0004_pr6_custom_adapters.sql": "a316770dce4904aecd376e1be0bf4c2923a7870aeb96ca25f1a2a0281cf96799",
+    "0005_pr6_trusted_adapter_tombstones.sql": "153fbc963704dc4802332c05ab0ec20497a38a56193537d15721945d0b960bd6",
+    "0006_pr8_migration_checksums.sql": "7a7708311760cff8e8ba6040d9aeb062e24e67411e1908fa53e8eeda1b47a1d5"
+  }
+}

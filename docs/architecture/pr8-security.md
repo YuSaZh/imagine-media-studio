@@ -1,6 +1,6 @@
 # PR 8 Security Hardening
 
-Status: **Local acceptance passed; remote acceptance pending.**
+Status: **Local and GitHub Actions acceptance passed.**
 
 This record covers the first PR 8 security-hardening milestone. It does not
 claim completion of backup, SQLite integrity, media repair, release, or the
@@ -56,3 +56,11 @@ host, or persist a bypass in browser storage.
   addresses, IPv4-mapped IPv6, redirect revalidation, public/local host status,
   schema backward compatibility, interstitial acknowledgement, offline status,
   authentication-required status, accessibility semantics, and warning styles.
+
+## GitHub Actions evidence
+
+Commit `20f2921` passed all 13 jobs in [GitHub Actions run
+33179394160](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33179394160),
+including quality/build, the single-container Docker smoke, the base browser
+suite, all eight PR 7 regression viewports, and both representative
+axe/performance jobs.
