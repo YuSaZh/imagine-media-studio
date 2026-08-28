@@ -129,8 +129,8 @@ export class AssetMediaRepositoryAdapter implements AssetMediaRepositoryPort {
     return record === null ? null : toAssetMediaRecord(record);
   }
 
-  public listForMaintenance(): readonly AssetMediaRecord[] {
-    return this.repository.listForMaintenance().map(toAssetMediaRecord);
+  public listForMaintenance(options?: { readonly limit?: number }): readonly AssetMediaRecord[] {
+    return this.repository.listForMaintenance(options).map(toAssetMediaRecord);
   }
 
   public softDelete(id: string): boolean {

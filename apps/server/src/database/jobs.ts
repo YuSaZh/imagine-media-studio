@@ -11,6 +11,7 @@ import {
 } from '@imagine/shared';
 import {
   and,
+  asc,
   desc,
   eq,
   inArray,
@@ -116,6 +117,13 @@ export interface JobRecord {
   readonly requestSha256: string;
   readonly deletedAt: Date | null;
   readonly adapterRef: CustomAdapterRef | null;
+}
+
+/** Minimal Job view used by filesystem maintenance without parsing payloads. */
+export interface JobMaintenanceRecord {
+  readonly id: string;
+  readonly status: string;
+  readonly deletedAt: Date | null;
 }
 
 export interface CreateJobInput {
@@ -746,6 +754,20 @@ export class JobRepository {
       .orderBy(desc(jobs.createdAt), desc(jobs.id))
       .all()
       .map(mapJob);
+  }
+
+  public listForMaintenance(options: { readonly limit?: number } = {}): readonly JobMaintenanceRecord[] {
+    if (
+      options.limit !== undefined &&
+      (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 100_001)
+    ) {
+      throw new RangeError('Maintenance Job limit must be an integer between 1 and 100001.');
+    }
+    const query = this.database
+      .select({ id: jobs.id, status: jobs.status, deletedAt: jobs.deletedAt })
+      .from(jobs)
+      .orderBy(asc(jobs.createdAt), asc(jobs.id));
+    return (options.limit === undefined ? query : query.limit(options.limit)).all();
   }
 
   public listQueued(): JobRecord[] {

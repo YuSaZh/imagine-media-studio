@@ -36,6 +36,7 @@ import {
   JobRetryResponseSchema,
   MaintenanceBackupResponseSchema,
   MaintenanceIntegrityResponseSchema,
+  MaintenanceMediaResponseSchema,
   ManualModelCreateSchema,
   ManualModelPatchSchema,
   ModelPageSchema,
@@ -692,6 +693,8 @@ export const internalClient = {
     }),
   getDatabaseIntegrity: async () =>
     requestJson('/internal/maintenance/integrity', MaintenanceIntegrityResponseSchema),
+  getMediaConsistency: async () =>
+    requestJson('/internal/maintenance/media', MaintenanceMediaResponseSchema),
   createDatabaseBackup: async () =>
     requestJson('/internal/maintenance/backups', MaintenanceBackupResponseSchema, {
       method: 'POST',

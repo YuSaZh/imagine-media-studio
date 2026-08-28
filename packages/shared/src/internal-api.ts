@@ -123,6 +123,43 @@ export const MaintenanceBackupResponseSchema = z.object({
 export type MaintenanceBackupDto = z.infer<typeof MaintenanceBackupDtoSchema>;
 export type MaintenanceBackupResponse = z.infer<typeof MaintenanceBackupResponseSchema>;
 
+const MAINTENANCE_PATH_SENTINELS = new Set(['<path-too-long>', '<unsafe-path>']);
+const WINDOWS_DRIVE_PATH = /^[A-Za-z]:/u;
+function isSafeMaintenanceStoredPath(value: string): boolean {
+  if (MAINTENANCE_PATH_SENTINELS.has(value)) return true;
+  if (
+    value.length === 0 ||
+    value.includes('\0') ||
+    value.includes('\\') ||
+    value.startsWith('/') ||
+    WINDOWS_DRIVE_PATH.test(value)
+  ) {
+    return false;
+  }
+  return value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+export const MaintenanceMediaIssueSchema = z.object({
+  assetId: z.string().min(1).max(255).nullable(),
+  kind: z.enum(['hash_mismatch', 'missing', 'orphan', 'size_mismatch', 'unsafe', 'unreadable']),
+  storedPath: z.string().min(1).max(4_096).refine(isSafeMaintenanceStoredPath, {
+    message: 'Maintenance stored paths must be POSIX-relative or a bounded sentinel.',
+  }),
+}).strict();
+export const MaintenanceMediaResponseSchema = z.object({
+  media: z.object({
+    assetCount: z.number().int().nonnegative(),
+    fileCount: z.number().int().nonnegative(),
+    hashedBytes: z.number().int().nonnegative(),
+    issueCount: z.number().int().nonnegative(),
+    issues: z.array(MaintenanceMediaIssueSchema).max(100),
+    ok: z.boolean(),
+    truncated: z.boolean(),
+  }).strict(),
+}).strict();
+export type MaintenanceMediaIssue = z.infer<typeof MaintenanceMediaIssueSchema>;
+export type MaintenanceMediaResponse = z.infer<typeof MaintenanceMediaResponseSchema>;
+
 // Stable aliases for server-side callers that describe the same wire DTOs as
 // database maintenance responses.
 export const DatabaseIntegrityResponseSchema = MaintenanceIntegrityResponseSchema;

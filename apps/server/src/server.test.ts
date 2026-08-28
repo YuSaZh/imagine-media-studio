@@ -1060,11 +1060,16 @@ describe('Imagine server PR 0 skeleton', () => {
       method: 'GET',
       url: '/internal/maintenance/integrity',
     });
+    const publicMedia = await publicServer.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media',
+    });
     const publicBackup = await publicServer.app.inject({
       method: 'POST',
       url: '/internal/maintenance/backups',
     });
     expect(publicIntegrity.statusCode).toBe(403);
+    expect(publicMedia.statusCode).toBe(403);
     expect(publicBackup.statusCode).toBe(403);
 
     const server = await createTestServer(false, true, false, 'test-password');
@@ -1079,6 +1084,11 @@ describe('Imagine server PR 0 skeleton', () => {
     const integrity = await server.app.inject({
       method: 'GET',
       url: '/internal/maintenance/integrity',
+      headers: adminHeaders,
+    });
+    const media = await server.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media',
       headers: adminHeaders,
     });
     const backup = await server.app.inject({
@@ -1116,6 +1126,22 @@ describe('Imagine server PR 0 skeleton', () => {
       },
     });
     expect(integrity.body).not.toContain('schema_migrations');
+    expect(media.statusCode).toBe(200);
+    expect(media.headers['cache-control']).toContain('no-store');
+    expect(media.headers['content-security-policy']).toContain("object-src 'none'");
+    expect(media.json()).toEqual({
+      media: {
+        assetCount: 0,
+        fileCount: 0,
+        hashedBytes: 0,
+        issueCount: 0,
+        issues: [],
+        ok: true,
+        truncated: false,
+      },
+    });
+    expect(media.body).not.toContain(dataDir);
+    expect(media.body).not.toContain('error');
     expect(backup.statusCode).toBe(201);
     expect(backup.headers['cache-control']).toContain('no-store');
     const backupBody = backup.json<{ backup: { id: string; size: number; sha256: string; createdAt: string } }>();

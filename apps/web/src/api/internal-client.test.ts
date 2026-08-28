@@ -114,13 +114,27 @@ describe('internalClient', () => {
           sha256: 'a'.repeat(64),
           size: 8192,
         },
-      }), { headers: { 'Content-Type': 'application/json' }, status: 201 }));
+      }), { headers: { 'Content-Type': 'application/json' }, status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        media: {
+          assetCount: 1,
+          fileCount: 2,
+          hashedBytes: 128,
+          issueCount: 0,
+          issues: [],
+          ok: true,
+          truncated: false,
+        },
+      }), { headers: { 'Content-Type': 'application/json' }, status: 200 }));
 
     await expect(internalClient.getDatabaseIntegrity()).resolves.toMatchObject({
       integrity: { ok: true, foreignKeysEnabled: true },
     });
     await expect(internalClient.createDatabaseBackup()).resolves.toMatchObject({
       backup: { id: 'backup-client-test', size: 8192 },
+    });
+    await expect(internalClient.getMediaConsistency()).resolves.toMatchObject({
+      media: { ok: true, issueCount: 0 },
     });
 
     expect(fetchMock.mock.calls[0]).toEqual([
@@ -132,6 +146,10 @@ describe('internalClient', () => {
       expect.objectContaining({ credentials: 'same-origin', method: 'POST' }),
     ]);
     expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty('body');
+    expect(fetchMock.mock.calls[2]).toEqual([
+      '/internal/maintenance/media',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    ]);
   });
 
   it('fans remote login and logout boundaries out to auth/query observers', async () => {

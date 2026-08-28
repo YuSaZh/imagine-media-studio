@@ -2,6 +2,7 @@ import {
   EmptyQuerySchema,
   MaintenanceBackupResponseSchema,
   MaintenanceIntegrityResponseSchema,
+  MaintenanceMediaResponseSchema,
 } from '@imagine/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -13,6 +14,7 @@ import {
   DatabaseBackupCollisionError,
   type DatabaseBackupResult,
 } from '../maintenance/database-backup.js';
+import type { MediaConsistencyReport } from '../media/maintenance.js';
 
 export class MaintenanceUnauthenticatedError extends Error {
   public override readonly name = 'MaintenanceUnauthenticatedError';
@@ -27,9 +29,14 @@ export interface MaintenanceBackupPort {
   create(): Promise<DatabaseBackupResult>;
 }
 
+export interface MaintenanceMediaPort {
+  audit(): Promise<MediaConsistencyReport>;
+}
+
 export interface MaintenanceRoutesOptions {
   readonly authorization: MaintenanceAuthorization;
   readonly backup: MaintenanceBackupPort;
+  readonly media: MaintenanceMediaPort;
   readonly sqlite: Database.Database;
 }
 
@@ -130,6 +137,10 @@ function backupResponse(result: DatabaseBackupResult): unknown {
   });
 }
 
+function mediaResponse(report: MediaConsistencyReport): unknown {
+  return MaintenanceMediaResponseSchema.parse({ media: report });
+}
+
 function backupFailure(reply: FastifyReply, error: unknown): void {
   if (error instanceof BackupInProgressError) {
     void reply.code(409).send({
@@ -161,6 +172,17 @@ export async function registerMaintenanceRoutes(
     if (!ensureEmptyRequest(request, reply)) return;
     try {
       return integrityResponse(options.sqlite);
+    } catch {
+      safeFailure(reply);
+      return;
+    }
+  });
+
+  app.get('/internal/maintenance/media', async (request, reply) => {
+    if (!await requireAdmin(request, reply, options.authorization)) return;
+    if (!ensureEmptyRequest(request, reply)) return;
+    try {
+      return mediaResponse(await options.media.audit());
     } catch {
       safeFailure(reply);
       return;

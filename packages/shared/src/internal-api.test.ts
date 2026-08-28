@@ -53,6 +53,7 @@ import {
   CustomAdapterSimulationResultSchema,
   MaintenanceIntegrityResponseSchema,
   MaintenanceBackupResponseSchema,
+  MaintenanceMediaResponseSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
@@ -138,6 +139,50 @@ describe('internal API schemas', () => {
       ...backup,
       backup: { ...backup.backup, createdAt: 'not-a-timestamp' },
     }).success).toBe(false);
+
+    const media = {
+      media: {
+        assetCount: 2,
+        fileCount: 4,
+        hashedBytes: 128,
+        issueCount: 1,
+        issues: [{ assetId: 'asset-1', kind: 'missing', storedPath: 'media/uploads/a.png' }],
+        ok: false,
+        truncated: false,
+      },
+    };
+    expect(MaintenanceMediaResponseSchema.parse(media)).toEqual(media);
+    expect(MaintenanceMediaResponseSchema.safeParse({
+      ...media,
+      media: { ...media.media, issues: [{ ...media.media.issues[0], absolutePath: '/data/app.db' }] },
+    }).success).toBe(false);
+    expect(MaintenanceMediaResponseSchema.safeParse({
+      ...media,
+      media: { ...media.media, issueCount: -1 },
+    }).success).toBe(false);
+    expect(MaintenanceMediaResponseSchema.parse({
+      ...media,
+      media: {
+        ...media.media,
+        issues: [
+          { assetId: null, kind: 'unsafe', storedPath: '<unsafe-path>' },
+          { assetId: null, kind: 'unreadable', storedPath: '<path-too-long>' },
+        ],
+      },
+    })).toMatchObject({ media: { issues: [{ storedPath: '<unsafe-path>' }, { storedPath: '<path-too-long>' }] } });
+    for (const storedPath of [
+      '/data/app.db',
+      'C:/data/app.db',
+      'media\\uploads\\asset.png',
+      'media/uploads/../asset.png',
+      'media//uploads/asset.png',
+      `media/uploads/${String.fromCharCode(0)}asset.png`,
+    ]) {
+      expect(MaintenanceMediaResponseSchema.safeParse({
+        ...media,
+        media: { ...media.media, issues: [{ assetId: null, kind: 'unsafe', storedPath }] },
+      }).success).toBe(false);
+    }
   });
 
   it('keeps Provider DTOs strict and secret-free', () => {

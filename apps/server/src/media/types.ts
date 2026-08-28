@@ -44,7 +44,9 @@ export type NewAssetMediaRecord = Omit<AssetMediaRecord, 'createdAt' | 'deletedA
 export interface AssetMediaRepositoryPort {
   create(input: NewAssetMediaRecord): AssetMediaRecord | Promise<AssetMediaRecord>;
   get(id: string, includeDeleted?: boolean): AssetMediaRecord | null | Promise<AssetMediaRecord | null>;
-  listForMaintenance(): readonly AssetMediaRecord[] | Promise<readonly AssetMediaRecord[]>;
+  listForMaintenance(options?: { readonly limit?: number }):
+    | readonly AssetMediaRecord[]
+    | Promise<readonly AssetMediaRecord[]>;
   softDelete(id: string): boolean | Promise<boolean>;
 }
 

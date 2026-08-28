@@ -29,6 +29,10 @@ import { DatabaseBackup } from './maintenance/database-backup.js';
 import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adapter.js';
 import { AssetMediaService } from './media/asset-media-service.js';
 import { SharpImageProcessor } from './media/image-processor.js';
+import {
+  cleanupTerminalProviderOutputs,
+  inspectMediaConsistency,
+} from './media/maintenance.js';
 import { VideoProcessor } from './media/video-processor.js';
 import {
   createProviderHttpClient,
@@ -388,6 +392,14 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     repository: mediaRepository,
     videoProcessor,
   });
+  const mediaMaintenance = {
+    audit: () => inspectMediaConsistency({ jobs, paths: storage, repository: mediaRepository }),
+  };
+  await cleanupTerminalProviderOutputs({
+    jobs,
+    paths: storage,
+    repository: mediaRepository,
+  });
   const runner = new JobRunner({
     ...createSqliteRunnerOptions({
       jobs,
@@ -517,6 +529,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
         },
       },
       backup: databaseBackup,
+      media: mediaMaintenance,
       sqlite: database.sqlite,
     });
     await registerAdapterRoutes(app, {

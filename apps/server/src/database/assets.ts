@@ -313,12 +313,17 @@ export class AssetRepository {
       .map((row) => row.collectionId);
   }
 
-  public listForMaintenance(): readonly AssetRecord[] {
-    return this.database
+  public listForMaintenance(options: { readonly limit?: number } = {}): readonly AssetRecord[] {
+    if (
+      options.limit !== undefined &&
+      (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 100_001)
+    ) {
+      throw new RangeError('Maintenance asset limit must be an integer between 1 and 100001.');
+    }
+    const query = this.database
       .select()
       .from(assets)
-      .orderBy(asc(assets.createdAt), asc(assets.id))
-      .all()
-      .map(mapAssetRow);
+      .orderBy(asc(assets.createdAt), asc(assets.id));
+    return (options.limit === undefined ? query : query.limit(options.limit)).all().map(mapAssetRow);
   }
 }

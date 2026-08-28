@@ -7,6 +7,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDatabase } from '../database/client.js';
+import type { MediaConsistencyReport } from '../media/maintenance.js';
 import type { DatabaseBackupResult } from '../maintenance/database-backup.js';
 import {
   BackupInProgressError,
@@ -26,6 +27,16 @@ const RESULT: DatabaseBackupResult = {
   size: 8192,
 };
 
+const MEDIA_RESULT: MediaConsistencyReport = {
+  assetCount: 0,
+  fileCount: 0,
+  hashedBytes: 0,
+  issueCount: 0,
+  issues: [],
+  ok: true,
+  truncated: false,
+};
+
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
   await Promise.all(
@@ -37,12 +48,14 @@ afterEach(async () => {
 async function createRouteApp(options: {
   readonly adminEnabled?: boolean;
   readonly backup?: { create(): Promise<DatabaseBackupResult> };
+  readonly media?: { audit(): Promise<MediaConsistencyReport> };
   readonly assertAdmin?: (request: FastifyRequest) => void;
 } = {}): Promise<FastifyInstance> {
   const dataDir = await mkdtemp(join(tmpdir(), 'imagine-maintenance-route-'));
   temporaryDirectories.push(dataDir);
   const database = createDatabase(resolve(dataDir, 'app.db'), migrationsDirectory);
   const backup = options.backup ?? { create: vi.fn().mockResolvedValue(RESULT) };
+  const media = options.media ?? { audit: vi.fn().mockResolvedValue(MEDIA_RESULT) };
   const app = Fastify({ logger: false });
   apps.push(app);
   app.addHook('onClose', async () => {
@@ -62,6 +75,7 @@ async function createRouteApp(options: {
       },
     },
     backup,
+    media,
     sqlite: database.sqlite,
   });
   return app;
@@ -160,6 +174,67 @@ describe('maintenance routes', () => {
     expect(backup.body).not.toContain('path');
     expect(backup.body).not.toContain('filename');
     expect(backup.body).not.toContain('sqlite');
+  });
+
+  it('projects a bounded media report and rejects request options', async () => {
+    const audit = vi.fn().mockResolvedValue({
+      assetCount: 2,
+      fileCount: 4,
+      hashedBytes: 128,
+      issueCount: 1,
+      issues: [{ assetId: 'asset-1', kind: 'missing', storedPath: 'media/uploads/a.png' }],
+      ok: false,
+      truncated: false,
+    } satisfies MediaConsistencyReport);
+    const app = await createRouteApp({ media: { audit } });
+    const headers = { authorization: 'Basic admin' };
+    const response = await app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media',
+      headers,
+    });
+    const query = await app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media?path=media/uploads/a.png',
+      headers,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      media: {
+        assetCount: 2,
+        fileCount: 4,
+        hashedBytes: 128,
+        issueCount: 1,
+        issues: [{ assetId: 'asset-1', kind: 'missing', storedPath: 'media/uploads/a.png' }],
+        ok: false,
+        truncated: false,
+      },
+    });
+    expect(query.statusCode).toBe(400);
+    expect(audit).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when a media implementation returns an unsafe stored path', async () => {
+    const app = await createRouteApp({
+      media: {
+        audit: vi.fn().mockResolvedValue({
+          ...MEDIA_RESULT,
+          issueCount: 1,
+          issues: [{ assetId: null, kind: 'unsafe', storedPath: '/data/app.db' }],
+          ok: false,
+        } satisfies MediaConsistencyReport),
+      },
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media',
+      headers: { authorization: 'Basic admin' },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).not.toContain('/data/app.db');
+    expect(response.body).not.toContain('unsafe stored path');
   });
 
   it.each([
