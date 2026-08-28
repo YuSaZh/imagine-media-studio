@@ -22,6 +22,15 @@ const SCREENSHOT_PROJECTS = new Set([
   'pr7-mobile-390x844',
   'pr7-mobile-360x800',
 ]);
+const PR7_REOPEN_PROJECT = 'pr7-desktop-1440x900';
+const ACTIVE_JOB_STATUSES = new Set([
+  'queued',
+  'submitting',
+  'remote_pending',
+  'remote_running',
+  'downloading',
+  'processing',
+]);
 
 const OFFLINE_AUTH_MARKER_KEY = 'imagine-authenticated-session-v1';
 const OFFLINE_PUBLIC_BOOTSTRAP_KEY = 'imagine-public-offline-bootstrap-v1';
@@ -130,6 +139,40 @@ async function createMockImageJob(
   const jobId = body.job?.id;
   if (!jobId) throw new Error('The Mock image job response did not include an ID.');
   return jobId;
+}
+
+async function createMockVideoJob(
+  request: APIRequestContext,
+  prompt: string,
+): Promise<string> {
+  await refreshMockModels(request);
+  const response = await request.post('/internal/jobs', {
+    data: {
+      aspectRatio: '16:9',
+      count: 1,
+      durationSeconds: 1,
+      inputs: [],
+      modelId: 'mock-video-v1',
+      operation: 'video.generate',
+      prompt,
+      providerId: 'mock',
+      resolution: '720p',
+    },
+  });
+  expect(response.status()).toBe(202);
+  const body = await response.json() as { readonly job?: { readonly id?: string } };
+  const jobId = body.job?.id;
+  if (!jobId) throw new Error('The Mock video job response did not include an ID.');
+  return jobId;
+}
+
+async function waitForActiveJob(request: APIRequestContext, jobId: string): Promise<void> {
+  await expect.poll(async () => {
+    const response = await request.get(`/internal/jobs/${encodeURIComponent(jobId)}`);
+    if (!response.ok()) return false;
+    const body = await response.json() as JobDetailResponse;
+    return ACTIVE_JOB_STATUSES.has(body.job.status);
+  }, { timeout: 30_000 }).toBe(true);
 }
 
 async function waitForCompletedJob(
@@ -746,6 +789,59 @@ test('restores the authenticated production gallery offline without write or sec
     if (jobId !== null) {
       if (detail !== null) await deleteJobAndAssets(request, jobId, detail.assets);
       else {
+        const cleanup = await request.get(`/internal/jobs/${encodeURIComponent(jobId)}`);
+        if (cleanup.ok()) {
+          const cleanupDetail = await cleanup.json() as JobDetailResponse;
+          await deleteJobAndAssets(request, jobId, cleanupDetail.assets);
+        }
+      }
+    }
+  }
+});
+
+test('keeps an active Mock Job running after closing and reopening the PWA', async ({
+  page,
+  request,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== PR7_REOPEN_PROJECT,
+    'The server-side Job reopen lifecycle runs once at the representative desktop viewport.',
+  );
+  const context = page.context();
+  const prompt = `PR7 reopen active job ${randomUUID()}`;
+  let jobId: string | null = null;
+  let detail: JobDetailResponse | null = null;
+  let reopenedPage: Page | null = null;
+
+  try {
+    await waitForAppShell(page);
+    jobId = await createMockVideoJob(request, prompt);
+    await waitForActiveJob(request, jobId);
+
+    await page.close();
+    reopenedPage = await context.newPage();
+    await waitForAppShell(reopenedPage, '/jobs');
+
+    const restoredJob = reopenedPage.locator('.job-row').filter({ hasText: prompt });
+    await expect(restoredJob).toHaveCount(1, { timeout: 30_000 });
+    await expect(restoredJob.locator('.status-chip')).toHaveCount(1);
+
+    detail = await waitForCompletedJob(request, jobId);
+    const asset = detail.assets[0];
+    if (!asset) throw new Error(`Mock video Job ${jobId} completed without an asset.`);
+
+    await waitForAppShell(reopenedPage, '/imagine');
+    const restoredAsset = reopenedPage.locator(`[data-item-id="${asset.id}"]`);
+    await expect(restoredAsset).toBeVisible({ timeout: 30_000 });
+    await expect(restoredAsset).toHaveAttribute('data-status', 'completed');
+  } finally {
+    if (reopenedPage !== null && !reopenedPage.isClosed()) {
+      await reopenedPage.close().catch(() => undefined);
+    }
+    if (jobId !== null) {
+      if (detail !== null) {
+        await deleteJobAndAssets(request, jobId, detail.assets);
+      } else {
         const cleanup = await request.get(`/internal/jobs/${encodeURIComponent(jobId)}`);
         if (cleanup.ok()) {
           const cleanupDetail = await cleanup.json() as JobDetailResponse;
