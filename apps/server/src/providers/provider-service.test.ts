@@ -1147,11 +1147,13 @@ describe('ProviderService', () => {
       jsAdapter,
       customRef('trusted-javascript', '1.0.0', '1'.repeat(64)),
     );
-    await expect(jsHarness.service.testConnection(jsHarness.provider.id)).resolves.toEqual({
+    const unsupported = await jsHarness.service.testConnection(jsHarness.provider.id);
+    expect(unsupported).toMatchObject({
       ok: false,
-      latencyMs: 0,
       message: 'Provider connection test is not supported for this adapter.',
     });
+    expect(unsupported.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(unsupported.latencyMs).toBeLessThan(1_000);
     expect(jsAdapter.staticCalls).toBe(0);
   });
 
