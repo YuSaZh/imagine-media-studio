@@ -4,13 +4,6 @@ This file records non-blocking work that cannot currently be proven or completed
 
 ## Open
 
-### PR 6 GitHub Actions incident evidence
-
-- **Affects:** PR 6 remote verification evidence.
-- **Incident windows:** [GitHub incident `y1t7p9fzrlj2`](https://www.githubstatus.com/incidents/y1t7p9fzrlj2) reports that on 2026-08-26 from 15:02 to 15:45 UTC Actions jobs failed to start; delayed starts continued until 17:40 UTC. [GitHub incident `kfspvrz14xr0`](https://www.githubstatus.com/incidents/kfspvrz14xr0) reports Actions workflow runs triggered by pull requests from 22:56 UTC on 2026-08-26, with full recovery beginning at 23:58 UTC on 2026-08-26.
-- **Repository impact:** PR 6 commits had been pushed, but their associated Actions runs were not generated (`failed-to-trigger`), so no PR 6 run or job result is available to cite.
-- **Current handling:** Keep the PR 6 matrix limited to local checks and placeholders. After the incident windows have passed, trigger a fresh verification run and replace the placeholders; remove this hold after remote acceptance is recorded.
-
 ### Authenticated Grok Imagine reference package
 
 - **Affects:** PR 1 final visual classification and PR 7 cross-device polish.
@@ -48,6 +41,13 @@ This file records non-blocking work that cannot currently be proven or completed
 - **Current handling:** Connect update behavior in PR 7 and media retention/maintenance behavior in PR 8.
 
 ## Resolved
+
+### PR 6 GitHub Actions incident evidence
+
+- **Affects:** PR 6 remote verification evidence.
+- **Historical context:** [GitHub incident `y1t7p9fzrlj2`](https://www.githubstatus.com/incidents/y1t7p9fzrlj2) and [GitHub incident `kfspvrz14xr0`](https://www.githubstatus.com/incidents/kfspvrz14xr0) previously prevented the expected PR 6 run from being generated.
+- **Resolution:** Commit `79a30f2` passed [GitHub Actions run `33140963119`](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119). Its Quality, single-container smoke, and Playwright jobs all concluded successfully; detailed job evidence is recorded in [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md).
+- **Disposition:** The outage-related PR 6 hold and its run placeholders are closed.
 
 - Default Provider HTTP remains HTTPS-only unless the dedicated, explicit `ALLOW_INSECURE_PROVIDER_HTTP` switch is enabled.
 - Provider stage retry budgets are durable across SQLite close/reopen recovery.

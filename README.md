@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0, PR 1, PR 2, PR 3, PR 4, and PR 5 are complete. PR 6 implementation complete; remote verification pending.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, and the custom Provider management workflow described in [`PLAN.MD`](./PLAN.MD).
+**PR 0, PR 1, PR 2, PR 3, PR 4, PR 5, and PR 6 are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, and the custom Provider management workflow described in [`PLAN.MD`](./PLAN.MD).
 
 ## Development Status
 
@@ -38,11 +38,11 @@ PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/ar
 PR 3 desktop/mobile screenshots and visual review are in [`artifacts/visual/pr3`](./artifacts/visual/pr3) and [`artifacts/visual/pr3/visual-diff-report.md`](./artifacts/visual/pr3/visual-diff-report.md).
 PR 5 video, restart, media-delivery, and PWA evidence is recorded in [`docs/architecture/pr5-verification.md`](./docs/architecture/pr5-verification.md).
 PR 5 offline media acceptance covers a known recent Poster while the installed app is already controlled by its Service Worker. A cold offline launch that reconstructs Gallery metadata and its recent-media snapshot remains PR 7 scope and is not claimed here.
-PR 6 custom Provider examples and the feature/security acceptance matrix are in [`examples/custom-providers`](./examples/custom-providers) and [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md). Local parser, manifest, and source-policy checks cover those examples. The PR 6 GitHub Actions run records are currently placeholders because the two specific incidents recorded in [`Hold.md`](./Hold.md) prevented run generation; this README does not claim remote CI completion.
+PR 6 custom Provider examples and the feature/security acceptance matrix are in [`examples/custom-providers`](./examples/custom-providers) and [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md). Local acceptance covered 95 test files / 828 tests, lint, typecheck, production build, E2E TypeScript compilation, Playwright (61 passed / 19 skipped), and an isolated Docker smoke. GitHub Actions run [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) for commit `79a30f2` passed the quality, Playwright, and single-container smoke jobs.
 
 ## Local Safety
 
-This repository is developed on a host with existing services. Local checks are limited to dependency installation, lint, typecheck, unit tests, and production builds that do not start a service. Playwright/E2E, the application server, and Docker/Compose smoke run in GitHub Actions; do not start them on the development host. Never stop, restart, rename, or inspect secrets from existing host services.
+This repository is developed on a host with existing services. Checks that start the application, Playwright, or Docker/Compose must use task-owned temporary data, a unique Compose project/resource namespace, and a non-conflicting port. Never stop, restart, rename, inspect secrets from, or otherwise alter existing host services and containers.
 
 For deployment on another host, create the bind-mounted data directory as the runtime user and pass that user's numeric IDs when they differ from `1000:1000`:
 
