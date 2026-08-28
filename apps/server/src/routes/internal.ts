@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
+import { APP_VERSION } from '../version.js';
+
 interface InternalRoutesOptions {
   mockProviderEnabled: boolean;
 }
@@ -15,7 +17,7 @@ export async function registerInternalRoutes(
 
   app.get('/internal/app-info', async () => ({
     name: 'Imagine Media Studio',
-    version: '0.0.0',
+    version: APP_VERSION,
     mockProviderEnabled: options.mockProviderEnabled,
   }));
 }

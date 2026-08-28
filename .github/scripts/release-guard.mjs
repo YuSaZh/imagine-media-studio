@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 const STABLE_SEMVER_SOURCE = '(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)';
 const STABLE_SEMVER = new RegExp(`^${STABLE_SEMVER_SOURCE}$`, 'u');
 export const STABLE_RELEASE_TAG = new RegExp(`^v${STABLE_SEMVER_SOURCE}$`, 'u');
+const APP_VERSION_SOURCE = /^export const APP_VERSION = '([^']+)' as const;\n$/u;
 
 export function validateReleaseTag(
   tag,
@@ -27,17 +28,53 @@ export function validateReleaseTag(
   return { tag, version: packageVersion };
 }
 
-export async function readRootPackageVersion(
-  packagePath = new URL('../../package.json', import.meta.url),
-) {
-  const packageJson = JSON.parse(await readFile(packagePath, 'utf8'));
-  return packageJson.version;
+export function validateReleaseVersions(versions) {
+  const entries = Object.entries(versions);
+  const keys = entries.map(([key]) => key).sort();
+  if (
+    keys.join(',') !== 'appInfo,root,server,web' ||
+    !entries.every(
+      ([, version]) => typeof version === 'string' && STABLE_SEMVER.test(version),
+    )
+  ) {
+    throw new Error('Release-facing versions must all be stable semantic versions.');
+  }
+  const rootVersion = versions.root;
+  if (entries.some(([, version]) => version !== rootVersion)) {
+    throw new Error('Root, server, web, and app-info versions must match exactly.');
+  }
+  return rootVersion;
+}
+
+export async function readReleaseVersions(paths = {
+  appVersion: new URL('../../apps/server/src/version.ts', import.meta.url),
+  root: new URL('../../package.json', import.meta.url),
+  server: new URL('../../apps/server/package.json', import.meta.url),
+  web: new URL('../../apps/web/package.json', import.meta.url),
+}) {
+  const [rootSource, serverSource, webSource, appVersionSource] = await Promise.all([
+    readFile(paths.root, 'utf8'),
+    readFile(paths.server, 'utf8'),
+    readFile(paths.web, 'utf8'),
+    readFile(paths.appVersion, 'utf8'),
+  ]);
+  const appVersionMatch = APP_VERSION_SOURCE.exec(appVersionSource);
+  if (appVersionMatch === null) {
+    throw new Error('The app-info version source has an unexpected shape.');
+  }
+  return {
+    appInfo: appVersionMatch[1],
+    root: JSON.parse(rootSource).version,
+    server: JSON.parse(serverSource).version,
+    web: JSON.parse(webSource).version,
+  };
 }
 
 export async function main() {
   const tag = process.env.GITHUB_REF_NAME ?? '';
   const ref = process.env.GITHUB_REF ?? `refs/tags/${tag}`;
-  const packageVersion = await readRootPackageVersion();
+  const versions = await readReleaseVersions();
+  const packageVersion = validateReleaseVersions(versions);
   const release = validateReleaseTag(tag, packageVersion, ref);
   const outputPath = process.env.GITHUB_OUTPUT;
   if (outputPath === undefined || outputPath.length === 0) {

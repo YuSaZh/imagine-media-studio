@@ -1,19 +1,31 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 
-import { validateReleaseTag } from './release-guard.mjs';
+import {
+  readReleaseVersions,
+  validateReleaseTag,
+  validateReleaseVersions,
+} from './release-guard.mjs';
+import { formatReleaseNotes } from './release-notes.mjs';
+import { publishGitHubRelease } from './release-publish.mjs';
+import {
+  main as verifyReleaseAttestationFiles,
+  parseAttestationJson,
+  validateReleaseAttestations,
+} from './verify-release-attestations.mjs';
 
 const requireFromServer = createRequire(new URL('../../apps/server/package.json', import.meta.url));
 const { parseDocument } = requireFromServer('yaml');
 
 const workflowText = await readFile(new URL('../workflows/release.yml', import.meta.url), 'utf8');
 const smokeScript = await readFile(new URL('./release-smoke.sh', import.meta.url), 'utf8');
+const changelogText = await readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8');
 const document = parseDocument(workflowText, { uniqueKeys: true });
 assert.equal(document.errors.length, 0, document.errors.map((error) => error.message).join('; '));
 const workflow = document.toJS();
@@ -25,8 +37,12 @@ assert.equal(workflow.on.workflow_dispatch, undefined);
 
 const publish = workflow.jobs.publish;
 const smoke = workflow.jobs.smoke;
+const promote = workflow.jobs.promote;
+const githubRelease = workflow.jobs['github-release'];
 assert.ok(publish);
 assert.ok(smoke);
+assert.ok(promote);
+assert.ok(githubRelease);
 assert.deepEqual(publish.permissions, {
   attestations: 'write',
   'artifact-metadata': 'write',
@@ -35,10 +51,20 @@ assert.deepEqual(publish.permissions, {
   packages: 'write',
 });
 assert.deepEqual(smoke.permissions, { contents: 'read', packages: 'read' });
+assert.deepEqual(promote.permissions, { packages: 'write' });
+assert.deepEqual(githubRelease.permissions, { contents: 'write' });
 assert.equal(publish['runs-on'], 'ubuntu-24.04');
 assert.equal(smoke['runs-on'], 'ubuntu-24.04');
+assert.equal(promote['runs-on'], 'ubuntu-24.04');
+assert.equal(githubRelease['runs-on'], 'ubuntu-24.04');
 assert.equal(smoke.needs, 'publish');
+assert.deepEqual(promote.needs, ['publish', 'smoke']);
+assert.deepEqual(githubRelease.needs, ['publish', 'smoke', 'promote']);
+assert.match(promote.if, /needs\.smoke\.result == 'success'/u);
+assert.match(githubRelease.if, /needs\.promote\.result == 'success'/u);
 assert.equal(publish.outputs.digest, '${{ steps.push.outputs.digest }}');
+assert.equal(workflow.concurrency.group, 'stable-release');
+assert.equal(workflow.concurrency['cancel-in-progress'], false);
 
 const step = (job, predicate, label) => {
   const match = job.steps.find(predicate);
@@ -69,7 +95,12 @@ for (const reference of actionRefs) {
     'g',
   );
   const matches = workflowText.match(pattern) ?? [];
-  const expectedUses = ['actions/checkout', 'actions/setup-node', 'docker/login-action'].includes(reference.name) ? 2 : 1;
+  const expectedUses = {
+    'actions/checkout': 3,
+    'actions/setup-node': 3,
+    'docker/login-action': 3,
+    'docker/setup-buildx-action': 2,
+  }[reference.name] ?? 1;
   assert.equal(matches.length, expectedUses, `Unexpected pin count for ${reference.name}.`);
   const ref = actionRef(reference);
   assert.ok(action(publish, ref), `Missing pinned ${ref} action in publish.`);
@@ -77,6 +108,18 @@ for (const reference of actionRefs) {
 for (const reference of actionRefs.filter(({ name }) =>
   ['actions/checkout', 'actions/setup-node', 'docker/login-action'].includes(name))) {
   assert.ok(action(smoke, actionRef(reference)), `Missing pinned ${actionRef(reference)} action in smoke.`);
+}
+assert.ok(action(promote, actionRef(actionRefs[3])));
+assert.ok(action(promote, actionRef(actionRefs[4])));
+assert.ok(action(githubRelease, actionRef(actionRefs[0])));
+assert.ok(action(githubRelease, actionRef(actionRefs[1])));
+
+for (const job of Object.values(workflow.jobs)) {
+  for (const workflowStep of job.steps) {
+    if (workflowStep.uses !== undefined) {
+      assert.match(workflowStep.uses, /^[^@]+@[a-f0-9]{40}$/u, `Action is not pinned: ${workflowStep.uses}`);
+    }
+  }
 }
 
 const checkoutRef = actionRef(actionRefs[0]);
@@ -95,12 +138,12 @@ assert.ok(guardIndex >= 0 && guardIndex < loginIndex, 'The tag/version gate must
 const metadata = action(publish, metadataRef);
 assert.equal(metadata.with.images, '${{ env.IMAGE }}');
 assert.equal(metadata.with.flavor, 'latest=false');
-for (const tagRule of [
-  'type=semver,pattern={{version}},value=${{ steps.release.outputs.version }}',
-  'type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.version }}',
-  'type=raw,value=latest',
-  'type=sha,format=long,prefix=sha-',
-]) assert.ok(metadata.with.tags.includes(tagRule), `Missing metadata rule: ${tagRule}`);
+assert.equal(
+  metadata.with.tags,
+  'type=raw,value=candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+);
+assert.equal(metadata.with.labels, 'org.opencontainers.image.version=${{ steps.release.outputs.version }}');
+assert.doesNotMatch(JSON.stringify(publish), /type=semver|value=latest|prefix=sha-/u);
 
 const build = action(publish, buildRef);
 assert.equal(build.with.context, '.');
@@ -111,7 +154,7 @@ assert.equal(build.with.labels, '${{ steps.meta.outputs.labels }}');
 assert.equal(build.with.sbom, true);
 assert.equal(build.with.provenance, 'mode=max');
 assert.ok(build.with['build-args'].includes("OCI_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}"));
-assert.ok(build.with['build-args'].includes('OCI_VERSION=${{ steps.meta.outputs.version }}'));
+assert.ok(build.with['build-args'].includes('OCI_VERSION=${{ steps.release.outputs.version }}'));
 assert.ok(build.with['build-args'].includes('OCI_REVISION=${{ github.sha }}'));
 
 const attest = action(publish, attestRef);
@@ -129,13 +172,272 @@ assert.ok(action(smoke, checkoutRef));
 assert.ok(action(smoke, nodeRef));
 assert.ok(action(smoke, loginRef));
 
+const promotion = step(
+  promote,
+  (candidate) => candidate.run?.includes('docker buildx imagetools create'),
+  'digest promotion',
+);
+assert.equal(promote.env.RELEASE_DIGEST, '${{ needs.publish.outputs.digest }}');
+assert.equal(promote.env.RELEASE_VERSION, '${{ needs.publish.outputs.version }}');
+for (const expected of [
+  '--tag "$IMAGE:$RELEASE_VERSION"',
+  '--tag "$IMAGE:$minor_version"',
+  '--tag "$IMAGE:latest"',
+  '--tag "$IMAGE:sha-$GITHUB_SHA"',
+  '"$IMAGE@$RELEASE_DIGEST"',
+]) assert.ok(promotion.run.includes(expected), `Missing promotion argument: ${expected}`);
+assert.ok(promotion.run.includes("metadata?.['containerimage.descriptor']?.digest"));
+assert.doesNotMatch(JSON.stringify(smoke), /IMAGE:latest|type=semver/u);
+assert.deepEqual(
+  Object.entries(workflow.jobs)
+    .filter(([, job]) => job.steps.some((candidate) => candidate.run?.includes('--tag "$IMAGE:latest"')))
+    .map(([jobName]) => jobName),
+  ['promote'],
+  'The mutable latest image tag must exist only in the post-smoke promotion job.',
+);
+
+const prepareNotes = step(
+  githubRelease,
+  (candidate) => candidate.run === 'node .github/scripts/release-notes.mjs',
+  'release notes preparation',
+);
+assert.ok(prepareNotes);
+const publishRelease = step(
+  githubRelease,
+  (candidate) => candidate.run === 'node .github/scripts/release-publish.mjs',
+  'idempotent GitHub Release publication',
+);
+assert.equal(publishRelease.env.GH_TOKEN, '${{ github.token }}');
+assert.doesNotMatch(publishRelease.run, /GH_TOKEN|gh release (?:create|edit)/u);
+const cleanupNotes = step(
+  githubRelease,
+  (candidate) => candidate.run === 'node .github/scripts/release-notes.mjs --cleanup',
+  'release notes cleanup',
+);
+assert.equal(cleanupNotes.if, 'always()');
+assert.equal(githubRelease.steps.at(-1), cleanupNotes);
+assert.equal(githubRelease.env.RELEASE_DIGEST, '${{ needs.publish.outputs.digest }}');
+assert.equal(githubRelease.env.RELEASE_VERSION, '${{ needs.publish.outputs.version }}');
+assert.equal(
+  githubRelease.env.RELEASE_NOTES_PATH,
+  '${{ runner.temp }}/imagine-media-release-notes.md',
+);
+
 const packageJson = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
-assert.equal(packageJson.version, '0.0.0');
+const serverPackageJson = JSON.parse(await readFile(new URL('../../apps/server/package.json', import.meta.url), 'utf8'));
+const webPackageJson = JSON.parse(await readFile(new URL('../../apps/web/package.json', import.meta.url), 'utf8'));
+const releaseVersions = await readReleaseVersions();
+assert.equal(packageJson.version, '0.1.0');
+assert.equal(serverPackageJson.version, packageJson.version);
+assert.equal(webPackageJson.version, packageJson.version);
+assert.deepEqual(releaseVersions, {
+  appInfo: '0.1.0',
+  root: '0.1.0',
+  server: '0.1.0',
+  web: '0.1.0',
+});
+assert.equal(validateReleaseVersions(releaseVersions), packageJson.version);
+for (const field of ['appInfo', 'server', 'web']) {
+  assert.throws(
+    () => validateReleaseVersions({ ...releaseVersions, [field]: '0.1.1' }),
+    /must match exactly/u,
+  );
+}
+assert.throws(
+  () => validateReleaseVersions({ ...releaseVersions, appInfo: '0.1.0-beta.1' }),
+  /stable semantic versions/u,
+);
 assert.throws(() => validateReleaseTag('v1.2.3-rc.1', packageJson.version), /stable/);
-assert.throws(() => validateReleaseTag('v0.1.0', packageJson.version), /exactly match/);
+assert.throws(() => validateReleaseTag('v0.1.1', packageJson.version), /exactly match/);
 assert.throws(() => validateReleaseTag('v01.2.3', '01.2.3'), /stable/);
 assert.throws(() => validateReleaseTag('v1.2.3', '1.2.3', 'refs/heads/main'), /pushed tag ref/);
 assert.deepEqual(validateReleaseTag('v1.2.3', '1.2.3'), { tag: 'v1.2.3', version: '1.2.3' });
+assert.deepEqual(validateReleaseTag('v0.1.0', packageJson.version), { tag: 'v0.1.0', version: '0.1.0' });
+
+const releaseDigest = `sha256:${'a'.repeat(64)}`;
+const releaseNotes = formatReleaseNotes(changelogText, packageJson.version, releaseDigest);
+assert.match(releaseNotes, /A clean pnpm monorepo/u);
+assert.match(releaseNotes, new RegExp(releaseDigest, 'u'));
+assert.match(releaseNotes, /blob\/v0\.1\.0\/RELEASE\.md/u);
+assert.doesNotMatch(releaseNotes, /\[Unreleased\]/u);
+assert.throws(() => formatReleaseNotes(changelogText, '0.1.1', releaseDigest), /exactly one section/u);
+assert.throws(() => formatReleaseNotes(changelogText, packageJson.version, 'sha256:bad'), /immutable/u);
+
+const notesOuter = await mkdtemp(join(tmpdir(), 'imagine-release-notes-test-'));
+try {
+  const runnerTemp = join(notesOuter, 'runner');
+  const notesPath = join(runnerTemp, 'imagine-media-release-notes.md');
+  const escapedPath = join(notesOuter, 'escaped.md');
+  await mkdir(runnerTemp, { mode: 0o700 });
+  const notesScript = fileURLToPath(new URL('./release-notes.mjs', import.meta.url));
+  const notesEnvironment = {
+    ...process.env,
+    RELEASE_DIGEST: releaseDigest,
+    RELEASE_VERSION: packageJson.version,
+    RUNNER_TEMP: runnerTemp,
+  };
+  const notesResult = spawnSync(process.execPath, [notesScript], {
+    encoding: 'utf8',
+    env: { ...notesEnvironment, RELEASE_NOTES_PATH: notesPath },
+  });
+  assert.equal(notesResult.status, 0, `${notesResult.stdout}${notesResult.stderr}`);
+  assert.equal((await stat(notesPath)).mode & 0o777, 0o600);
+  assert.equal(await readFile(notesPath, 'utf8'), releaseNotes);
+
+  const publishOptions = {
+    digest: releaseDigest,
+    notesPath,
+    repository: 'YuSaZh/imagine-media-studio',
+    runnerTemp,
+    tag: 'v0.1.0',
+    version: '0.1.0',
+  };
+  const createCalls = [];
+  assert.deepEqual(await publishGitHubRelease({
+    ...publishOptions,
+    runGh: async (args) => {
+      createCalls.push(args);
+      return { status: 0, stdout: '' };
+    },
+  }), { created: true });
+  assert.equal(createCalls.length, 1);
+  assert.deepEqual(createCalls[0]?.slice(0, 3), ['release', 'create', 'v0.1.0']);
+  assert.ok(createCalls[0]?.includes('--verify-tag'));
+  assert.ok(createCalls[0]?.includes('--latest'));
+  assert.equal(createCalls[0]?.at(-1), notesPath);
+
+  const matchingRelease = JSON.stringify({
+    body: releaseNotes,
+    isDraft: false,
+    isPrerelease: false,
+    name: 'Imagine Media Studio v0.1.0',
+    tagName: 'v0.1.0',
+  });
+  const ambiguousResponses = [
+    { status: 1, stdout: '' },
+    { status: 0, stdout: matchingRelease },
+    { status: 0, stdout: JSON.stringify({ tagName: 'v0.1.0' }) },
+  ];
+  assert.deepEqual(await publishGitHubRelease({
+    ...publishOptions,
+    runGh: async () => ambiguousResponses.shift(),
+  }), { created: false });
+  assert.equal(ambiguousResponses.length, 0);
+
+  const mismatchResponses = [
+    { status: 1, stdout: '' },
+    { status: 0, stdout: JSON.stringify({
+      ...JSON.parse(matchingRelease),
+      body: `${releaseNotes}unexpected`,
+    }) },
+    { status: 0, stdout: JSON.stringify({ tagName: 'v0.1.0' }) },
+  ];
+  await assert.rejects(
+    publishGitHubRelease({
+      ...publishOptions,
+      runGh: async () => mismatchResponses.shift(),
+    }),
+    /does not exactly match/u,
+  );
+
+  const notLatestResponses = [
+    { status: 1, stdout: '' },
+    { status: 0, stdout: matchingRelease },
+    { status: 0, stdout: JSON.stringify({ tagName: 'v0.0.9' }) },
+  ];
+  await assert.rejects(
+    publishGitHubRelease({
+      ...publishOptions,
+      runGh: async () => notLatestResponses.shift(),
+    }),
+    /does not exactly match/u,
+  );
+
+  const failedViewResponses = [
+    { status: 1, stdout: '' },
+    { status: 1, stdout: '' },
+  ];
+  await assert.rejects(
+    publishGitHubRelease({
+      ...publishOptions,
+      runGh: async () => failedViewResponses.shift(),
+    }),
+    /could not be read/u,
+  );
+
+  const escapedResult = spawnSync(process.execPath, [notesScript], {
+    encoding: 'utf8',
+    env: { ...notesEnvironment, RELEASE_NOTES_PATH: escapedPath },
+  });
+  assert.notEqual(escapedResult.status, 0, 'A notes path outside RUNNER_TEMP must fail closed.');
+  await assert.rejects(readFile(escapedPath), { code: 'ENOENT' });
+
+  const escapedCleanupResult = spawnSync(process.execPath, [notesScript, '--cleanup'], {
+    encoding: 'utf8',
+    env: { ...notesEnvironment, RELEASE_NOTES_PATH: escapedPath },
+  });
+  assert.notEqual(escapedCleanupResult.status, 0, 'Cleanup outside RUNNER_TEMP must fail closed.');
+  await assert.rejects(readFile(escapedPath), { code: 'ENOENT' });
+
+  const cleanupResult = spawnSync(process.execPath, [notesScript, '--cleanup'], {
+    encoding: 'utf8',
+    env: { ...notesEnvironment, RELEASE_NOTES_PATH: notesPath },
+  });
+  assert.equal(cleanupResult.status, 0, `${cleanupResult.stdout}${cleanupResult.stderr}`);
+  await assert.rejects(readFile(notesPath), { code: 'ENOENT' });
+} finally {
+  await rm(notesOuter, { force: true, recursive: true });
+}
+
+const spdxPayload = {
+  SPDXID: 'SPDXRef-DOCUMENT',
+  spdxVersion: 'SPDX-2.3',
+};
+const slsaPayload = {
+  builder: { id: 'https://github.com/docker/build-push-action' },
+  buildType: 'https://mobyproject.org/buildkit@v1',
+};
+const validSbom = {
+  'linux/amd64': { SPDX: spdxPayload },
+  'linux/arm64': { SPDX: spdxPayload },
+};
+const validProvenance = {
+  'linux/amd64': { SLSA: slsaPayload },
+  'linux/arm64': { SLSA: slsaPayload },
+};
+assert.doesNotThrow(() => validateReleaseAttestations(validSbom, validProvenance));
+assert.throws(() => parseAttestationJson('null', 'SBOM'), /empty or null/u);
+assert.throws(
+  () => validateReleaseAttestations(
+    { 'linux/amd64': validSbom['linux/amd64'] },
+    validProvenance,
+  ),
+  /linux\/arm64 SBOM/u,
+);
+assert.throws(
+  () => validateReleaseAttestations(
+    validSbom,
+    { 'linux/amd64': validProvenance['linux/amd64'] },
+  ),
+  /linux\/arm64 provenance/u,
+);
+const attestationRoot = await mkdtemp(join(tmpdir(), 'imagine-release-attestations-test-'));
+try {
+  const sbomPath = join(attestationRoot, 'sbom.json');
+  const provenancePath = join(attestationRoot, 'provenance.json');
+  await Promise.all([
+    writeFile(sbomPath, JSON.stringify(validSbom), { mode: 0o600 }),
+    writeFile(provenancePath, JSON.stringify(validProvenance), { mode: 0o600 }),
+  ]);
+  let verificationOutput = '';
+  await verifyReleaseAttestationFiles(
+    ['--sbom', sbomPath, '--provenance', provenancePath],
+    { write: (value) => { verificationOutput += value; } },
+  );
+  assert.match(verificationOutput, /amd64 and arm64 SPDX\/SLSA attestations verified/u);
+} finally {
+  await rm(attestationRoot, { force: true, recursive: true });
+}
 assert.match(smokeScript, /export IMAGINE_MEDIA_HOST_PORT="\$host_port"/);
 assert.ok(smokeScript.indexOf('trap cleanup EXIT') < smokeScript.indexOf('mkdir -- "$data_directory"'));
 

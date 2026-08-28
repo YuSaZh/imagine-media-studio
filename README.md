@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0 through PR 7 implementation and automated acceptance are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable and offline-capable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, custom Provider management, bounded Gallery history, mobile gestures, and automated accessibility/performance gates described in [`PLAN.MD`](./PLAN.MD). Real-platform PWA installation and private-reference visual evidence remain explicit in [`Hold.md`](./Hold.md).
+**PR 0 through PR 7 implementation and automated acceptance are complete; the PR 8 source is prepared as the v0.1.0 release candidate.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable and offline-capable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, custom Provider management, bounded Gallery history, mobile gestures, automated accessibility/performance gates, and the PR 8 security, integrity, archive, repair, visual-regression, and release-pipeline work described in [`PLAN.MD`](./PLAN.MD). The `v0.1.0` tag, GitHub Release, and GHCR image are not created by source preparation; the tag workflow must still pass. Real-platform PWA installation, private-reference visual evidence, and the other external boundaries remain explicit in [`Hold.md`](./Hold.md).
 
 ## Development Status
 
@@ -32,6 +32,11 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - Session-scoped offline Gallery/Job snapshots, offline-safe Prompt drafts, PWA install/update guidance, and cold-launch recovery without browser-side secrets or generated POST caching
 - Infinite Gallery/Job pagination with bounded history, stable deduplication, virtual rendering, and serialized optimistic mutations with failure rollback
 - Eight-viewport PR 7 interaction coverage plus representative axe WCAG 2A/2AA, JavaScript resource, and CLS gates
+- Immutable SQLite migration checksums, bounded integrity reporting, and authenticated online database backups
+- Bounded media consistency reconciliation with a durable queue and one-shot safe thumbnail/poster repair
+- Offline full-data archive create/verify/target-only restore with server/CLI mutual exclusion
+- Four-viewport repository-owned pixel-diff baselines that remain separate from private Grok and physical-device evidence
+- Tag-gated amd64/arm64 GHCR candidate build, digest smoke, delayed stable-tag promotion, SBOM/provenance, artifact attestation, and GitHub Release automation
 - Local dependency installation, lint, typecheck, and unit checks
 - GitHub Actions quality/build, E2E, screenshot artifact, and single-container Docker smoke verification
 
@@ -61,6 +66,16 @@ read-only and may run while it is online; `restore` creates an absent target
 directory and never replaces the active `/data` mount. The complete host and
 Docker operator sequence is documented in
 [`docs/architecture/pr8-data-archive.md`](./docs/architecture/pr8-data-archive.md).
+
+## Release and upgrade
+
+The release history and known v0.1.0 boundaries are in
+[`CHANGELOG.md`](./CHANGELOG.md). Digest-pinned installation, secret handling,
+online and full-data backup, migration, restore, rollback, GHCR attestation,
+SBOM, and provenance instructions are in [`RELEASE.md`](./RELEASE.md). Treat the
+root `package.json` as the release version gate; the server and web app manifests
+track that product version, while private internal library workspaces retain
+their independent placeholder versions.
 
 ## Custom Provider usage
 

@@ -10,17 +10,18 @@ code.
 The workflow listens to the numeric `v[0-9]+.[0-9]+.[0-9]+` tag shape using
 GitHub Actions' tag glob syntax. The first publish step is an authoritative
 strict semantic-version gate in `.github/scripts/release-guard.mjs`: the ref
-must be a stable `vX.Y.Z` tag, the root `package.json` version must also be
-stable, and the two values must match exactly. Pre-release tags, leading-zero
-versions, branch refs, and mismatched tags fail before registry login or image
-build.
+must be a stable `vX.Y.Z` tag; the root, server-app, web-app, and server
+`APP_VERSION` values must all be stable and identical; and the tag must match
+that version exactly. Pre-release tags, leading-zero versions, branch refs,
+cross-manifest drift, app-info drift, and mismatched tags fail before registry
+login or image build.
 
-The current root version is `0.0.0`. Therefore this checkout cannot publish
-`v0.1.0`; a release requires a separate version bump and matching tag. No tag,
-GitHub Release, GHCR push, or remote release run was created for this
-milestone.
+The root, server-app, and web-app versions are now `0.1.0`; private internal
+library workspaces retain their independent `0.0.0` placeholders. This checkout
+therefore accepts only `v0.1.0` at the release gate. Source preparation did not
+create that tag, a GitHub Release, a GHCR image, or a remote release run.
 
-## Publish job
+## Candidate publish job
 
 The publish job has only `contents: read`, `packages: write`, `id-token: write`,
 `attestations: write`, and `artifact-metadata: write`. It uses the requested
@@ -38,14 +39,16 @@ major-version comment: checkout v6
 (`53b7df96c91f9c12dcc8a07bcb9ccacbed38856a`), and attest v4
 (`1e69f48acb82d1966a394da916b4c1698aa569d6`).
 
-`docker/metadata-action` produces the stable semver, `major.minor`, `latest`,
-and long commit SHA tags for
-`ghcr.io/yusazh/imagine-media-studio`. Buildx publishes `linux/amd64` and
-`linux/arm64`, applies the metadata OCI labels, enables BuildKit SBOM and
-maximum provenance output, and returns the immutable manifest digest. The
-workflow records that digest in the job output and run summary. `actions/attest`
-then creates a registry-backed digest attestation for the same image name and
-digest.
+`docker/metadata-action` produces only a run-unique candidate tag containing
+the full commit SHA, run id, and attempt. It does not produce `0.1.0`, `0.1`,
+`latest`, or the consumer-facing `sha-<commit>` tag. Buildx publishes
+`linux/amd64` and `linux/arm64`, applies release-version OCI labels, enables
+BuildKit SBOM and maximum provenance output, and returns the immutable manifest
+digest. The workflow records that digest in the job output and run summary.
+`actions/attest` creates a Sigstore-backed, registry-stored GitHub artifact
+attestation for the same image name and digest. A failed smoke can leave only
+the run-unique candidate and digest; it cannot promote a stable or mutable
+consumer tag.
 
 The Dockerfile runtime stage also carries default OCI title, description,
 source, license, version, revision, and creation labels. Release build args
@@ -75,17 +78,44 @@ backup, adapter, and persistence checks against that same digest. Cleanup uses
 only the generated Compose project and the task-owned temporary directory; it
 does not target pre-existing containers, volumes, networks, ports, or data.
 
+## Promotion and GitHub Release
+
+The `promote` job depends on successful `publish` and `smoke` results and holds
+only `packages: write`. It copies the already-tested image index by digest with
+`docker buildx imagetools create`, attaches `0.1.0`, `0.1`, `latest`, and the
+full `sha-<commit>` tag, and verifies the returned descriptor digest. No image
+is rebuilt during promotion. The workflow uses one non-cancelling global
+release concurrency group so two stable-tag promotions do not run together.
+
+The final `github-release` job depends on successful promotion and holds only
+`contents: write`. Its pinned checkout and Node actions read the matching
+version section from `CHANGELOG.md` and append the tested image digest and
+release guide link to a fixed task-owned `0600` notes file. The publisher first
+invokes `gh release create` with `--verify-tag` and `--notes-file`. If creation
+returns an ambiguous failure or the Release already exists, it never edits or
+upserts it: two structured reads must prove exact tag, title, non-draft,
+non-prerelease, body, current digest, and Latest-release identity before the
+step can succeed. A failed read or mismatch fails closed. An `always()` cleanup
+step validates the fixed `RUNNER_TEMP` path and removes only that notes file.
+The GitHub token remains an environment value and is not interpolated into a
+command or release note. The Release is therefore created or verified only
+after the exact digest has passed smoke and its stable tags have been attached.
+
 ## Evidence boundary
 
 Local evidence for this milestone includes `pnpm test`, which runs the normal
 unit suite and the structured workflow/guard test, plus shell syntax, lint,
 Docker Compose configuration parsing, and Dockerfile/build metadata checks.
-The generated release Compose can be
-checked without a daemon or image pull with
+The generated release Compose can be checked without a daemon or image pull
+with
 `RELEASE_SMOKE_DRY_RUN=true RELEASE_IMAGE=ghcr.io/yusazh/imagine-media-studio@sha256:<64-hex> RELEASE_DIGEST=sha256:<64-hex> bash .github/scripts/release-smoke.sh`;
 the dry-run flag is never enabled by the release workflow. The digest smoke is
 designed for the remote release job but was not run here because no tag was
-created and no image was pushed.
+created and no image was pushed. The structured test also proves that consumer
+tags and GitHub Release creation occur only in jobs downstream of successful
+digest smoke, checks all four release-facing version sources, and covers first
+creation, identical-release recovery, mismatches, failed reads, notes cleanup,
+and per-platform SPDX/SLSA validation.
 
 This pipeline does not close the external-platform PWA or private Grok visual
 reference items recorded in `Hold.md`. Those remain release evidence gates and
@@ -100,3 +130,7 @@ Official action and attestation references:
 - <https://github.com/docker/metadata-action>
 - <https://github.com/docker/build-push-action>
 - <https://github.com/actions/attest>
+- <https://cli.github.com/manual/gh_release_create>
+- <https://cli.github.com/manual/gh_release_view>
+- <https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/>
+- <https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/>

@@ -235,6 +235,17 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(response.json()).toEqual({ status: 'ok', database: 'ok' });
   });
 
+  it('reports the release-facing application version', async () => {
+    const { app } = await createTestServer();
+    const response = await app.inject({ method: 'GET', url: '/internal/app-info' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      name: 'Imagine Media Studio',
+      version: '0.1.0',
+    });
+  });
+
   it('holds the shared runtime gate until the server closes its SQLite resources', async () => {
     const server = await createTestServer(false, false);
     const dataDir = temporaryDirectories.at(-1)!;
