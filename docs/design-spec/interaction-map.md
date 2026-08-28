@@ -45,6 +45,21 @@ queued -> submitting -> remote_pending -> remote_running
 | `INT-MOBILE-002` | 长按多选 | 长按阈值；触觉/视觉反馈；滚动冲突 | Missing |
 | `INT-PWA-001` | PWA 更新 | 提示；接受/稍后；刷新；未保存草稿 | Missing |
 
+## PR 7 实现验收记录
+
+下表只记录项目实现和自动化行为证据，不提升缺少私有 Grok/真机参考的
+`Reference 状态`，也不把这些交互标记为视觉 `Frozen`。
+
+| Interaction ID | Automated evidence | Result | Remaining reference/device evidence |
+| --- | --- | --- | --- |
+| `INT-COMPOSER-001`, `INT-COMPOSER-006` | Prompt 草稿刷新/离线恢复、提交后清理、离线提交禁用、快捷键无写入 | Functional pass | Authenticated visual reference |
+| `INT-OVERLAY-001` | Parameters Tab/Escape/focus return and mobile geometry | Functional/a11y pass | Authenticated motion/visual reference |
+| `INT-GALLERY-002` | Independent cursor pagination, loading/error/retry/end, stable dedupe, bounded virtual rendering | Functional pass | Authenticated loading-state visual reference |
+| `INT-GALLERY-004`, `INT-GALLERY-005` | Serialized optimistic actions, failure rollback, long-press/explicit selection, coarse-pointer menu | Functional pass | Authenticated visual and device touch evidence |
+| `INT-VIEWER-001` through `INT-VIEWER-003` | Focus return, Escape, swipe, pinch, pan, double-tap, pointer cancellation, media filtering | Functional/a11y pass | Authenticated motion reference and real touch device |
+| `INT-MOBILE-001`, `INT-MOBILE-002` | `visualViewport`/safe-area geometry and deterministic long press across approved viewports | Simulated geometry/functional pass | Real iOS/Android keyboard, safe area, and touch timing |
+| `INT-PWA-001` | Durable notification preference, update apply/dismiss/retry, draft flush before reload | Functional pass | Real installed-app update on named operating systems |
+
 ## Overlay 行为模板
 
 | Overlay | 打开方式 | 初始焦点 | Focus trap | 外部点击 | Esc/Back | URL/History | 关闭后焦点 | Mobile 载体 | Reference ID |

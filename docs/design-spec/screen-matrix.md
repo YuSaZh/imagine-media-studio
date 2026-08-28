@@ -85,3 +85,4 @@
 | PR | Surface ID | 实现截图 | Reference ID | Diff report | 结论 | Reviewer |
 | --- | --- | --- | --- | --- | --- | --- |
 | `PR 1` | Desktop/mobile Shell, Gallery, Composer, Viewer, Library, Settings | 1920x1080, 1440x900, 430x932, 390x844 | Public supplement only; authenticated IDs `TBD` | `pr1-visual-diff-report.md` | Functional remote pass; L3/L4 Gate deferred | GitHub Actions + Codex visual review |
+| `PR 7` | PWA settings, offline Gallery/Jobs, mobile selection, tablet menus, mobile image/video Viewer, keyboard/safe-area geometry | 1920x1080, 1440x900, 1280x800, 1024x1366, 834x1194, 430x932, 390x844, 360x800 | Public supplement only; authenticated and real-device IDs `TBD` | `artifacts/visual/pr7/visual-diff-report.md` | Functional/geometry remote pass; strict reference and real-device gates deferred | GitHub Actions run `33174754136` + Codex review |

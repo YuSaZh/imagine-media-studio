@@ -2,7 +2,7 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0, PR 1, PR 2, PR 3, PR 4, PR 5, and PR 6 are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, and the custom Provider management workflow described in [`PLAN.MD`](./PLAN.MD).
+**PR 0 through PR 7 implementation and automated acceptance are complete.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable and offline-capable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, custom Provider management, bounded Gallery history, mobile gestures, and automated accessibility/performance gates described in [`PLAN.MD`](./PLAN.MD). Real-platform PWA installation and private-reference visual evidence remain explicit in [`Hold.md`](./Hold.md).
 
 ## Development Status
 
@@ -29,6 +29,9 @@ Imagine Media Studio is a lightweight, self-hosted web interface for managing im
 - Durable JobRunner stage retries with Provider `retry-after` handling
 - Declarative custom HTTP adapters with bounded JSON/YAML parsing, JSON/form/multipart bodies, path/status/result extraction, request schemas, capability previews, dry runs, redacted previews, simulation, and path tests
 - Administrator-installed Trusted JavaScript adapters with immutable manifest/source digests, worker execution, exact host allowlists, bounded resource/output limits, and SafeHttpPort-only network access
+- Session-scoped offline Gallery/Job snapshots, offline-safe Prompt drafts, PWA install/update guidance, and cold-launch recovery without browser-side secrets or generated POST caching
+- Infinite Gallery/Job pagination with bounded history, stable deduplication, virtual rendering, and serialized optimistic mutations with failure rollback
+- Eight-viewport PR 7 interaction coverage plus representative axe WCAG 2A/2AA, JavaScript resource, and CLS gates
 - Local dependency installation, lint, typecheck, and unit checks
 - GitHub Actions quality/build, E2E, screenshot artifact, and single-container Docker smoke verification
 
@@ -37,8 +40,9 @@ PR 4 image and PR 5 video adapters are verified against official-protocol fixtur
 PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), PR 2 evidence in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md), PR 3 evidence in [`docs/architecture/pr3-verification.md`](./docs/architecture/pr3-verification.md), and PR 4 evidence in [`docs/architecture/pr4-verification.md`](./docs/architecture/pr4-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
 PR 3 desktop/mobile screenshots and visual review are in [`artifacts/visual/pr3`](./artifacts/visual/pr3) and [`artifacts/visual/pr3/visual-diff-report.md`](./artifacts/visual/pr3/visual-diff-report.md).
 PR 5 video, restart, media-delivery, and PWA evidence is recorded in [`docs/architecture/pr5-verification.md`](./docs/architecture/pr5-verification.md).
-PR 5 offline media acceptance covers a known recent Poster while the installed app is already controlled by its Service Worker. A cold offline launch that reconstructs Gallery metadata and its recent-media snapshot remains PR 7 scope and is not claimed here.
+PR 5 offline media acceptance covers a known recent Poster while the installed app is already controlled by its Service Worker. PR 7 now adds bounded, session-scoped cold-offline Gallery and Job reconstruction, Prompt draft recovery, and reconnect refresh without enabling offline writes.
 PR 6 custom Provider examples and the feature/security acceptance matrix are in [`examples/custom-providers`](./examples/custom-providers) and [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md). Local acceptance covered 95 test files / 828 tests, lint, typecheck, production build, E2E TypeScript compilation, Playwright (61 passed / 19 skipped), and an isolated Docker smoke. GitHub Actions run [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) for commit `79a30f2` passed the quality, Playwright, and single-container smoke jobs.
+PR 7 automated acceptance is recorded in [`docs/architecture/pr7-verification.md`](./docs/architecture/pr7-verification.md), with accessibility/performance details in [`docs/architecture/pr7-a11y-performance.md`](./docs/architecture/pr7-a11y-performance.md) and fixed-viewport evidence in [`artifacts/visual/pr7`](./artifacts/visual/pr7). GitHub Actions run [33174754136](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136) passed all 13 quality, Docker, base E2E, PR 7 viewport, axe, and performance jobs for commit `a58ab7b`.
 
 ## Local Safety
 
