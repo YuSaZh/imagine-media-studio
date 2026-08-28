@@ -198,6 +198,34 @@ and Docker's official [SBOM](https://docs.docker.com/build/metadata/attestations
 and [provenance](https://docs.docker.com/build/metadata/attestations/slsa-provenance/)
 inspection guidance.
 
+### v0.1.0 verification erratum
+
+The verification helper committed in the tagged `v0.1.0` source reads the old
+SLSA provenance field locations, so it can incorrectly reject valid BuildKit
+SLSA v1 output. This helper-only false negative does not affect the published
+image, its immutable digest, the digest smoke result, or the registry-backed
+attestations.
+
+The maintainer will attach the corrected `verify-release-attestations.mjs` as a
+GitHub Release asset. The fixed download URL will be:
+
+```text
+https://github.com/YuSaZh/imagine-media-studio/releases/download/v0.1.0/verify-release-attestations.mjs
+```
+
+This text does not claim that the asset has already been uploaded. Once that URL
+resolves successfully, `v0.1.0` users should download it and replace the final
+helper invocation above with:
+
+```bash
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output verify-release-attestations.mjs \
+  'https://github.com/YuSaZh/imagine-media-studio/releases/download/v0.1.0/verify-release-attestations.mjs'
+node ./verify-release-attestations.mjs \
+  --sbom sbom.json \
+  --provenance provenance.json
+```
+
 ## Known limitations
 
 The authoritative list is [Hold.md](./Hold.md). In particular, `v0.1.0` must not

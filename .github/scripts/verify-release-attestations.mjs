@@ -12,6 +12,21 @@ function record(value, label) {
   return value;
 }
 
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isoTimestamp(value) {
+  if (
+    !nonEmptyString(value) ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)
+  ) {
+    return null;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 export function parseAttestationJson(source, label) {
   if (typeof source !== 'string' || source.trim() === '' || source.trim() === 'null') {
     throw new Error(`${label} JSON is empty or null.`);
@@ -41,14 +56,21 @@ export function validateReleaseAttestations(sbom, provenance) {
       record(provenancePlatforms[platform], `${platform} provenance`).SLSA,
       `${platform} SLSA`,
     );
+    const buildDefinition = record(slsa.buildDefinition, `${platform} SLSA buildDefinition`);
+    const runDetails = record(slsa.runDetails, `${platform} SLSA runDetails`);
+    const builder = record(runDetails.builder, `${platform} SLSA builder`);
+    const metadata = record(runDetails.metadata, `${platform} SLSA metadata`);
+    const startedOn = isoTimestamp(metadata.startedOn);
+    const finishedOn = isoTimestamp(metadata.finishedOn);
     if (
-      typeof slsa.buildType !== 'string' ||
-      slsa.buildType.length === 0 ||
-      slsa.builder === null ||
-      typeof slsa.builder !== 'object' ||
-      Array.isArray(slsa.builder)
+      !nonEmptyString(buildDefinition.buildType) ||
+      !nonEmptyString(builder.id) ||
+      !nonEmptyString(metadata.invocationId) ||
+      startedOn === null ||
+      finishedOn === null ||
+      finishedOn < startedOn
     ) {
-      throw new Error(`${platform} SLSA payload has an unexpected shape.`);
+      throw new Error(`${platform} SLSA v1 payload has an unexpected shape.`);
     }
   }
 }

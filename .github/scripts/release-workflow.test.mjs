@@ -406,8 +406,17 @@ const spdxPayload = {
   spdxVersion: 'SPDX-2.3',
 };
 const slsaPayload = {
-  builder: { id: 'https://github.com/docker/build-push-action' },
-  buildType: 'https://mobyproject.org/buildkit@v1',
+  buildDefinition: {
+    buildType: 'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
+  },
+  runDetails: {
+    builder: { id: 'https://github.com/YuSaZh/imagine-media-studio/actions/runs/33214299163' },
+    metadata: {
+      finishedOn: '2026-08-29T06:30:01Z',
+      invocationId: 'buildkit-v0.1.0-test',
+      startedOn: '2026-08-29T06:30:00Z',
+    },
+  },
 };
 const validSbom = {
   'linux/amd64': { SPDX: spdxPayload },
@@ -433,6 +442,77 @@ assert.throws(
   ),
   /linux\/arm64 provenance/u,
 );
+const legacySlsa = {
+  builder: { id: 'https://github.com/docker/build-push-action' },
+  buildType: 'https://mobyproject.org/buildkit@v1',
+};
+assert.throws(
+  () => validateReleaseAttestations(validSbom, {
+    ...validProvenance,
+    'linux/amd64': { SLSA: legacySlsa },
+  }),
+  /linux\/amd64 SLSA buildDefinition/u,
+);
+assert.throws(
+  () => validateReleaseAttestations(validSbom, {
+    ...validProvenance,
+    'linux/amd64': { SLSA: { buildDefinition: slsaPayload.buildDefinition } },
+  }),
+  /linux\/amd64 SLSA runDetails/u,
+);
+assert.throws(
+  () => validateReleaseAttestations(validSbom, {
+    ...validProvenance,
+    'linux/amd64': {
+      SLSA: {
+        ...slsaPayload,
+        runDetails: {
+          ...slsaPayload.runDetails,
+          builder: { id: '' },
+        },
+      },
+    },
+  }),
+  /linux\/amd64 SLSA v1 payload/u,
+);
+assert.throws(
+  () => validateReleaseAttestations(validSbom, {
+    ...validProvenance,
+    'linux/amd64': {
+      SLSA: {
+        ...slsaPayload,
+        runDetails: { ...slsaPayload.runDetails, metadata: null },
+      },
+    },
+  }),
+  /linux\/amd64 SLSA metadata/u,
+);
+for (const metadata of [
+  { ...slsaPayload.runDetails.metadata, invocationId: '' },
+  {
+    finishedOn: slsaPayload.runDetails.metadata.finishedOn,
+    invocationID: 'legacy-field-name',
+    startedOn: slsaPayload.runDetails.metadata.startedOn,
+  },
+  { ...slsaPayload.runDetails.metadata, startedOn: 'not-an-iso-timestamp' },
+  {
+    ...slsaPayload.runDetails.metadata,
+    finishedOn: '2026-08-29T06:29:59Z',
+  },
+]) {
+  assert.throws(
+    () => validateReleaseAttestations(validSbom, {
+      ...validProvenance,
+      'linux/amd64': {
+        SLSA: {
+          ...slsaPayload,
+          runDetails: { ...slsaPayload.runDetails, metadata },
+        },
+      },
+    }),
+    /linux\/amd64 SLSA v1 payload/u,
+  );
+}
 const attestationRoot = await mkdtemp(join(tmpdir(), 'imagine-release-attestations-test-'));
 try {
   const sbomPath = join(attestationRoot, 'sbom.json');

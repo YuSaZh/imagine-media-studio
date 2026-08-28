@@ -4,6 +4,11 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate repository release provenance against BuildKit's emitted SLSA v1
+  `buildDefinition` and `runDetails` structure for both supported platforms.
+
 ## [0.1.0] - 2026-08-29
 
 ### Added
