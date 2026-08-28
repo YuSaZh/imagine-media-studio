@@ -36,6 +36,19 @@ RUN mkdir -p /opt/imagine-server/public /opt/imagine-server/migrations \
 
 FROM node:24-bookworm-slim AS runtime
 
+ARG OCI_CREATED
+ARG OCI_REVISION
+ARG OCI_VERSION
+
+LABEL org.opencontainers.image.title="Imagine Media Studio" \
+  org.opencontainers.image.description="A lightweight self-hosted media generation WebUI" \
+  org.opencontainers.image.licenses="MIT" \
+  org.opencontainers.image.source="https://github.com/YuSaZh/imagine-media-studio" \
+  org.opencontainers.image.url="https://github.com/YuSaZh/imagine-media-studio" \
+  org.opencontainers.image.created="${OCI_CREATED}" \
+  org.opencontainers.image.revision="${OCI_REVISION}" \
+  org.opencontainers.image.version="${OCI_VERSION}"
+
 RUN apt-get update \
   && apt-get install --yes --no-install-recommends ffmpeg tini \
   && rm -rf /var/lib/apt/lists/*

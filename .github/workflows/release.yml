@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/yusazh/imagine-media-studio
+
+jobs:
+  publish:
+    name: Publish multi-arch GHCR image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Validate stable tag and package version
+        id: release
+        run: node .github/scripts/release-guard.mjs
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract OCI metadata and release tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.release.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.version }}
+            type=raw,value=latest
+            type=sha,format=long,prefix=sha-
+
+      - name: Build and push linux/amd64 and linux/arm64 images
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OCI_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            OCI_REVISION=${{ github.sha }}
+            OCI_VERSION=${{ steps.meta.outputs.version }}
+          sbom: true
+          provenance: mode=max
+
+      - name: Attest pushed image digest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record immutable image digest
+        env:
+          RELEASE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          if [[ ! "$RELEASE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo 'Build did not return a valid image digest.' >&2
+            exit 1
+          fi
+          printf 'Published image digest: `%s@%s`\n' '${{ env.IMAGE }}' "$RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Smoke published digest on amd64
+    needs: publish
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    env:
+      RELEASE_DIGEST: ${{ needs.publish.outputs.digest }}
+      RELEASE_IMAGE: ghcr.io/yusazh/imagine-media-studio@${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Check out smoke scripts
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Log in to GHCR for digest pull
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run isolated digest health, persistence, and full smoke
+        run: bash .github/scripts/release-smoke.sh
