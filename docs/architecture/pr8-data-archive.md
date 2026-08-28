@@ -1,8 +1,8 @@
 # PR8 Data Archive Core
 
-This milestone defines an offline, versioned data bundle for Imagine Media
-Studio. It is a directory bundle that can be copied as a unit; it is not a
-compressed tar archive and it does not implement restore yet.
+This milestone defines an offline, versioned data bundle and target-only
+restore flow for Imagine Media Studio. It is a directory bundle that can be
+copied as a unit; it is not a compressed tar archive.
 
 ## Bundle layout
 
@@ -86,11 +86,36 @@ written to the bundle. Provider credential ciphertext may remain inside the
 SQLite snapshot because it is application data; decrypting it still requires
 the separately managed application secret after restore.
 
-## Restore boundary
+## Offline restore
 
-Restore is deliberately a later milestone. It must verify the complete bundle
-before activation, extract into a new absent data root, fsync the extracted
-tree, and switch the deployment to that root. A Docker bind-mounted `/data`
-root cannot be atomically replaced in place with one rename. In-place restore
-would therefore require a journal and crash recovery protocol rather than a
-single filesystem operation.
+The restore command is target-only:
+
+```text
+data-archive restore --bundle PATH --target PATH
+```
+
+It first verifies the complete bundle, requires `PATH` to be absent, rejects
+bundle/target containment and unsafe canonical parents, and stages the new
+0700 data root beside the target on the same filesystem. It recreates the
+standard `app.db`, five media trees, `adapters` plus empty
+`adapters/.staging`, `backups`, `logs`, and `media/temp` directories. Payloads
+are copied with mode 0600, chunk hashes, adapter policy/digest checks, SQLite
+integrity/FK checks, and asset role/path/hash checks before an empty target
+reservation is atomically renamed into place. At each detectable replacement
+point, failures clean only this invocation's stage or empty reservation; a
+populated or replaced reservation is left intact when its replacement is
+observed.
+
+The restore process never reads `APP_SECRET` or `APP_PASSWORD`. Provider
+credential ciphertext remains application data in the SQLite snapshot and
+requires the same externally managed application secret after activation.
+The standalone CLI reports only entry count, byte count, and archive time; it
+does not print bundle/target paths or secrets. A Docker bind-mounted `/data`
+root still cannot be atomically replaced in place with one rename, so an
+operator must switch the deployment to the newly restored data root.
+
+As with archive creation, Node's promise filesystem API does not provide
+`openat2`/`renameat2` for a fully atomic parent-chain operation. The restore
+implementation records and rechecks canonical parent device/inode identities
+and fails closed on detected replacement; a same-UID replacement in the
+small interval between checks remains outside the atomicity boundary.

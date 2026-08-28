@@ -1,13 +1,16 @@
+import { pathToFileURL } from 'node:url';
+
 import {
   DataArchiveError,
   verifyDataArchive,
   type DataArchiveResult,
 } from './data-archive.js';
+import { DataRestoreError, restoreDataArchive, type DataRestoreResult } from './data-restore.js';
 import { OfflineMaintenanceLeaseError } from './runtime-lock.js';
-import { pathToFileURL } from 'node:url';
 
 export type DataArchiveCliCommand =
   | { readonly command: 'create'; readonly dataDir: string }
+  | { readonly command: 'restore'; readonly bundlePath: string; readonly targetPath: string }
   | { readonly command: 'verify'; readonly bundlePath: string };
 
 export class DataArchiveCliUsageError extends Error {
@@ -22,11 +25,12 @@ export interface DataArchiveCliDependencies {
     readonly createdAt: Date;
     readonly entries: number;
   }>;
+  readonly restore?: (bundlePath: string, targetPath: string) => Promise<DataRestoreResult>;
   readonly write?: (chunk: string) => void;
 }
 
 function usage(): string {
-  return 'Usage: data-archive verify --bundle PATH | data-archive create --data-dir PATH';
+  return 'Usage: data-archive verify --bundle PATH | data-archive create --data-dir PATH | data-archive restore --bundle PATH --target PATH';
 }
 
 function safePath(value: string, label: string): string {
@@ -45,27 +49,44 @@ function optionValue(argv: readonly string[], index: number, option: string): [s
 export function parseDataArchiveCliArgs(argv: readonly string[]): DataArchiveCliCommand {
   if (argv.length < 1) throw new DataArchiveCliUsageError(usage());
   const command = argv[0];
-  if (command !== 'create' && command !== 'verify') throw new DataArchiveCliUsageError(usage());
-  let value: string | undefined;
+  if (command !== 'create' && command !== 'verify' && command !== 'restore') throw new DataArchiveCliUsageError(usage());
+  let dataDir: string | undefined;
+  let bundlePath: string | undefined;
+  let targetPath: string | undefined;
   for (let index = 1; index < argv.length;) {
     const option = argv[index];
     if (option === undefined) break;
     if (option === '--data-dir' && command === 'create') {
-      if (value !== undefined) throw new DataArchiveCliUsageError('The data directory may be specified only once.');
-      [value, index] = optionValue(argv, index, option);
+      if (dataDir !== undefined) throw new DataArchiveCliUsageError('The data directory may be specified only once.');
+      [dataDir, index] = optionValue(argv, index, option);
       continue;
     }
-    if (option === '--bundle' && command === 'verify') {
-      if (value !== undefined) throw new DataArchiveCliUsageError('The bundle path may be specified only once.');
-      [value, index] = optionValue(argv, index, option);
+    if (option === '--bundle' && (command === 'verify' || command === 'restore')) {
+      if (bundlePath !== undefined) throw new DataArchiveCliUsageError('The bundle path may be specified only once.');
+      [bundlePath, index] = optionValue(argv, index, option);
+      continue;
+    }
+    if (option === '--target' && command === 'restore') {
+      if (targetPath !== undefined) throw new DataArchiveCliUsageError('The target path may be specified only once.');
+      [targetPath, index] = optionValue(argv, index, option);
       continue;
     }
     throw new DataArchiveCliUsageError(usage());
   }
-  if (value === undefined) throw new DataArchiveCliUsageError(usage());
-  return command === 'create'
-    ? { command, dataDir: safePath(value, '--data-dir') }
-    : { bundlePath: safePath(value, '--bundle'), command };
+  if (command === 'create') {
+    if (dataDir === undefined) throw new DataArchiveCliUsageError(usage());
+    return { command, dataDir: safePath(dataDir, '--data-dir') };
+  }
+  if (bundlePath === undefined) throw new DataArchiveCliUsageError(usage());
+  if (command === 'restore') {
+    if (targetPath === undefined) throw new DataArchiveCliUsageError(usage());
+    return {
+      bundlePath: safePath(bundlePath, '--bundle'),
+      command,
+      targetPath: safePath(targetPath, '--target'),
+    };
+  }
+  return { bundlePath: safePath(bundlePath, '--bundle'), command };
 }
 
 export async function runDataArchiveCli(
@@ -77,6 +98,16 @@ export async function runDataArchiveCli(
     const result = await (dependencies.verify ?? (async (bundlePath) => verifyDataArchive(bundlePath)))(command.bundlePath);
     (dependencies.write ?? ((chunk) => process.stdout.write(chunk)))(
       `verified entries=${String(result.entries)} bytes=${String(result.bytes)} createdAt=${result.createdAt.toISOString()}\n`,
+    );
+    return 0;
+  }
+  if (command.command === 'restore') {
+    const result = await (dependencies.restore ?? ((bundlePath, targetPath) => restoreDataArchive({ bundlePath, targetPath })))(
+      command.bundlePath,
+      command.targetPath,
+    );
+    (dependencies.write ?? ((chunk) => process.stdout.write(chunk)))(
+      `restored entries=${String(result.entries)} bytes=${String(result.bytes)} createdAt=${result.createdAt.toISOString()}\n`,
     );
     return 0;
   }
@@ -100,7 +131,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       process.stderr.write(`${error.message}\n`);
       return 2;
     }
-    if (error instanceof OfflineMaintenanceLeaseError || error instanceof DataArchiveError) {
+    if (error instanceof OfflineMaintenanceLeaseError || error instanceof DataArchiveError || error instanceof DataRestoreError) {
       process.stderr.write(`${error.message}\n`);
       return 1;
     }

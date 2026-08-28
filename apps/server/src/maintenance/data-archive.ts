@@ -8,6 +8,7 @@ import {
   open as fsOpen,
   realpath as fsRealpath,
   rename as fsRename,
+  rmdir as fsRmdir,
   rm as fsRm,
   unlink as fsUnlink,
   type FileHandle,
@@ -109,6 +110,7 @@ export interface DataArchiveFsOps {
   open(path: string, flags: number, mode?: number): Promise<FileHandle>;
   realpath(path: string): Promise<string>;
   rename(source: string, destination: string): Promise<void>;
+  rmdir(path: string): Promise<void>;
   rm(path: string, options?: { readonly force?: boolean; readonly recursive?: boolean }): Promise<void>;
   unlink(path: string): Promise<void>;
 }
@@ -178,6 +180,7 @@ const defaultFsOps: DataArchiveFsOps = {
   open: fsOpen,
   realpath: fsRealpath,
   rename: fsRename,
+  rmdir: fsRmdir,
   rm: fsRm,
   unlink: fsUnlink,
 };
