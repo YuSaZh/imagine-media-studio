@@ -39,6 +39,7 @@ compose_project=$(printf '%s' "$compose_project" | tr '[:upper:]' '[:lower:]')
 
 export COMPOSE_FILE="$compose_file"
 export COMPOSE_PROJECT_NAME="$compose_project"
+export SMOKE_TASK_ROOT="$runtime_directory"
 export DATA_HOST_DIR="$data_directory"
 export PUID="$(id -u)"
 export PGID="$(id -g)"
@@ -104,7 +105,7 @@ const compose = {
       image: required('RELEASE_IMAGE'),
       ports: [`${required('HOST_PORT')}:3030`],
       user: `${required('PUID')}:${required('PGID')}`,
-      volumes: [`${required('DATA_HOST_DIR')}:/data`],
+      volumes: ['${DATA_HOST_DIR:?DATA_HOST_DIR must be set}:/data'],
       environment: {
         APP_PORT: '3030',
         DATA_DIR: '/data',
@@ -148,6 +149,7 @@ if [[ "$release_smoke_dry_run" == true ]]; then
 fi
 
 timeout --foreground 300 docker pull "$RELEASE_IMAGE" >/dev/null
+bash "$script_directory/pr8-legacy-seed.sh"
 compose up --detach --wait --wait-timeout 120
 
 BASE_URL="http://127.0.0.1:${host_port}" node --input-type=module <<'NODE'

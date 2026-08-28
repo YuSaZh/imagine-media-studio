@@ -3,8 +3,26 @@ set -euo pipefail
 
 : "${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME must be set}"
 : "${DATA_HOST_DIR:?DATA_HOST_DIR must be set}"
+: "${SMOKE_TASK_ROOT:?SMOKE_TASK_ROOT must be set}"
 : "${IMAGINE_MEDIA_HOST_PORT:?IMAGINE_MEDIA_HOST_PORT must be set}"
 : "${APP_PASSWORD:?APP_PASSWORD must be set}"
+
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+smoke_task_root=$(realpath -e -- "$SMOKE_TASK_ROOT")
+original_data_host_dir=$(realpath -e -- "$DATA_HOST_DIR")
+case "$original_data_host_dir" in
+  "$smoke_task_root"/*) ;;
+  *) echo 'DATA_HOST_DIR must be a child of SMOKE_TASK_ROOT.' >&2; exit 1 ;;
+esac
+if [[ "$(stat -c '%a' -- "$smoke_task_root")" != 700 || "$(stat -c '%a' -- "$original_data_host_dir")" != 700 ]]; then
+  echo 'Smoke task and data roots must use mode 0700.' >&2
+  exit 1
+fi
+restored_data_host_dir="$smoke_task_root/restored-data"
+if [[ -e "$restored_data_host_dir" ]]; then
+  echo 'The task-owned restored data root must not exist before the smoke test.' >&2
+  exit 1
+fi
 
 base_url="http://127.0.0.1:${IMAGINE_MEDIA_HOST_PORT}"
 smoke_tmp_dir=$(mktemp -d "${RUNNER_TEMP:-/tmp}/imagine-media-smoke.XXXXXXXX")
@@ -20,8 +38,9 @@ compose() {
 
 compose_config_file="$smoke_tmp_dir/compose.json"
 compose config --format json > "$compose_config_file"
-COMPOSE_CONFIG_FILE="$compose_config_file" node --input-type=module <<'NODE'
-import { readFile } from 'node:fs/promises';
+COMPOSE_CONFIG_FILE="$compose_config_file" ORIGINAL_DATA_HOST_DIR="$original_data_host_dir" \
+  node --input-type=module <<'NODE'
+import { readFile, realpath } from 'node:fs/promises';
 
 const config = JSON.parse(await readFile(process.env.COMPOSE_CONFIG_FILE, 'utf8'));
 const services = config?.services;
@@ -36,10 +55,31 @@ const service = services['imagine-media'];
 if (!Array.isArray(service?.ports) || service.ports.length !== 1) {
   throw new Error('The single service must expose exactly one port mapping.');
 }
-if (!Array.isArray(service?.volumes) || service.volumes.length !== 1 || service.volumes[0]?.target !== '/data') {
+if (!Array.isArray(service?.volumes) || service.volumes.length !== 1) {
   throw new Error('The single service must mount exactly one /data volume.');
 }
+const volume = service.volumes[0];
+if (
+  volume === null ||
+  typeof volume !== 'object' ||
+  (volume.type !== undefined && volume.type !== 'bind') ||
+  volume.target !== '/data' ||
+  typeof volume.source !== 'string'
+) {
+  throw new Error('The single service /data volume must be a structured bind mount.');
+}
+const [configuredSource, expectedSource] = await Promise.all([
+  realpath(volume.source),
+  realpath(process.env.ORIGINAL_DATA_HOST_DIR),
+]);
+if (configuredSource !== expectedSource) {
+  throw new Error('The single service /data bind source does not match DATA_HOST_DIR.');
+}
 NODE
+
+if [[ ! -e "$DATA_HOST_DIR/app.db" ]]; then
+  bash "$script_directory/pr8-legacy-seed.sh"
+fi
 
 compose up --detach --wait --wait-timeout 120
 
@@ -63,6 +103,7 @@ test "$running_bundle_count_after" = "$running_bundle_count"
 
 IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id edit_asset_id backup_id backup_sha256 < <(
   BASE_URL="$base_url" node --input-type=module <<'NODE'
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 
 const baseUrl = process.env.BASE_URL;
@@ -151,6 +192,13 @@ assert.equal(mockModel.capabilities.maxReferenceImages, 4);
 const sourcePng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWMwSpn2HwAEJAIsdtK5/wAAAABJRU5ErkJggg==';
 const nonEmptyMaskPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWMwSpnGAAADJQEt7A6dOAAAAABJRU5ErkJggg==';
 const dimensionMismatchMaskPng = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWMwSpnGYJQy7T8AC/gDWANOkGUAAAAASUVORK5CYII=';
+
+const legacy = (await json('/internal/assets/00000000-0000-4000-8000-000000000008')).asset;
+assert.equal(legacy.role, 'upload');
+assert.equal(legacy.fileSize, Buffer.from(sourcePng, 'base64').byteLength);
+const legacyContent = await request(legacy.contentUrl);
+const legacyBytes = Buffer.from(await legacyContent.arrayBuffer());
+assert.equal(createHash('sha256').update(legacyBytes).digest('hex'), legacy.sha256);
 
 const source = (await uploadPng(sourcePng, 'upload')).asset;
 assert.equal(source.width, 1);
@@ -273,6 +321,13 @@ assert.equal(membership.added, 1);
 assert.equal(membership.collection.itemCount, 1);
 const withCollection = await json(`/internal/assets/${encodeURIComponent(asset.id)}`);
 assert.ok(withCollection.asset.collectionIds.includes(collectionId));
+
+const settings = await json('/internal/settings', {
+  method: 'PATCH',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ values: { 'smoke.persistence': { phase: 'before-down' } } }),
+});
+assert.deepEqual(settings.settings['smoke.persistence'], { phase: 'before-down' });
 
 const integrityResponse = await request('/internal/maintenance/integrity');
 const integrityText = await integrityResponse.text();
@@ -1181,7 +1236,34 @@ NODE
 test -n "$repair_thumbnail_path"
 test ! -e "$DATA_HOST_DIR/$repair_thumbnail_path"
 
-compose restart imagine-media
+ASSET_ID="$asset_id" BASE_URL="$base_url" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+
+const baseUrl = process.env.BASE_URL;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+const response = await fetch(baseUrl + '/internal/maintenance/media/reconcile', {
+  method: 'POST',
+  headers: { authorization: authHeader, origin: baseUrl },
+  signal: AbortSignal.timeout(30_000),
+});
+const text = await response.text();
+assert.equal(response.status, 200, text);
+const result = JSON.parse(text);
+assert.equal(result.media?.scan?.truncated, false);
+assert.ok(result.media?.queue?.inserted + result.media?.queue?.reopened >= 1);
+const repairsResponse = await fetch(baseUrl + '/internal/maintenance/media/repairs', {
+  headers: { authorization: authHeader },
+  signal: AbortSignal.timeout(10_000),
+});
+assert.equal(repairsResponse.status, 200);
+const repairs = await repairsResponse.json();
+assert.ok(repairs.repairs.items.some((item) =>
+  item.assetId === process.env.ASSET_ID && item.kind === 'missing' && item.state === 'open'));
+NODE
+
+compose down --remove-orphans
+test -s "$DATA_HOST_DIR/app.db"
+test ! -e "$DATA_HOST_DIR/$repair_thumbnail_path"
 compose up --detach --wait --wait-timeout 120
 
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
@@ -1214,6 +1296,9 @@ async function json(path) {
   if (!response.ok) throw new Error(`GET ${path} failed with ${response.status}`);
   return response.json();
 }
+
+const persistedSettings = await json('/internal/settings');
+assert.deepEqual(persistedSettings.settings['smoke.persistence'], { phase: 'before-down' });
 
 async function waitForCompletedVideo(jobId) {
   const deadline = Date.now() + 30_000;
@@ -1499,8 +1584,10 @@ assert.equal(output.includes('/data'), false);
 NODE
 
 restore_output="$smoke_tmp_dir/archive-restore.txt"
-if ! compose run --rm --no-deps --entrypoint node imagine-media \
-  dist/maintenance/data-archive-cli.js restore --bundle "$archive_bundle" --target /data/restore-target >"$restore_output" 2>&1; then
+test ! -e "$restored_data_host_dir"
+if ! compose run --rm --no-deps --entrypoint node \
+  --volume "$smoke_task_root:/smoke-task-root" imagine-media \
+  dist/maintenance/data-archive-cli.js restore --bundle "$archive_bundle" --target /smoke-task-root/restored-data >"$restore_output" 2>&1; then
   cat -- "$restore_output" >&2
   exit 1
 fi
@@ -1514,13 +1601,14 @@ assert.match(output, /^restored entries=\d+ bytes=\d+ createdAt=\d{4}-\d{2}-\d{2
 assert.equal(output.includes('/data'), false);
 NODE
 
-compose run --rm --no-deps --entrypoint node imagine-media --input-type=module <<'NODE'
+compose run --rm --no-deps --entrypoint node \
+  --volume "$smoke_task_root:/smoke-task-root" imagine-media --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readdir, stat } from 'node:fs/promises';
 
 import Database from 'better-sqlite3';
 
-const root = '/data/restore-target';
+const root = '/smoke-task-root/restored-data';
 const database = new Database(`${root}/app.db`, { fileMustExist: true, readonly: true });
 try {
   assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
@@ -1555,7 +1643,67 @@ assert.equal((await readdir(`${root}/media/originals`)).length > 0, true);
 assert.equal((await readdir(`${root}/media/thumbnails`)).length > 0, true);
 NODE
 
-compose start imagine-media
+compose down --remove-orphans
+export DATA_HOST_DIR="$restored_data_host_dir"
+restored_compose_config="$smoke_tmp_dir/restored-compose.json"
+compose config --format json > "$restored_compose_config"
+RESTORED_COMPOSE_CONFIG="$restored_compose_config" RESTORED_DATA_HOST_DIR="$restored_data_host_dir" \
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile, realpath } from 'node:fs/promises';
+
+const config = JSON.parse(await readFile(process.env.RESTORED_COMPOSE_CONFIG, 'utf8'));
+const services = config?.services;
+assert.deepEqual(Object.keys(services ?? {}), ['imagine-media']);
+const volumes = services['imagine-media']?.volumes;
+assert.equal(volumes.length, 1);
+assert.equal(volumes[0].target, '/data');
+assert.equal(await realpath(volumes[0].source), await realpath(process.env.RESTORED_DATA_HOST_DIR));
+NODE
+compose up --detach --wait --wait-timeout 120
+
+ASSET_ID="$asset_id" REPAIR_THUMBNAIL_PATH="$repair_thumbnail_path" BASE_URL="$base_url" \
+  node --input-type=module <<'NODE'
+import { createHash } from 'node:crypto';
+import assert from 'node:assert/strict';
+
+const baseUrl = process.env.BASE_URL;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+const withAuth = (options = {}) => ({
+  ...options,
+  headers: { ...options.headers, authorization: authHeader, origin: baseUrl },
+  signal: options.signal ?? AbortSignal.timeout(10_000),
+});
+const request = async (path, options = {}, status = 200) => {
+  const response = await fetch(baseUrl + path, withAuth(options));
+  assert.equal(response.status, status, `${options.method ?? 'GET'} ${path}`);
+  return response;
+};
+const health = await fetch(baseUrl + '/internal/health', { signal: AbortSignal.timeout(10_000) });
+assert.equal(health.status, 200);
+assert.deepEqual(await health.json(), { database: 'ok', status: 'ok' });
+
+for (const id of [process.env.ASSET_ID, '00000000-0000-4000-8000-000000000008']) {
+  const detail = await request(`/internal/assets/${encodeURIComponent(id)}`);
+  const asset = (await detail.json()).asset;
+  const content = await request(asset.contentUrl);
+  const bytes = Buffer.from(await content.arrayBuffer());
+  assert.equal(bytes.byteLength, asset.fileSize);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.sha256);
+}
+const repaired = await request(`/internal/assets/${encodeURIComponent(process.env.ASSET_ID)}/thumbnail`);
+assert.ok((await repaired.arrayBuffer()).byteLength > 0);
+const settings = await request('/internal/settings');
+assert.deepEqual((await settings.json()).settings['smoke.persistence'], { phase: 'before-down' });
+const repairs = await request('/internal/maintenance/media/repairs');
+assert.ok((await repairs.json()).repairs.items.some((item) =>
+  item.assetId === process.env.ASSET_ID &&
+  item.storedPath === process.env.REPAIR_THUMBNAIL_PATH &&
+  item.state === 'resolved'));
+NODE
+
+compose down --remove-orphans
+export DATA_HOST_DIR="$original_data_host_dir"
 compose up --detach --wait --wait-timeout 120
 
 CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \

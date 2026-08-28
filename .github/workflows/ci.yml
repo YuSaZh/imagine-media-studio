@@ -281,6 +281,9 @@ jobs:
         run: |
           runtime_dir=$(mktemp -d "$RUNNER_TEMP/imagine-media.XXXXXXXX")
           chmod 0700 "$runtime_dir"
+          data_dir="$runtime_dir/live-data"
+          mkdir "$data_dir"
+          chmod 0700 "$data_dir"
           host_port=$(node --input-type=module <<'NODE'
           import { createServer } from 'node:net';
           const server = createServer();
@@ -292,7 +295,8 @@ jobs:
           });
           NODE
           )
-          echo "DATA_HOST_DIR=$runtime_dir" >> "$GITHUB_ENV"
+          echo "SMOKE_TASK_ROOT=$runtime_dir" >> "$GITHUB_ENV"
+          echo "DATA_HOST_DIR=$data_dir" >> "$GITHUB_ENV"
           echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
           echo "APP_SECRET=github-actions-pr6-smoke-secret-not-for-production" >> "$GITHUB_ENV"
           echo "APP_PASSWORD=github-actions-pr6-smoke-password-not-for-production" >> "$GITHUB_ENV"
@@ -313,7 +317,7 @@ jobs:
           }
           NODE
           timeout --foreground 900 docker compose build
-      - name: Run persistence and restart smoke test
+      - name: Run upgrade, restore and persistence smoke test
         run: bash .github/scripts/docker-smoke.sh
       - name: Show Compose diagnostics
         if: failure()
@@ -323,19 +327,19 @@ jobs:
       - name: Clean up isolated Compose resources
         if: always()
         run: |
-          if [ -z "${DATA_HOST_DIR:-}" ]; then
-            echo "DATA_HOST_DIR was not created; skipping isolated resource cleanup."
+          if [ -z "${SMOKE_TASK_ROOT:-}" ]; then
+            echo "SMOKE_TASK_ROOT was not created; skipping isolated resource cleanup."
             exit 0
           fi
           cleanup_status=0
           timeout --foreground 180 docker compose down --volumes --remove-orphans || cleanup_status=$?
-          case "$DATA_HOST_DIR" in
+          case "$SMOKE_TASK_ROOT" in
             "$RUNNER_TEMP"/imagine-media.*)
-              find "$DATA_HOST_DIR" -mindepth 1 -depth -delete || cleanup_status=$?
-              rmdir "$DATA_HOST_DIR" || cleanup_status=$?
+              find "$SMOKE_TASK_ROOT" -mindepth 1 -depth -delete || cleanup_status=$?
+              rmdir "$SMOKE_TASK_ROOT" || cleanup_status=$?
               ;;
             *)
-              echo "Refusing to remove unexpected DATA_HOST_DIR: $DATA_HOST_DIR" >&2
+              echo "Refusing to remove unexpected SMOKE_TASK_ROOT: $SMOKE_TASK_ROOT" >&2
               cleanup_status=1
               ;;
           esac

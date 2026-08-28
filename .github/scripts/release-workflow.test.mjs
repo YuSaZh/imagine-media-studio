@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import process from 'node:process';
-import { URL } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 
 import { validateReleaseTag } from './release-guard.mjs';
 
@@ -135,5 +138,65 @@ assert.throws(() => validateReleaseTag('v1.2.3', '1.2.3', 'refs/heads/main'), /p
 assert.deepEqual(validateReleaseTag('v1.2.3', '1.2.3'), { tag: 'v1.2.3', version: '1.2.3' });
 assert.match(smokeScript, /export IMAGINE_MEDIA_HOST_PORT="\$host_port"/);
 assert.ok(smokeScript.indexOf('trap cleanup EXIT') < smokeScript.indexOf('mkdir -- "$data_directory"'));
+
+const negativeRoot = await mkdtemp(join(tmpdir(), 'imagine-pr8-seed-guard-'));
+try {
+  const dataRoot = join(negativeRoot, 'live-data');
+  const wrongRoot = join(negativeRoot, 'wrong-data');
+  const fakeBin = join(negativeRoot, 'bin');
+  const dockerLog = join(negativeRoot, 'docker.log');
+  await Promise.all([
+    mkdir(dataRoot, { mode: 0o700 }),
+    mkdir(wrongRoot, { mode: 0o700 }),
+    mkdir(fakeBin, { mode: 0o700 }),
+  ]);
+  await chmod(negativeRoot, 0o700);
+  const fakeDocker = join(fakeBin, 'docker');
+  await writeFile(
+    fakeDocker,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [[ "$*" == 'compose config --format json' ]]; then
+  printf '%s\\n' "$FAKE_COMPOSE_CONFIG"
+  exit 0
+fi
+exit 91
+`,
+    { mode: 0o700 },
+  );
+  const composeConfig = JSON.stringify({
+    services: {
+      'imagine-media': {
+        volumes: [{ source: wrongRoot, target: '/data', type: 'bind' }],
+      },
+    },
+  });
+  const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const seedScript = fileURLToPath(new URL('./pr8-legacy-seed.sh', import.meta.url));
+  const result = spawnSync('bash', [seedScript], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      COMPOSE_PROJECT_NAME: 'imagine-pr8-seed-guard-test',
+      DATA_HOST_DIR: dataRoot,
+      FAKE_COMPOSE_CONFIG: composeConfig,
+      FAKE_DOCKER_LOG: dockerLog,
+      PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+      SMOKE_TASK_ROOT: negativeRoot,
+    },
+  });
+  assert.notEqual(result.status, 0, 'A mismatched /data bind source must fail closed.');
+  assert.match(`${result.stdout}${result.stderr}`, /bind source does not match DATA_HOST_DIR/u);
+  assert.deepEqual((await readFile(dockerLog, 'utf8')).trim().split('\n'), ['compose config --format json']);
+  assert.equal(
+    (await readdir(negativeRoot)).some((name) => name.startsWith('.pr8-legacy-seed-config.')),
+    false,
+    'The task-owned structured config file must be removed after rejection.',
+  );
+} finally {
+  await rm(negativeRoot, { force: true, recursive: true });
+}
 
 process.stdout.write('release workflow structure and release guard checks passed\n');
