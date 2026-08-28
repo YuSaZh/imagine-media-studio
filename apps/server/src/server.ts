@@ -435,6 +435,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     paths: storage,
     repository: mediaRepository,
   });
+  await mediaRepairCoordinator.reconcile();
   const runner = new JobRunner({
     ...createSqliteRunnerOptions({
       jobs,

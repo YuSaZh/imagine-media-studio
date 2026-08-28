@@ -1154,6 +1154,33 @@ for (const [name, expectedStatus] of [
 }
 NODE
 
+repair_thumbnail_path=$(ASSET_ID="$asset_id" compose exec --no-TTY -e ASSET_ID imagine-media node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { unlink } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+import Database from 'better-sqlite3';
+
+const database = new Database('/data/app.db', { fileMustExist: true, readonly: true });
+let asset;
+try {
+  asset = database
+    .prepare('SELECT thumbnail_path AS thumbnailPath FROM assets WHERE id = ?')
+    .get(process.env.ASSET_ID);
+} finally {
+  database.close();
+}
+assert.equal(typeof asset?.thumbnailPath, 'string');
+assert.match(asset.thumbnailPath, /^media\/thumbnails\/[A-Za-z0-9._-]+$/u);
+const thumbnailPath = resolve('/data', asset.thumbnailPath);
+assert.ok(thumbnailPath.startsWith('/data/media/thumbnails/'));
+await unlink(thumbnailPath);
+process.stdout.write(asset.thumbnailPath);
+NODE
+)
+test -n "$repair_thumbnail_path"
+test ! -e "$DATA_HOST_DIR/$repair_thumbnail_path"
+
 compose restart imagine-media
 compose up --detach --wait --wait-timeout 120
 
@@ -1335,6 +1362,84 @@ try {
   clearTimeout(timeout);
 }
 assert.deepEqual([...targets], [], 'SSE replay did not include persisted Job, Asset, and Collection events.');
+NODE
+
+ASSET_ID="$asset_id" JOB_ID="$job_id" BASE_URL="$base_url" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+
+const baseUrl = process.env.BASE_URL;
+const authHeader = `Basic ${Buffer.from(`studio:${process.env.APP_PASSWORD ?? ''}`).toString('base64')}`;
+
+function withAuth(options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('authorization', authHeader);
+  headers.set('origin', baseUrl);
+  return { ...options, headers };
+}
+
+async function json(path, options = {}, expectedStatus = 200) {
+  const response = await fetch(baseUrl + path, withAuth({
+    ...options,
+    signal: AbortSignal.timeout(10_000),
+  }));
+  const text = await response.text();
+  assert.equal(response.status, expectedStatus, `${options.method ?? 'GET'} ${path}: ${text}`);
+  return JSON.parse(text);
+}
+
+const before = await json('/internal/maintenance/media/repairs');
+const issue = before.repairs.items.find((item) =>
+  item.assetId === process.env.ASSET_ID &&
+  item.kind === 'missing' &&
+  item.state === 'open' &&
+  /^media\/thumbnails\//u.test(item.storedPath));
+assert.ok(issue, 'Restart did not enqueue the missing completed thumbnail.');
+
+const run = await json('/internal/maintenance/media/repairs/run', { method: 'POST' });
+assert.deepEqual(run.repairs, {
+  attempted: 1,
+  manual: 0,
+  repaired: 1,
+  retried: 0,
+  truncated: false,
+});
+const after = await json('/internal/maintenance/media/repairs');
+assert.ok(after.repairs.items.some((item) =>
+  item.issueKey === issue.issueKey && item.state === 'resolved'));
+const job = await json(`/internal/jobs/${encodeURIComponent(process.env.JOB_ID)}`);
+assert.equal(job.job.status, 'completed');
+const asset = await json(`/internal/assets/${encodeURIComponent(process.env.ASSET_ID)}`);
+const thumbnail = await fetch(baseUrl + asset.asset.thumbnailUrl, withAuth({ signal: AbortSignal.timeout(10_000) }));
+assert.equal(thumbnail.status, 200);
+assert.ok((await thumbnail.arrayBuffer()).byteLength > 0);
+NODE
+
+JOB_ID="$job_id" ASSET_ID="$asset_id" REPAIR_THUMBNAIL_PATH="$repair_thumbnail_path" \
+  compose exec --no-TTY -e JOB_ID -e ASSET_ID -e REPAIR_THUMBNAIL_PATH imagine-media node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+import Database from 'better-sqlite3';
+
+const database = new Database('/data/app.db', { fileMustExist: true, readonly: true });
+try {
+  const job = database
+    .prepare('SELECT status, submit_attempt AS submitAttempt FROM jobs WHERE id = ?')
+    .get(process.env.JOB_ID);
+  const issue = database
+    .prepare('SELECT state FROM media_repair_queue WHERE asset_id = ? AND stored_path = ?')
+    .get(process.env.ASSET_ID, process.env.REPAIR_THUMBNAIL_PATH);
+  assert.deepEqual(job, { status: 'completed', submitAttempt: 1 });
+  assert.deepEqual(issue, { state: 'resolved' });
+} finally {
+  database.close();
+}
+const thumbnailPath = resolve('/data', process.env.REPAIR_THUMBNAIL_PATH);
+assert.ok(thumbnailPath.startsWith('/data/media/thumbnails/'));
+const details = await stat(thumbnailPath);
+assert.equal(details.isFile(), true);
+assert.ok(details.size > 0);
 NODE
 
 BASE_URL="$base_url" APP_PASSWORD="$APP_PASSWORD" \

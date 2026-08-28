@@ -16,6 +16,7 @@ import type { AppConfig } from './config.js';
 import {
   MOCK_VIDEO_MP4_BASE64,
   MOCK_VIDEO_MP4_SHA256,
+  MockProviderAdapter,
 } from './providers/mock-provider.js';
 import { MOCK_PROVIDER_ID } from './providers/provider-registry.js';
 import type { ProviderHttpExecutor } from './providers/provider-http-client.js';
@@ -300,6 +301,30 @@ describe('Imagine server PR 0 skeleton', () => {
     )).rejects.toThrow();
     const dataDir = temporaryDirectories.at(-1)!;
     await expect(lstat(join(dataDir, '.offline-maintenance.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails closed and releases the runtime gate when startup media reconciliation cannot persist', async () => {
+    const first = await createTestServer(false, false);
+    const dataDir = temporaryDirectories.at(-1)!;
+    await first.app.close();
+    servers.splice(servers.indexOf(first), 1);
+
+    const database = new Database(join(dataDir, 'app.db'));
+    try {
+      database.exec('DROP TABLE media_repair_queue');
+    } finally {
+      database.close();
+    }
+
+    await expect(reopenTestServer(dataDir)).rejects.toThrow('Media repair queue scan could not be stored.');
+    const lockPath = join(dataDir, '.offline-maintenance.lock');
+    await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const offlineLease = await acquireOfflineMaintenanceLease({
+      assertServerStopped: () => true,
+      dataRoot: dataDir,
+    });
+    await offlineLease.release();
+    await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('persists a Mock Job and its generated media', async () => {
@@ -1399,6 +1424,93 @@ describe('Imagine server PR 0 skeleton', () => {
       repairs: { count: 1, items: [{ assetId: missing.id }] },
     });
     expect(reopened.mediaRepairQueue.count()).toBe(1);
+  });
+
+  it('queues completed physical media failures on restart without resubmitting the Provider', async () => {
+    const first = await createTestServer(true, true, false, 'test-password');
+    const dataDir = temporaryDirectories.at(-1)!;
+    const adminHeaders = {
+      authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}`,
+    };
+    const createJob = async (prompt: string): Promise<string> => {
+      const response = await first.app.inject({
+        method: 'POST',
+        url: '/internal/jobs',
+        headers: adminHeaders,
+        payload: createMockGenerationRequest({ prompt }),
+      });
+      expect(response.statusCode).toBe(202);
+      return response.json<{ job: { id: string } }>().job.id;
+    };
+    const derivedJobId = await createJob('Startup repair derived fixture');
+    const primaryJobId = await createJob('Startup repair primary fixture');
+    await first.runner.waitForIdle();
+    const derivedAsset = first.assets.page({ jobId: derivedJobId }).items[0];
+    const primaryAsset = first.assets.page({ jobId: primaryJobId }).items[0];
+    if (derivedAsset?.thumbnailPath === null || derivedAsset === undefined || primaryAsset === undefined) {
+      throw new Error('Completed Mock Jobs must have image Assets with a thumbnail.');
+    }
+    const derivedBefore = first.jobs.get(derivedJobId);
+    const primaryBefore = first.jobs.get(primaryJobId);
+    expect(derivedBefore?.status).toBe('completed');
+    expect(primaryBefore?.status).toBe('completed');
+    await first.app.close();
+    servers.splice(servers.indexOf(first), 1);
+    await rm(resolve(dataDir, derivedAsset.thumbnailPath));
+    await rm(resolve(dataDir, primaryAsset.filePath));
+
+    const submit = vi.spyOn(MockProviderAdapter.prototype, 'submit');
+    const reopened = await reopenTestServer(dataDir, 'test-password');
+    await reopened.runner.waitForIdle();
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(reopened.jobs.get(derivedJobId)).toMatchObject({
+      status: 'completed',
+      submitAttempt: derivedBefore!.submitAttempt,
+    });
+    expect(reopened.jobs.get(primaryJobId)).toMatchObject({
+      status: 'completed',
+      submitAttempt: primaryBefore!.submitAttempt,
+    });
+    const queued = reopened.mediaRepairQueue.list();
+    expect(queued).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetId: derivedAsset.id,
+        kind: 'missing',
+        state: 'open',
+        storedPath: derivedAsset.thumbnailPath,
+      }),
+      expect.objectContaining({
+        assetId: primaryAsset.id,
+        kind: 'missing',
+        state: 'open',
+        storedPath: primaryAsset.filePath,
+      }),
+    ]));
+
+    const run = await reopened.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/repairs/run',
+      headers: adminHeaders,
+    });
+    expect(run.statusCode).toBe(200);
+    expect(run.json()).toEqual({
+      repairs: {
+        attempted: 2,
+        manual: 1,
+        repaired: 1,
+        retried: 0,
+        truncated: false,
+      },
+    });
+    const after = reopened.mediaRepairQueue.list();
+    expect(after.find((item) => item.storedPath === derivedAsset.thumbnailPath)?.state).toBe('resolved');
+    expect(after.find((item) => item.storedPath === primaryAsset.filePath)?.state).toBe('manual');
+    const repairedThumbnail = await lstat(resolve(dataDir, derivedAsset.thumbnailPath));
+    expect(repairedThumbnail.isFile()).toBe(true);
+    expect(repairedThumbnail.size).toBeGreaterThan(0);
+    expect(reopened.jobs.get(derivedJobId)?.status).toBe('completed');
+    expect(reopened.jobs.get(primaryJobId)?.status).toBe('completed');
   });
 
   it('waits for an active database backup before closing SQLite', async () => {
