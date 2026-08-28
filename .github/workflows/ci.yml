@@ -133,6 +133,13 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Install media tooling for PR7 active Job reopen test
+        if: matrix.project == 'pr7-desktop-1440x900'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
