@@ -277,6 +277,11 @@ export function MediaViewer({ items }: MediaViewerProps) {
           }}
           onKeyDown={(event) => {
             if (isNativeMediaInteractionTarget(event.target)) return;
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              closeViewer();
+              return;
+            }
             if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
               event.preventDefault();
               move(event.key === 'ArrowLeft' ? -1 : 1);

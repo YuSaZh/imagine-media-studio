@@ -52,7 +52,8 @@ export function GalleryPage() {
   const previousSelection = useRef<ReadonlySet<string>>(new Set<string>());
   const [selectionAnnouncement, setSelectionAnnouncement] = useState('');
   const { isOnline } = useOutletContext<{ isOnline: boolean; isStandalone: boolean }>();
-  const { data = [] } = useGalleryQuery();
+  const galleryQuery = useGalleryQuery();
+  const { data = [] } = galleryQuery;
   const actions = useGalleryActions();
   const activeFilter = useUiStore((state) => state.activeFilter);
   const setActiveFilter = useUiStore((state) => state.setActiveFilter);
@@ -125,7 +126,13 @@ export function GalleryPage() {
       <div className="gallery-body">
         <VirtualGallery
           emptyLabel="No media matches this filter"
+          hasNextPage={galleryQuery.hasNextPage}
+          isError={galleryQuery.isError}
+          isFetchingNextPage={galleryQuery.isFetchingNextPage}
+          isInitialLoading={galleryQuery.isLoading}
           items={items}
+          onFetchNextPage={() => galleryQuery.fetchNextPage()}
+          onRetry={() => data.length === 0 ? galleryQuery.refetch() : galleryQuery.fetchNextPage()}
           scrollElementRef={scrollRef}
         />
       </div>

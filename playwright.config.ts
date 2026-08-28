@@ -13,8 +13,8 @@ import {
 const port = E2E_PORT;
 const baseURL = E2E_BASE_URL;
 const pr6TestMatch = /pr6\.spec\.ts/;
-const pr7TestMatch = /pr7\.spec\.ts/;
-const pr6AndPr7TestMatch = /pr[67]\.spec\.ts/;
+const pr7TestMatch = /pr7(?:-a11y-perf)?\.spec\.ts/;
+const pr6AndPr7TestMatch = /pr[67](?:-a11y-perf)?\.spec\.ts/;
 const localChromium = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const localLaunchOptions = localChromium
   ? { launchOptions: { executablePath: localChromium } }

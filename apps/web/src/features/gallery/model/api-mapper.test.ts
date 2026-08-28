@@ -58,6 +58,33 @@ const asset: AssetDto = {
 };
 
 describe('mapInternalGallery', () => {
+  it('de-duplicates records before creating output slots', () => {
+    const items = mapInternalGallery([asset, asset], [job, job]);
+
+    expect(items.map((item) => item.id)).toEqual(['asset-1', 'job-slot-job-1-1']);
+  });
+
+  it('keeps the latest repeated job and does not invent a completed result slot', () => {
+    const latest = {
+      ...job,
+      stage: 'Latest stage',
+      updatedAt: '2026-08-25T00:03:00.000Z',
+      progress: 73,
+    };
+
+    expect(mapInternalGallery([], [job, latest])[0]).toMatchObject({
+      status: 'remote_running',
+      stage: 'Latest stage',
+      progress: 73,
+    });
+    expect(mapInternalGallery([], [latest, job])[0]).toMatchObject({
+      status: 'remote_running',
+      stage: 'Latest stage',
+      progress: 73,
+    });
+    expect(mapInternalGallery([], [{ ...latest, status: 'completed' }])).toEqual([]);
+  });
+
   it('maps persisted assets and fills missing stable output slots', () => {
     const items = mapInternalGallery([asset], [job]);
 

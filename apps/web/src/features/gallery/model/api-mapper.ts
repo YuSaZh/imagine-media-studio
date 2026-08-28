@@ -129,26 +129,42 @@ function mapJobSlot(job: JobDto, outputIndex: number): FixtureGalleryItem {
       };
 }
 
+function uniqueById<T extends { readonly id: string }>(
+  records: readonly T[],
+  timestampFor?: (record: T) => string,
+): readonly T[] {
+  const recordsById = new Map<string, T>();
+  for (const record of records) {
+    const current = recordsById.get(record.id);
+    if (current === undefined || timestampFor === undefined || timestampFor(record) >= timestampFor(current)) {
+      recordsById.set(record.id, record);
+    }
+  }
+  return [...recordsById.values()];
+}
+
 export function mapInternalGallery(
   assets: readonly AssetDto[],
   jobs: readonly JobDto[],
 ): readonly FixtureGalleryItem[] {
-  const jobsById = new Map(jobs.map((job) => [job.id, job]));
+  const uniqueAssets = uniqueById(assets, (asset) => asset.createdAt);
+  const uniqueJobs = uniqueById(jobs, (job) => job.updatedAt);
+  const jobsById = new Map(uniqueJobs.map((job) => [job.id, job]));
   const assetsByJob = new Map<string, AssetDto[]>();
-  for (const asset of assets) {
+  for (const asset of uniqueAssets) {
     if (!asset.jobId) continue;
     const existing = assetsByJob.get(asset.jobId) ?? [];
     existing.push(asset);
     assetsByJob.set(asset.jobId, existing);
   }
 
-  const mappedAssets = assets.map((asset) => mapAsset(
+  const mappedAssets = uniqueAssets.map((asset) => mapAsset(
     asset,
     asset.jobId ? jobsById.get(asset.jobId) : undefined,
   ));
-  const jobSlots = jobs.flatMap((job) => {
+  const jobSlots = uniqueJobs.flatMap((job) => {
     const existingCount = assetsByJob.get(job.id)?.length ?? 0;
-    if (job.status === 'completed' && existingCount > 0) return [];
+    if (job.status === 'completed') return [];
     const slotCount = Math.max(1, job.outputCount || job.request.count || 1);
     return Array.from(
       { length: Math.max(0, slotCount - existingCount) },

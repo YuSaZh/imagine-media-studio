@@ -4,24 +4,37 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { internalClient } from '../../../api/internal-client.js';
 import { PR1_MOCK_GALLERY_ITEMS } from '../model/fixtures.js';
-import type { FixtureGalleryItem } from '../model/types.js';
+import type { FixtureFolder, FixtureGalleryItem } from '../model/types.js';
 import {
   applyGalleryCacheAction,
   applyOptimisticSubmission,
   createGenerationRequest,
+  createGalleryActionMutationOptions,
   createMockSubmissionItems,
   executeGalleryAction,
   folderQueryKey,
   foldersQueryKey,
+  flattenGalleryPages,
+  galleryItemsFromCache,
+  getNextGalleryPageParam,
+  GALLERY_MAX_ITEMS,
+  GALLERY_PAGE_SIZE,
   galleryQueryKey,
+  INITIAL_GALLERY_PAGE_PARAM,
   isVisualFixtureMode,
+  loadGalleryPage,
   loadGalleryData,
   loadInputAssetInventoryData,
   loadProviderData,
   mapInternalModel,
   reduceGalleryItems,
+  replayGalleryMutationPatches,
+  restoreGalleryMutationCache,
   rollbackOptimisticSubmission,
+  snapshotGalleryMutationCache,
   type GalleryModel,
+  type GalleryMutationPatch,
+  type GalleryPage,
   type MockSubmission,
 } from './gallery-query.js';
 
@@ -202,6 +215,7 @@ describe('PR 1 gallery query model', () => {
   });
 
   it('keeps fixture folder queries synchronized with the current Gallery cache', () => {
+    vi.stubGlobal('sessionStorage', { getItem: () => 'pr1-v1' });
     const queryClient = new QueryClient();
     queryClient.setQueryData(galleryQueryKey, PR1_MOCK_GALLERY_ITEMS);
     queryClient.setQueryData(folderQueryKey('folder-editorial'), {
@@ -225,6 +239,134 @@ describe('PR 1 gallery query model', () => {
     expect(folders?.find((candidate) => candidate.id === 'folder-editorial')?.itemIds).toContain(
       'image-02',
     );
+  });
+
+  it('updates only real production folder caches and never creates mock collections', () => {
+    vi.stubGlobal('sessionStorage', { getItem: () => null });
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(galleryQueryKey, PR1_MOCK_GALLERY_ITEMS);
+    queryClient.setQueryData(foldersQueryKey, [{
+      id: 'real-folder',
+      name: 'Real folder',
+      itemIds: [],
+    }]);
+    queryClient.setQueryData(folderQueryKey('real-folder'), {
+      folder: { id: 'real-folder', name: 'Real folder', itemIds: [] },
+      items: [],
+    });
+
+    applyGalleryCacheAction(queryClient, {
+      type: 'toggleFolder',
+      itemId: 'image-02',
+      folderId: 'real-folder',
+    });
+
+    const folders = queryClient.getQueryData<readonly FixtureFolder[]>(foldersQueryKey) ?? [];
+    expect(folders).toEqual([{ id: 'real-folder', name: 'Real folder', itemIds: ['image-02'] }]);
+    expect(queryClient.getQueryData(folderQueryKey('folder-editorial'))).toBeUndefined();
+    expect(queryClient.getQueryData(folderQueryKey('real-folder'))).toMatchObject({
+      folder: { itemIds: ['image-02'] },
+      items: [expect.objectContaining({ id: 'image-02', folderIds: ['folder-places', 'real-folder'] })],
+    });
+  });
+
+  it('keeps infinite page data intact while applying a cache action through overrides', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(galleryQueryKey, {
+      pages: [{
+        assets: { items: [API_ASSET], nextCursor: null },
+        jobs: { items: [API_JOB], nextCursor: null },
+        nextPageParam: null,
+      }],
+      pageParams: [INITIAL_GALLERY_PAGE_PARAM],
+    });
+
+    applyGalleryCacheAction(queryClient, { type: 'toggleSaved', itemId: API_ASSET.id });
+
+    const cached = queryClient.getQueryData(galleryQueryKey) as { pages: readonly unknown[] };
+    expect(cached.pages).toHaveLength(1);
+    expect(galleryItemsFromCache(cached).find((item) => item.id === API_ASSET.id)?.saved).toBe(true);
+  });
+
+  it('restores the complete gallery and folder cache after a failed mutation', () => {
+    const queryClient = new QueryClient();
+    const previousGallery = {
+      pages: [{
+        assets: { items: [API_ASSET], nextCursor: null },
+        jobs: { items: [API_JOB], nextCursor: null },
+        nextPageParam: null,
+      }],
+      pageParams: [INITIAL_GALLERY_PAGE_PARAM],
+    };
+    const previousFolder = { folder: null, items: [] };
+    queryClient.setQueryData(galleryQueryKey, previousGallery);
+    queryClient.setQueryData(folderQueryKey('folder-api'), previousFolder);
+    const context = snapshotGalleryMutationCache(queryClient);
+
+    applyGalleryCacheAction(queryClient, { type: 'toggleSaved', itemId: API_ASSET.id });
+    queryClient.setQueryData(folderQueryKey('new-folder'), { folder: null, items: [] });
+    restoreGalleryMutationCache(queryClient, context);
+
+    expect(queryClient.getQueryData(galleryQueryKey)).toEqual(previousGallery);
+    expect(queryClient.getQueryData(folderQueryKey('folder-api'))).toEqual(previousFolder);
+    expect(queryClient.getQueryData(folderQueryKey('new-folder'))).toBeUndefined();
+  });
+
+  it('replays an overlapping later patch after the first action fails or succeeds', () => {
+    const queryClient = new QueryClient();
+    const initialItems = PR1_MOCK_GALLERY_ITEMS;
+    queryClient.setQueryData(galleryQueryKey, initialItems);
+    const base = snapshotGalleryMutationCache(queryClient);
+    const firstAction = { type: 'toggleSaved' as const, itemId: 'image-02' };
+    const firstItems = reduceGalleryItems(initialItems, firstAction);
+    const secondAction = { type: 'toggleSaved' as const, itemId: 'image-02' };
+    const secondItems = reduceGalleryItems(firstItems, secondAction);
+    const firstPatch: GalleryMutationPatch = {
+      action: firstAction,
+      previousItems: initialItems,
+      nextItems: firstItems,
+    };
+    const secondPatch: GalleryMutationPatch = {
+      action: secondAction,
+      previousItems: firstItems,
+      nextItems: secondItems,
+    };
+
+    replayGalleryMutationPatches(queryClient, base, [secondPatch]);
+    expect(galleryItemsFromCache(queryClient.getQueryData<unknown>(galleryQueryKey))
+      .find((item) => item.id === 'image-02')?.saved).toBe(requiredItem(initialItems, 'image-02').saved);
+
+    replayGalleryMutationPatches(queryClient, base, [firstPatch, secondPatch]);
+    expect(galleryItemsFromCache(queryClient.getQueryData<unknown>(galleryQueryKey))
+      .find((item) => item.id === 'image-02')?.saved).toBe(requiredItem(initialItems, 'image-02').saved);
+  });
+
+  it('restores a unique failed mutation before a rejected invalidate can leave optimistic state behind', async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(galleryQueryKey, PR1_MOCK_GALLERY_ITEMS);
+    const options = createGalleryActionMutationOptions(queryClient, false);
+    const action = { type: 'toggleSaved' as const, itemId: 'image-02' };
+    const mutationContext = await options.onMutate?.(action, { client: queryClient, meta: undefined });
+    expect(requiredItem(galleryItemsFromCache(queryClient.getQueryData<unknown>(galleryQueryKey)), 'image-02').saved)
+      .toBe(!requiredItem(PR1_MOCK_GALLERY_ITEMS, 'image-02').saved);
+
+    options.onError?.(
+      new Error('mutation failed'),
+      action,
+      mutationContext,
+      { client: queryClient, meta: undefined },
+    );
+    expect(queryClient.getQueryData(galleryQueryKey)).toEqual(PR1_MOCK_GALLERY_ITEMS);
+
+    vi.spyOn(queryClient, 'invalidateQueries').mockRejectedValue(new Error('refresh failed'));
+    await expect(options.onSettled?.(
+      undefined,
+      new Error('mutation failed'),
+      action,
+      mutationContext,
+      { client: queryClient, meta: undefined },
+    )).rejects.toThrow('refresh failed');
+    expect(queryClient.getQueryData(galleryQueryKey)).toEqual(PR1_MOCK_GALLERY_ITEMS);
   });
 });
 
@@ -306,6 +448,126 @@ describe('PR 2 gallery API integration', () => {
 
     listAssets.mockReset().mockRejectedValue(new Error('API unavailable'));
     await expect(loadGalleryData()).rejects.toThrow('API unavailable');
+  });
+
+  it('loads one bounded asset/job page at a time and advances each cursor independently', async () => {
+    const listAssets = vi.spyOn(internalClient, 'listAssets')
+      .mockResolvedValueOnce({ items: [API_ASSET], nextCursor: 'asset-page-2' })
+      .mockResolvedValueOnce({ items: [], nextCursor: null });
+    const listJobs = vi.spyOn(internalClient, 'listJobs')
+      .mockResolvedValueOnce({ items: [API_JOB], nextCursor: 'job-page-2' })
+      .mockResolvedValueOnce({ items: [], nextCursor: null });
+
+    const first = await loadGalleryPage(INITIAL_GALLERY_PAGE_PARAM);
+    expect(first.nextPageParam).toEqual({ assetsCursor: 'asset-page-2', jobsCursor: 'job-page-2' });
+    expect(listAssets).toHaveBeenNthCalledWith(1, { limit: GALLERY_PAGE_SIZE });
+    expect(listJobs).toHaveBeenNthCalledWith(1, { limit: GALLERY_PAGE_SIZE });
+
+    const second = await loadGalleryPage(first.nextPageParam ?? {});
+    expect(second.nextPageParam).toBeNull();
+    expect(listAssets).toHaveBeenNthCalledWith(2, { cursor: 'asset-page-2', limit: GALLERY_PAGE_SIZE });
+    expect(listJobs).toHaveBeenNthCalledWith(2, { cursor: 'job-page-2', limit: GALLERY_PAGE_SIZE });
+  });
+
+  it('skips an exhausted stream while continuing the other stream', async () => {
+    const listAssets = vi.spyOn(internalClient, 'listAssets')
+      .mockResolvedValueOnce({ items: [API_ASSET], nextCursor: null });
+    const listJobs = vi.spyOn(internalClient, 'listJobs')
+      .mockResolvedValueOnce({ items: [], nextCursor: 'job-page-2' })
+      .mockResolvedValueOnce({ items: [API_JOB], nextCursor: null });
+
+    const first = await loadGalleryPage();
+    await loadGalleryPage(first.nextPageParam ?? {});
+    expect(listAssets).toHaveBeenCalledOnce();
+    expect(listJobs).toHaveBeenNthCalledWith(2, { cursor: 'job-page-2', limit: GALLERY_PAGE_SIZE });
+  });
+
+  it('de-duplicates overlapping pages, applies the newest record, and caps retained items', () => {
+    const newerAsset = { ...API_ASSET, favorite: true };
+    const latestJob = {
+      ...API_JOB,
+      status: 'failed' as const,
+      stage: 'Latest failure',
+      errorCode: 'latest_error',
+      errorMessage: 'Latest job state',
+      updatedAt: '2026-08-25T00:04:00.000Z',
+    };
+    const pages: GalleryPage[] = [
+      {
+        assets: { items: [API_ASSET], nextCursor: 'page-2' },
+        jobs: { items: [API_JOB], nextCursor: 'page-2' },
+        nextPageParam: { assetsCursor: 'page-2', jobsCursor: 'page-2' },
+      },
+      {
+        assets: { items: [newerAsset], nextCursor: null },
+        jobs: { items: [latestJob], nextCursor: null },
+        nextPageParam: null,
+      },
+    ];
+    const merged = flattenGalleryPages({ pages });
+    expect(merged).toHaveLength(1);
+    expect(merged.filter((item) => item.id === API_ASSET.id)).toHaveLength(1);
+    expect(merged.find((item) => item.id === API_ASSET.id)).toMatchObject({
+      saved: true,
+      status: 'failed',
+      stage: 'Latest failure',
+    });
+
+    const manyPages = Array.from({ length: GALLERY_MAX_ITEMS + 1 }, (_, index): GalleryPage => ({
+      assets: {
+        items: [{ ...API_ASSET, id: `asset-${index}`, createdAt: `2026-08-25T00:${String(index % 60).padStart(2, '0')}:00.000Z` }],
+        nextCursor: null,
+      },
+      jobs: { items: [], nextCursor: null },
+      nextPageParam: null,
+    }));
+    expect(flattenGalleryPages({ pages: manyPages })).toHaveLength(GALLERY_MAX_ITEMS);
+  });
+
+  it('rejects a repeated cursor before a next-page loop can grow the cache', () => {
+    const page: GalleryPage = {
+      assets: { items: [], nextCursor: 'same' },
+      jobs: { items: [], nextCursor: null },
+      nextPageParam: { assetsCursor: 'same', jobsCursor: null },
+    };
+    expect(() => getNextGalleryPageParam(
+      page,
+      [page],
+      { assetsCursor: 'same', jobsCursor: null },
+      [{ assetsCursor: 'same', jobsCursor: null }],
+    )).toThrow('repeated gallery pagination cursor');
+  });
+
+  it('stops pagination at both the item and page safety bounds', () => {
+    const maxItemPage: GalleryPage = {
+      assets: {
+        items: Array.from({ length: GALLERY_MAX_ITEMS }, (_, index) => ({
+          ...API_ASSET,
+          id: `cap-asset-${index}`,
+        })),
+        nextCursor: 'more',
+      },
+      jobs: { items: [], nextCursor: null },
+      nextPageParam: { assetsCursor: 'more', jobsCursor: null },
+    };
+    expect(getNextGalleryPageParam(
+      maxItemPage,
+      [maxItemPage],
+      INITIAL_GALLERY_PAGE_PARAM,
+      [INITIAL_GALLERY_PAGE_PARAM],
+    )).toBeUndefined();
+
+    const twentyPages = Array.from({ length: 20 }, (_, index): GalleryPage => ({
+      assets: { items: [{ ...API_ASSET, id: `page-asset-${index}` }], nextCursor: `asset-${index + 1}` },
+      jobs: { items: [], nextCursor: null },
+      nextPageParam: { assetsCursor: `asset-${index + 1}`, jobsCursor: null },
+    }));
+    expect(getNextGalleryPageParam(
+      twentyPages[19]!,
+      twentyPages,
+      { assetsCursor: 'asset-19', jobsCursor: null },
+      [INITIAL_GALLERY_PAGE_PARAM, ...twentyPages.slice(0, 19).map((page) => page.nextPageParam!)],
+    )).toBeUndefined();
   });
 
   it('combines visible images with explicitly requested Mask assets for Composer inputs', async () => {
@@ -697,5 +959,32 @@ describe('PR 2 gallery API integration', () => {
     expect(cancel).toHaveBeenCalledWith(item.jobId);
     expect(deleteAsset).toHaveBeenCalledWith(item.id);
     expect(deleteJob).toHaveBeenCalledWith('job-api-2');
+  });
+
+  it('de-duplicates removeMany requests by asset ID and job ID', async () => {
+    const deleteAsset = vi.spyOn(internalClient, 'deleteAsset').mockResolvedValue();
+    const deleteJob = vi.spyOn(internalClient, 'deleteJob').mockResolvedValue();
+    const assetItem = {
+      ...PR1_MOCK_GALLERY_ITEMS[0]!,
+      id: 'asset-delete-once',
+      jobId: 'job-delete-shared',
+    };
+    const jobSlot = {
+      ...PR1_MOCK_GALLERY_ITEMS[0]!,
+      id: 'job-slot-job-delete-shared-0',
+      jobId: 'job-delete-shared',
+      persistedAsset: false,
+    };
+    const secondJobSlot = { ...jobSlot, id: 'job-slot-job-delete-shared-1' };
+
+    await executeGalleryAction({
+      type: 'removeMany',
+      itemIds: [assetItem.id, assetItem.id, jobSlot.id, secondJobSlot.id],
+    }, [assetItem, jobSlot, secondJobSlot]);
+
+    expect(deleteAsset).toHaveBeenCalledTimes(1);
+    expect(deleteAsset).toHaveBeenCalledWith(assetItem.id);
+    expect(deleteJob).toHaveBeenCalledTimes(1);
+    expect(deleteJob).toHaveBeenCalledWith(jobSlot.jobId);
   });
 });

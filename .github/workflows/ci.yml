@@ -142,7 +142,7 @@ jobs:
           chmod 0700 "$data_dir"
           echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
       - name: Run PR7 project
-        run: pnpm test:e2e --project=${{ matrix.project }}
+        run: pnpm test:e2e --project=${{ matrix.project }} --grep-invert='\[PR7 (a11y|perf)\]'
       - name: Upload PR7 screenshots and visual report
         if: always()
         uses: actions/upload-artifact@v6
@@ -156,6 +156,47 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: pr7-${{ matrix.project }}-failure-report
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  pr7-a11y-perf:
+    name: 'Playwright PR 7 a11y/perf: ${{ matrix.project }}'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        project:
+          - pr7-desktop-1440x900
+          - pr7-mobile-390x844
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.23.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Prepare isolated E2E data directory
+        run: |
+          data_dir=$(mktemp -d "/tmp/imagine-media-studio-e2e-a11y-${{ matrix.project }}-XXXXXX")
+          chmod 0700 "$data_dir"
+          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
+      - name: Run PR7 a11y and performance gates
+        run: pnpm test:e2e --project=${{ matrix.project }} --grep='\[PR7 (a11y|perf)\]'
+      - name: Upload PR7 a11y and performance reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr7-a11y-perf-${{ matrix.project }}
           path: |
             playwright-report
             test-results

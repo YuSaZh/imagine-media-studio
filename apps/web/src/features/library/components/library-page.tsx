@@ -5,7 +5,7 @@ import { useParams } from 'react-router-dom';
 import { useUiStore } from '../../../stores/ui-store';
 import { MediaViewer } from '../../viewer/components/media-viewer';
 import { useFolderQuery, useGalleryQuery } from '../../gallery/api/gallery-query';
-import { VirtualGallery } from '../../gallery/components/virtual-gallery';
+import { GalleryPagination, VirtualGallery } from '../../gallery/components/virtual-gallery';
 import type { FixtureGalleryItem } from '../../gallery/model/types';
 
 interface LibraryPageProps {
@@ -25,8 +25,10 @@ export function groupGalleryItemsByJob(
 export function LibraryPage({ mode }: LibraryPageProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { folderId } = useParams();
-  const { data = [] } = useGalleryQuery();
-  const { data: folderResult } = useFolderQuery(folderId);
+  const galleryQuery = useGalleryQuery();
+  const { data = [] } = galleryQuery;
+  const folderQuery = useFolderQuery(folderId);
+  const { data: folderResult } = folderQuery;
   const openViewer = useUiStore((state) => state.openViewer);
   const folder = folderResult?.folder ?? null;
   const items = useMemo(() => {
@@ -48,26 +50,45 @@ export function LibraryPage({ mode }: LibraryPageProps) {
       </header>
 
       {mode === 'jobs' ? (
-        <div className="jobs-list">
-          {items.map((item) => (
-            <button
-              className="job-row"
-              key={item.id}
-              onClick={() => openViewer(item.id)}
-              type="button"
-            >
-              <img alt="" src={item.previewPath} />
-              <span className="job-row-copy"><strong>{item.prompt}</strong><small>{item.modelId}</small></span>
-              <span className={`status-chip status-chip--${item.status}`}>{item.stage}</span>
-              <time>{item.createdAt.slice(0, 10)}</time>
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="jobs-list">
+            {items.map((item) => (
+              <button
+                className="job-row"
+                key={item.id}
+                onClick={() => openViewer(item.id)}
+                type="button"
+              >
+                <img alt="" src={item.previewPath} />
+                <span className="job-row-copy"><strong>{item.prompt}</strong><small>{item.modelId}</small></span>
+                <span className={`status-chip status-chip--${item.status}`}>{item.stage}</span>
+                <time>{item.createdAt.slice(0, 10)}</time>
+              </button>
+            ))}
+          </div>
+          <GalleryPagination
+            hasNextPage={galleryQuery.hasNextPage}
+            isError={galleryQuery.isError}
+            isFetchingNextPage={galleryQuery.isFetchingNextPage}
+            isInitialLoading={galleryQuery.isLoading && items.length === 0}
+            onFetchNextPage={() => galleryQuery.fetchNextPage()}
+            onRetry={() => data.length === 0 ? galleryQuery.refetch() : galleryQuery.fetchNextPage()}
+            scrollElementRef={scrollRef}
+          />
+        </>
       ) : (
         <div className="gallery-body gallery-body--library">
           <VirtualGallery
             emptyLabel={mode === 'saved' ? 'Nothing saved yet' : 'This folder is empty'}
+            hasNextPage={mode === 'folder' ? false : galleryQuery.hasNextPage}
+            isError={mode === 'folder' ? folderQuery.isError : galleryQuery.isError}
+            isFetchingNextPage={mode === 'folder' ? false : galleryQuery.isFetchingNextPage}
+            isInitialLoading={mode === 'folder' ? folderQuery.isLoading : galleryQuery.isLoading}
             items={items}
+            onFetchNextPage={mode === 'folder' ? undefined : () => galleryQuery.fetchNextPage()}
+            onRetry={mode === 'folder'
+              ? () => folderQuery.refetch()
+              : () => data.length === 0 ? galleryQuery.refetch() : galleryQuery.fetchNextPage()}
             scrollElementRef={scrollRef}
           />
         </div>

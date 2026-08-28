@@ -2,12 +2,19 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { GalleryPage } from './features/gallery/components/gallery-page';
-import { LibraryPage } from './features/library/components/library-page';
-import { SettingsPage } from './features/settings/components/settings-page';
 import { AppShell } from './features/shell/components/app-shell';
+import { RouteLoading } from './route-loading.js';
+
+const LibraryPage = lazy(async () => ({
+  default: (await import('./features/library/components/library-page')).LibraryPage,
+}));
 
 const MaskEditorPage = lazy(async () => ({
   default: (await import('./features/image-editor/components/mask-editor-page')).MaskEditorPage,
+}));
+
+const SettingsPage = lazy(async () => ({
+  default: (await import('./features/settings/components/settings-page')).SettingsPage,
 }));
 
 function MaskEditorRoute() {
@@ -31,13 +38,13 @@ export function App() {
         <Route element={<AppShell />}>
           <Route index element={<Navigate replace to="/imagine" />} />
           <Route path="/imagine" element={<GalleryPage />} />
-          <Route path="/saved" element={<LibraryPage mode="saved" />} />
-          <Route path="/folders/:folderId" element={<LibraryPage mode="folder" />} />
-          <Route path="/jobs" element={<LibraryPage mode="jobs" />} />
-          <Route path="/settings" element={<SettingsPage section="general" />} />
-          <Route path="/settings/providers" element={<SettingsPage section="providers" />} />
-          <Route path="/settings/storage" element={<SettingsPage section="storage" />} />
-          <Route path="/settings/pwa" element={<SettingsPage section="pwa" />} />
+          <Route path="/saved" element={<Suspense fallback={<RouteLoading label="Loading saved" />}><LibraryPage mode="saved" /></Suspense>} />
+          <Route path="/folders/:folderId" element={<Suspense fallback={<RouteLoading label="Loading folder" />}><LibraryPage mode="folder" /></Suspense>} />
+          <Route path="/jobs" element={<Suspense fallback={<RouteLoading label="Loading jobs" />}><LibraryPage mode="jobs" /></Suspense>} />
+          <Route path="/settings" element={<Suspense fallback={<RouteLoading label="Loading settings" settings />}><SettingsPage section="general" /></Suspense>} />
+          <Route path="/settings/providers" element={<Suspense fallback={<RouteLoading label="Loading settings" settings />}><SettingsPage section="providers" /></Suspense>} />
+          <Route path="/settings/storage" element={<Suspense fallback={<RouteLoading label="Loading settings" settings />}><SettingsPage section="storage" /></Suspense>} />
+          <Route path="/settings/pwa" element={<Suspense fallback={<RouteLoading label="Loading settings" settings />}><SettingsPage section="pwa" /></Suspense>} />
           <Route path="*" element={<Navigate replace to="/imagine" />} />
         </Route>
       </Routes>

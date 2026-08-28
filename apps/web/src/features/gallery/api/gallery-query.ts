@@ -1,10 +1,22 @@
-import { useCallback } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { QueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect } from 'react';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import type {
+  InfiniteData,
+  MutationObserverOptions,
+  QueryClient,
+  QueryKey,
+} from '@tanstack/react-query';
 import type {
   AssetInput,
+  AssetDto,
   GenerationRequest,
   ImageInputPolicy,
+  JobDto,
   JsonObject,
   JsonValue,
   ModelDto,
@@ -63,6 +75,11 @@ const ACTIVE_STATUSES = new Set<FixtureJobStatus>([
   'processing',
 ]);
 
+/** Keep the first request small enough for a phone while retaining a bounded cache. */
+export const GALLERY_PAGE_SIZE = 50;
+export const GALLERY_MAX_ITEMS = 1_000;
+export const GALLERY_MAX_PAGES = Math.ceil(GALLERY_MAX_ITEMS / GALLERY_PAGE_SIZE);
+
 interface CursorPage<T> {
   readonly items: readonly T[];
   readonly nextCursor: string | null;
@@ -71,6 +88,34 @@ interface CursorPage<T> {
 export interface GalleryModel extends FixtureModel {
   readonly providerId: string;
 }
+
+type InternalAssetPage = Awaited<ReturnType<typeof internalClient.listAssets>>;
+type InternalJobPage = Awaited<ReturnType<typeof internalClient.listJobs>>;
+
+export interface GalleryPageParam {
+  readonly assetsCursor?: string | null | undefined;
+  readonly jobsCursor?: string | null | undefined;
+}
+
+export const INITIAL_GALLERY_PAGE_PARAM: GalleryPageParam = Object.freeze({
+  assetsCursor: undefined,
+  jobsCursor: undefined,
+});
+
+export interface GalleryPage {
+  readonly assets: InternalAssetPage;
+  readonly jobs: InternalJobPage;
+  readonly nextPageParam: GalleryPageParam | null;
+  readonly offlineItems?: readonly FixtureGalleryItem[];
+  readonly source?: 'fixture' | 'offline' | 'online';
+  /** Local optimistic changes live on a page so fetchNextPage keeps them. */
+  readonly overrides?: Readonly<Record<string, FixtureGalleryItem | null>>;
+}
+
+export type GalleryInfiniteData = InfiniteData<GalleryPage, GalleryPageParam>;
+
+const EMPTY_ASSET_PAGE: InternalAssetPage = { items: [], nextCursor: null };
+const EMPTY_JOB_PAGE: InternalJobPage = { items: [], nextCursor: null };
 
 async function collectPages<T>(
   load: (cursor: string | undefined) => Promise<CursorPage<T>>,
@@ -93,6 +138,166 @@ async function collectPages<T>(
 
 function withCursor(cursor: string | undefined): { cursor?: string; limit: number } {
   return cursor === undefined ? { limit: 100 } : { cursor, limit: 100 };
+}
+
+function galleryRequest(cursor: string | null | undefined): { cursor?: string; limit: number } | null {
+  if (cursor === null) return null;
+  return cursor === undefined ? { limit: GALLERY_PAGE_SIZE } : {
+    cursor,
+    limit: GALLERY_PAGE_SIZE,
+  };
+}
+
+function isInitialGalleryPageParam(pageParam: GalleryPageParam): boolean {
+  return pageParam.assetsCursor === undefined && pageParam.jobsCursor === undefined;
+}
+
+function assertGalleryCursorProgress(
+  current: string | null | undefined,
+  next: string | null,
+  resource: 'assets' | 'jobs',
+): void {
+  if (current !== undefined && current !== null && next === current) {
+    throw new Error(`Internal API returned a repeated ${resource} pagination cursor.`);
+  }
+}
+
+function nextPageParamFor(
+  pageParam: GalleryPageParam,
+  assets: InternalAssetPage,
+  jobs: InternalJobPage,
+): GalleryPageParam | null {
+  assertGalleryCursorProgress(pageParam.assetsCursor, assets.nextCursor, 'assets');
+  assertGalleryCursorProgress(pageParam.jobsCursor, jobs.nextCursor, 'jobs');
+  if (assets.nextCursor === null && jobs.nextCursor === null) return null;
+  return {
+    assetsCursor: assets.nextCursor,
+    jobsCursor: jobs.nextCursor,
+  };
+}
+
+/** Fetches one bounded pair of asset/job pages. Exhausted streams are skipped. */
+export async function loadGalleryPage(
+  pageParam: GalleryPageParam = INITIAL_GALLERY_PAGE_PARAM,
+): Promise<GalleryPage> {
+  if (isVisualFixtureMode()) {
+    return {
+      assets: EMPTY_ASSET_PAGE,
+      jobs: EMPTY_JOB_PAGE,
+      nextPageParam: null,
+      offlineItems: PR1_MOCK_GALLERY_ITEMS,
+      source: 'fixture',
+    };
+  }
+
+  try {
+    const assetsRequest = galleryRequest(pageParam.assetsCursor);
+    const jobsRequest = galleryRequest(pageParam.jobsCursor);
+    const [assets, jobs] = await Promise.all([
+      assetsRequest === null ? Promise.resolve(EMPTY_ASSET_PAGE) : internalClient.listAssets(assetsRequest),
+      jobsRequest === null ? Promise.resolve(EMPTY_JOB_PAGE) : internalClient.listJobs(jobsRequest),
+    ]);
+    return {
+      assets,
+      jobs,
+      nextPageParam: nextPageParamFor(pageParam, assets, jobs),
+      source: 'online',
+    };
+  } catch (error) {
+    // A snapshot is only a first-page bootstrap. Later page failures retain the
+    // already rendered pages and expose the retry state from React Query.
+    if (!isInitialGalleryPageParam(pageParam) || !isNetworkFailure(error)) throw error;
+    markNetworkFailure();
+    const fallback = await loadOfflineGallerySnapshot();
+    if (fallback === null) throw error;
+    return {
+      assets: EMPTY_ASSET_PAGE,
+      jobs: EMPTY_JOB_PAGE,
+      nextPageParam: null,
+      offlineItems: fallback,
+      source: 'offline',
+    };
+  }
+}
+
+function isGalleryInfiniteData(value: unknown): value is GalleryInfiniteData {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as { pages?: unknown; pageParams?: unknown };
+  return Array.isArray(candidate.pages) && Array.isArray(candidate.pageParams);
+}
+
+function sortedGalleryItems(items: readonly FixtureGalleryItem[]): readonly FixtureGalleryItem[] {
+  return [...items]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+    .slice(0, GALLERY_MAX_ITEMS);
+}
+
+function applyGalleryOverrides(
+  items: readonly FixtureGalleryItem[],
+  pages: readonly GalleryPage[],
+): readonly FixtureGalleryItem[] {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  for (const page of pages) {
+    for (const [itemId, override] of Object.entries(page.overrides ?? {})) {
+      if (override === null) itemsById.delete(itemId);
+      else itemsById.set(itemId, override);
+    }
+  }
+  return sortedGalleryItems([...itemsById.values()]);
+}
+
+/** Merges all loaded pages, de-duplicates API records, and maps cross-page jobs. */
+export function flattenGalleryPages(
+  data: { readonly pages: readonly GalleryPage[] } | undefined,
+): readonly FixtureGalleryItem[] {
+  if (data === undefined || data.pages.length === 0) return [];
+  const assetsById = new Map<string, AssetDto>();
+  const jobsById = new Map<string, JobDto>();
+  const offlineItems: FixtureGalleryItem[] = [];
+
+  for (const page of data.pages) {
+    if (page.offlineItems !== undefined) offlineItems.push(...page.offlineItems);
+    for (const asset of page.assets.items) {
+      const current = assetsById.get(asset.id);
+      if (current === undefined || asset.createdAt >= current.createdAt) assetsById.set(asset.id, asset);
+    }
+    for (const job of page.jobs.items) {
+      const current = jobsById.get(job.id);
+      if (current === undefined || job.updatedAt >= current.updatedAt) jobsById.set(job.id, job);
+    }
+  }
+
+  const mapped = offlineItems.length > 0
+    ? sortedGalleryItems(offlineItems)
+    : mapInternalGallery([...assetsById.values()], [...jobsById.values()]);
+  return applyGalleryOverrides(mapped, data.pages);
+}
+
+export function galleryItemsFromCache(value: unknown): readonly FixtureGalleryItem[] {
+  if (Array.isArray(value)) return value as readonly FixtureGalleryItem[];
+  return isGalleryInfiniteData(value) ? flattenGalleryPages(value) : [];
+}
+
+function sameGalleryPageParam(left: GalleryPageParam, right: GalleryPageParam): boolean {
+  return left.assetsCursor === right.assetsCursor && left.jobsCursor === right.jobsCursor;
+}
+
+export function getNextGalleryPageParam(
+  lastPage: GalleryPage,
+  allPages: readonly GalleryPage[],
+  lastPageParam: GalleryPageParam,
+  allPageParams: readonly GalleryPageParam[],
+): GalleryPageParam | undefined {
+  if (lastPage.nextPageParam === null || allPages.length >= GALLERY_MAX_PAGES) return undefined;
+  if (allPageParams.some((pageParam, index) => index < allPageParams.length - 1 &&
+    sameGalleryPageParam(pageParam, lastPage.nextPageParam!))) {
+    throw new Error('Internal API returned a repeated gallery pagination cursor.');
+  }
+  if (sameGalleryPageParam(lastPageParam, lastPage.nextPageParam)) {
+    throw new Error('Internal API returned a repeated gallery pagination cursor.');
+  }
+  if (flattenGalleryPages({ pages: allPages }).length >= GALLERY_MAX_ITEMS) return undefined;
+  return lastPage.nextPageParam;
 }
 
 const knownOperations = new Set<FixtureMediaOperation>([
@@ -276,11 +481,34 @@ export async function loadGalleryData(): Promise<readonly FixtureGalleryItem[]> 
 }
 
 export function useGalleryQuery() {
-  return useQuery({
+  const queryClient = useQueryClient();
+  const query = useInfiniteQuery<
+    GalleryPage,
+    Error,
+    readonly FixtureGalleryItem[],
+    typeof galleryQueryKey,
+    GalleryPageParam
+  >({
     queryKey: galleryQueryKey,
-    queryFn: () => loadGalleryData(),
+    queryFn: ({ pageParam }) => loadGalleryPage(pageParam),
+    initialPageParam: INITIAL_GALLERY_PAGE_PARAM,
+    getNextPageParam: getNextGalleryPageParam,
+    maxPages: GALLERY_MAX_PAGES,
     retry: false,
+    select: flattenGalleryPages,
   });
+
+  const items = query.data ?? [];
+  useEffect(() => {
+    if (query.status !== 'success' || isVisualFixtureMode()) return;
+    const cached = queryClient.getQueryData<unknown>(galleryQueryKey);
+    if (!isGalleryInfiniteData(cached) || cached.pages.some((page) => page.source === 'offline')) return;
+    void saveOfflineGallerySnapshot(items).catch(() => {
+      // A storage failure must not make rendered Gallery data unusable.
+    });
+  }, [items, query.status, queryClient]);
+
+  return query;
 }
 
 export async function loadInputAssetInventoryData(): Promise<readonly FixtureGalleryItem[]> {
@@ -327,15 +555,144 @@ function deriveFolders(items: readonly FixtureGalleryItem[]): readonly FixtureFo
   }));
 }
 
+function actionItemIds(action: GalleryCacheAction): readonly string[] {
+  return action.type === 'removeMany' ? [...new Set(action.itemIds)] : [action.itemId];
+}
+
+function updateFolderMembership(
+  folder: FixtureFolder,
+  nextItems: readonly FixtureGalleryItem[],
+  action: GalleryCacheAction,
+): FixtureFolder {
+  if (action.type !== 'toggleFolder' && action.type !== 'remove' && action.type !== 'removeMany') {
+    return folder;
+  }
+  const nextById = new Map(nextItems.map((item) => [item.id, item]));
+  const itemIds = [...folder.itemIds];
+  for (const itemId of actionItemIds(action)) {
+    const index = itemIds.indexOf(itemId);
+    const item = nextById.get(itemId);
+    const shouldInclude = action.type === 'toggleFolder'
+      ? item?.folderIds.includes(folder.id) === true
+      : action.type !== 'remove' && item !== undefined;
+    if (shouldInclude && index === -1) itemIds.push(itemId);
+    if (!shouldInclude && index !== -1) itemIds.splice(index, 1);
+  }
+  return { ...folder, itemIds };
+}
+
+function updateFolderResultItems(
+  folderId: string,
+  previousItems: readonly FixtureGalleryItem[],
+  nextItems: readonly FixtureGalleryItem[],
+  action: GalleryCacheAction,
+): readonly FixtureGalleryItem[] {
+  const changedIds = new Set(actionItemIds(action));
+  const nextById = new Map(nextItems.map((item) => [item.id, item]));
+  const result = previousItems.flatMap((item) => {
+    if (!changedIds.has(item.id)) return [item];
+    const next = nextById.get(item.id);
+    if (next === undefined && (action.type === 'remove' || action.type === 'removeMany')) return [];
+    if (action.type === 'toggleFolder' && next?.folderIds.includes(folderId) !== true) return [];
+    return [next ?? item];
+  });
+  if (action.type === 'toggleFolder') {
+    for (const itemId of changedIds) {
+      const next = nextById.get(itemId);
+      if (next?.folderIds.includes(folderId) && !result.some((item) => item.id === itemId)) {
+        result.push(next);
+      }
+    }
+  }
+  return sortedGalleryItems(result);
+}
+
+function applyProductionFolderCacheAction(
+  queryClient: QueryClient,
+  nextItems: readonly FixtureGalleryItem[],
+  action: GalleryCacheAction,
+): void {
+  const currentFolders = queryClient.getQueryData<readonly FixtureFolder[]>(foldersQueryKey);
+  if (currentFolders !== undefined) {
+    queryClient.setQueryData(
+      foldersQueryKey,
+      currentFolders.map((folder) => updateFolderMembership(folder, nextItems, action)),
+    );
+  }
+
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: foldersQueryKey })) {
+    if (query.queryKey.length <= foldersQueryKey.length) continue;
+    const folderId = query.queryKey[3];
+    if (typeof folderId !== 'string') continue;
+    const previous = query.state.data as FolderGalleryResult | undefined;
+    if (previous === undefined) continue;
+    const folderFromRoot = currentFolders?.find((folder) => folder.id === folderId);
+    const previousFolder = previous.folder ?? folderFromRoot ?? null;
+    const folder = previousFolder === null
+      ? null
+      : updateFolderMembership(previousFolder, nextItems, action);
+    queryClient.setQueryData<FolderGalleryResult>(query.queryKey, {
+      folder,
+      items: updateFolderResultItems(folderId, previous.items, nextItems, action),
+    });
+  }
+}
+
+function applyGalleryItemsPatch(
+  queryClient: QueryClient,
+  previousItems: readonly FixtureGalleryItem[],
+  nextItems: readonly FixtureGalleryItem[],
+  action: GalleryCacheAction,
+): void {
+  const cached = queryClient.getQueryData<unknown>(galleryQueryKey);
+  if (cached === undefined) return;
+  if (isGalleryInfiniteData(cached)) {
+    const previousById = new Map(previousItems.map((item) => [item.id, item]));
+    const nextById = new Map(nextItems.map((item) => [item.id, item]));
+    const changes = new Map<string, FixtureGalleryItem | null>();
+    for (const itemId of new Set([...previousById.keys(), ...nextById.keys()])) {
+      const previous = previousById.get(itemId);
+      const next = nextById.get(itemId);
+      if (next === undefined) changes.set(itemId, null);
+      else if (previous !== next) changes.set(itemId, next);
+    }
+    const [firstPage, ...restPages] = cached.pages;
+    const pages = firstPage === undefined
+      ? cached.pages
+      : [{
+          ...firstPage,
+          overrides: {
+            ...(firstPage.overrides ?? {}),
+            ...Object.fromEntries(changes),
+          },
+        }, ...restPages];
+    queryClient.setQueryData<GalleryInfiniteData>(galleryQueryKey, { ...cached, pages });
+  } else {
+    queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, nextItems);
+  }
+  if (isVisualFixtureMode()) {
+    const folders = deriveFolders(nextItems);
+    queryClient.setQueryData(foldersQueryKey, folders);
+    for (const folder of folders) {
+      queryClient.setQueryData<FolderGalleryResult>(folderQueryKey(folder.id), {
+        folder,
+        items: nextItems.filter((item) => item.folderIds.includes(folder.id)),
+      });
+    }
+  } else {
+    applyProductionFolderCacheAction(queryClient, nextItems, action);
+  }
+}
+
 export function useFoldersQuery() {
   const queryClient = useQueryClient();
   return useQuery({
     queryKey: foldersQueryKey,
     queryFn: async (): Promise<readonly FixtureFolder[]> => {
       if (isVisualFixtureMode()) {
+        const cachedItems = galleryItemsFromCache(queryClient.getQueryData<unknown>(galleryQueryKey));
         return deriveFolders(
-          queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ??
-            PR1_MOCK_GALLERY_ITEMS,
+          cachedItems.length > 0 ? cachedItems : PR1_MOCK_GALLERY_ITEMS,
         );
       }
       const collections = await collectPages((cursor) =>
@@ -363,9 +720,8 @@ export function useFolderQuery(folderId: string | undefined) {
     queryKey: folderQueryKey(folderId),
     queryFn: async (): Promise<FolderGalleryResult> => {
       if (visualFixtures) {
-        const items =
-          queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ??
-          PR1_MOCK_GALLERY_ITEMS;
+        const cachedItems = galleryItemsFromCache(queryClient.getQueryData<unknown>(galleryQueryKey));
+        const items = cachedItems.length > 0 ? cachedItems : PR1_MOCK_GALLERY_ITEMS;
         const folder = deriveFolders(items).find((candidate) => candidate.id === folderId) ?? null;
         return {
           folder,
@@ -471,19 +827,10 @@ export function applyGalleryCacheAction(
   queryClient: QueryClient,
   action: GalleryCacheAction,
 ): void {
-  let nextItems: readonly FixtureGalleryItem[] = [];
-  queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, (current = []) => {
-    nextItems = reduceGalleryItems(current, action);
-    return nextItems;
-  });
-  const folders = deriveFolders(nextItems);
-  queryClient.setQueryData(foldersQueryKey, folders);
-  for (const folder of folders) {
-    queryClient.setQueryData<FolderGalleryResult>(folderQueryKey(folder.id), {
-      folder,
-      items: nextItems.filter((item) => item.folderIds.includes(folder.id)),
-    });
-  }
+  const cached = queryClient.getQueryData<unknown>(galleryQueryKey);
+  const currentItems = galleryItemsFromCache(cached);
+  const nextItems = reduceGalleryItems(currentItems, action);
+  applyGalleryItemsPatch(queryClient, currentItems, nextItems, action);
 }
 
 function isPersistedAsset(item: FixtureGalleryItem): boolean {
@@ -502,12 +849,18 @@ export async function executeGalleryAction(
   items: readonly FixtureGalleryItem[],
 ): Promise<void> {
   if (action.type === 'removeMany') {
-    const uniqueIds = [...new Set(action.itemIds)];
-    await Promise.all(
-      uniqueIds.map((itemId) =>
-        executeGalleryAction({ type: 'remove', itemId }, items),
-      ),
-    );
+    const assetIds = new Set<string>();
+    const jobIds = new Set<string>();
+    for (const itemId of new Set(action.itemIds)) {
+      const item = itemForAction(items, itemId);
+      if (!item) continue;
+      if (isPersistedAsset(item)) assetIds.add(item.id);
+      else jobIds.add(item.jobId);
+    }
+    await Promise.all([
+      ...[...assetIds].map((assetId) => internalClient.deleteAsset(assetId)),
+      ...[...jobIds].map((jobId) => internalClient.deleteJob(jobId)),
+    ]);
     return;
   }
 
@@ -543,19 +896,175 @@ export async function executeGalleryAction(
   }
 }
 
-export function useGalleryActions() {
-  const queryClient = useQueryClient();
-  const visualFixtures = isVisualFixtureMode();
-  const mutation = useMutation<void, Error, GalleryCacheAction>({
+export interface GalleryMutationContext {
+  readonly previousGallery: unknown;
+  readonly previousFolderQueries: readonly {
+    readonly queryKey: QueryKey;
+    readonly queryHash: string;
+    readonly data: unknown;
+  }[];
+}
+
+export function snapshotGalleryMutationCache(queryClient: QueryClient): GalleryMutationContext {
+  return {
+    previousGallery: queryClient.getQueryData<unknown>(galleryQueryKey),
+    previousFolderQueries: queryClient.getQueryCache()
+      .findAll({ queryKey: foldersQueryKey })
+      .map((query) => ({ queryKey: query.queryKey, queryHash: query.queryHash, data: query.state.data })),
+  };
+}
+
+export function restoreGalleryMutationCache(
+  queryClient: QueryClient,
+  context: GalleryMutationContext | undefined,
+): void {
+  if (!context) return;
+  if (context.previousGallery !== undefined) {
+    queryClient.setQueryData(galleryQueryKey, context.previousGallery);
+  } else {
+    queryClient.removeQueries({ queryKey: galleryQueryKey, exact: true });
+  }
+  const previousFolderHashes = new Set(context.previousFolderQueries.map((entry) => entry.queryHash));
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: foldersQueryKey })) {
+    if (!previousFolderHashes.has(query.queryHash)) {
+      queryClient.removeQueries({ queryKey: query.queryKey, exact: true });
+    }
+  }
+  for (const entry of context.previousFolderQueries) {
+    if (entry.data === undefined) {
+      queryClient.removeQueries({ queryKey: entry.queryKey, exact: true });
+    } else {
+      queryClient.setQueryData(entry.queryKey, entry.data);
+    }
+  }
+}
+
+export interface GalleryMutationPatch {
+  readonly action: GalleryCacheAction;
+  readonly previousItems: readonly FixtureGalleryItem[];
+  readonly nextItems: readonly FixtureGalleryItem[];
+}
+
+interface GalleryMutationQueue {
+  base: GalleryMutationContext;
+  readonly pending: GalleryMutationPatch[];
+}
+
+const galleryMutationQueues = new WeakMap<QueryClient, GalleryMutationQueue>();
+const settledGalleryActions = new WeakMap<QueryClient, WeakSet<object>>();
+const pendingGalleryActionItems = new WeakMap<QueryClient, WeakMap<object, readonly FixtureGalleryItem[]>>();
+
+function pendingActionItemsFor(queryClient: QueryClient): WeakMap<object, readonly FixtureGalleryItem[]> {
+  const existing = pendingGalleryActionItems.get(queryClient);
+  if (existing !== undefined) return existing;
+  const created = new WeakMap<object, readonly FixtureGalleryItem[]>();
+  pendingGalleryActionItems.set(queryClient, created);
+  return created;
+}
+
+function mutationQueueFor(queryClient: QueryClient): GalleryMutationQueue {
+  const existing = galleryMutationQueues.get(queryClient);
+  if (existing !== undefined) return existing;
+  const created: GalleryMutationQueue = {
+    base: snapshotGalleryMutationCache(queryClient),
+    pending: [],
+  };
+  galleryMutationQueues.set(queryClient, created);
+  return created;
+}
+
+function markGalleryActionSettled(queryClient: QueryClient, action: GalleryCacheAction): boolean {
+  let settled = settledGalleryActions.get(queryClient);
+  if (settled === undefined) {
+    settled = new WeakSet<object>();
+    settledGalleryActions.set(queryClient, settled);
+  }
+  if (settled.has(action)) return false;
+  settled.add(action);
+  return true;
+}
+
+export function replayGalleryMutationPatches(
+  queryClient: QueryClient,
+  base: GalleryMutationContext,
+  patches: readonly GalleryMutationPatch[],
+): void {
+  restoreGalleryMutationCache(queryClient, base);
+  for (const pending of patches) {
+    applyGalleryItemsPatch(queryClient, pending.previousItems, pending.nextItems, pending.action);
+  }
+}
+
+function rebuildPendingGalleryActions(queryClient: QueryClient, queue: GalleryMutationQueue): void {
+  replayGalleryMutationPatches(queryClient, queue.base, queue.pending);
+}
+
+function settleGalleryAction(
+  queryClient: QueryClient,
+  action: GalleryCacheAction,
+  succeeded: boolean,
+): void {
+  const queue = galleryMutationQueues.get(queryClient);
+  if (queue === undefined) return;
+  const index = queue.pending.findIndex((pending) => pending.action === action);
+  if (index === -1) return;
+  const [pending] = queue.pending.splice(index, 1);
+  if (pending === undefined) return;
+  if (succeeded) {
+    restoreGalleryMutationCache(queryClient, queue.base);
+    applyGalleryItemsPatch(queryClient, pending.previousItems, pending.nextItems, pending.action);
+    queue.base = snapshotGalleryMutationCache(queryClient);
+  }
+  if (queue.pending.length === 0) {
+    if (!succeeded) restoreGalleryMutationCache(queryClient, queue.base);
+    galleryMutationQueues.delete(queryClient);
+    return;
+  }
+  rebuildPendingGalleryActions(queryClient, queue);
+}
+
+export function createGalleryActionMutationOptions(
+  queryClient: QueryClient,
+  visualFixtures = isVisualFixtureMode(),
+): MutationObserverOptions<void, Error, GalleryCacheAction, GalleryMutationContext> {
+  const pendingActionItems = pendingActionItemsFor(queryClient);
+  return {
+    scope: { id: 'gallery-actions' },
     mutationFn: async (action) => {
       if (visualFixtures) return;
-      const items = queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ?? [];
+      const items = pendingActionItems.get(action) ??
+        galleryItemsFromCache(queryClient.getQueryData<unknown>(galleryQueryKey));
+      pendingActionItems.delete(action);
       await executeGalleryAction(action, items);
     },
-    onMutate: (action) => {
-      if (visualFixtures) applyGalleryCacheAction(queryClient, action);
+    onMutate: async (action) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: galleryQueryKey }),
+        queryClient.cancelQueries({ queryKey: foldersQueryKey }),
+      ]);
+      const context = snapshotGalleryMutationCache(queryClient);
+      const previousItems = galleryItemsFromCache(context.previousGallery);
+      const nextItems = reduceGalleryItems(previousItems, action);
+      const queue = mutationQueueFor(queryClient);
+      if (queue.pending.length === 0) queue.base = context;
+      queue.pending.push({ action, previousItems, nextItems });
+      pendingActionItems.set(action, previousItems);
+      if (context.previousGallery !== undefined) {
+        applyGalleryItemsPatch(queryClient, previousItems, nextItems, action);
+      }
+      return context;
     },
-    onSuccess: async () => {
+    onError: (_error, action, _context) => {
+      pendingActionItems.delete(action);
+      if (markGalleryActionSettled(queryClient, action)) {
+        settleGalleryAction(queryClient, action, false);
+      }
+    },
+    onSettled: async (_data, error, action) => {
+      pendingActionItems.delete(action);
+      if (markGalleryActionSettled(queryClient, action)) {
+        settleGalleryAction(queryClient, action, error === null);
+      }
       if (visualFixtures) return;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: internalQueryKeys.assets }),
@@ -563,8 +1072,15 @@ export function useGalleryActions() {
         queryClient.invalidateQueries({ queryKey: internalQueryKeys.collections }),
         queryClient.invalidateQueries({ queryKey: galleryQueryKey }),
       ]);
+      const queue = galleryMutationQueues.get(queryClient);
+      if (queue !== undefined) rebuildPendingGalleryActions(queryClient, queue);
     },
-  });
+  };
+}
+
+export function useGalleryActions() {
+  const queryClient = useQueryClient();
+  const mutation = useMutation(createGalleryActionMutationOptions(queryClient));
   const apply = useCallback((action: GalleryCacheAction) => mutation.mutate(action), [mutation]);
 
   return {
@@ -722,17 +1238,32 @@ export async function applyOptimisticSubmission(
   input: MockSubmission,
 ): Promise<MockSubmissionContext> {
   await queryClient.cancelQueries({ queryKey: galleryQueryKey });
-  const previousItems =
-    queryClient.getQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey) ??
-    PR1_MOCK_GALLERY_ITEMS;
+  const cached = queryClient.getQueryData<unknown>(galleryQueryKey);
+  const cachedItems = galleryItemsFromCache(cached);
+  const previousItems = cachedItems.length > 0 ? cachedItems : PR1_MOCK_GALLERY_ITEMS;
   const previousSequence = queryClient.getQueryData<number>(optimisticSequenceQueryKey) ?? 0;
   const sequence = Math.max(previousSequence + 1, nextOptimisticSequence(previousItems));
   queryClient.setQueryData(optimisticSequenceQueryKey, sequence);
   const optimisticItems = createMockSubmissionItems(input, sequence);
-  queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, [
-    ...optimisticItems,
-    ...previousItems,
-  ]);
+  if (isGalleryInfiniteData(cached)) {
+    const [firstPage, ...restPages] = cached.pages;
+    if (firstPage === undefined) {
+      queryClient.setQueryData<GalleryInfiniteData>(galleryQueryKey, cached);
+    } else {
+      const overrides = Object.fromEntries(
+        optimisticItems.map((item) => [item.id, item]),
+      );
+      queryClient.setQueryData<GalleryInfiniteData>(galleryQueryKey, {
+        ...cached,
+        pages: [{ ...firstPage, overrides: { ...(firstPage.overrides ?? {}), ...overrides } }, ...restPages],
+      });
+    }
+  } else {
+    queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, [
+      ...optimisticItems,
+      ...previousItems,
+    ]);
+  }
   return { previousItems, optimisticItems };
 }
 
@@ -742,6 +1273,23 @@ export function rollbackOptimisticSubmission(
 ): void {
   if (!context) return;
   const optimisticIds = new Set(context.optimisticItems.map((item) => item.id));
+  const cached = queryClient.getQueryData<unknown>(galleryQueryKey);
+  if (isGalleryInfiniteData(cached)) {
+    const [firstPage, ...restPages] = cached.pages;
+    if (firstPage !== undefined) {
+      queryClient.setQueryData<GalleryInfiniteData>(galleryQueryKey, {
+        ...cached,
+        pages: [{
+          ...firstPage,
+          overrides: {
+            ...(firstPage.overrides ?? {}),
+            ...Object.fromEntries([...optimisticIds].map((itemId) => [itemId, null])),
+          },
+        }, ...restPages],
+      });
+    }
+    return;
+  }
   queryClient.setQueryData<readonly FixtureGalleryItem[]>(galleryQueryKey, (current) =>
     current === undefined
       ? context.previousItems
