@@ -51,6 +51,8 @@ import {
   MAX_ADAPTER_RESPONSE_BYTES,
   CustomAdapterExtractedResponseSchema,
   CustomAdapterSimulationResultSchema,
+  MaintenanceIntegrityResponseSchema,
+  MaintenanceBackupResponseSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
@@ -99,6 +101,43 @@ describe('internal API schemas', () => {
     });
     expect(AuthLoginSchema.safeParse({ password: '' }).success).toBe(false);
     expect(AuthLoginSchema.safeParse({ password: 'x', remember: true }).success).toBe(false);
+  });
+
+  it('keeps maintenance responses bounded to safe flags, counts, and backup metadata', () => {
+    const integrity = {
+      integrity: {
+        foreignKeyCheck: { ok: false, truncated: true, violationCount: 2 },
+        foreignKeysEnabled: true,
+        integrityCheck: { errorCount: 1, ok: false, truncated: false },
+        ok: false,
+      },
+    };
+    expect(MaintenanceIntegrityResponseSchema.parse(integrity)).toEqual(integrity);
+    expect(MaintenanceIntegrityResponseSchema.safeParse({
+      ...integrity,
+      integrity: { ...integrity.integrity, violations: [] },
+    }).success).toBe(false);
+    expect(MaintenanceIntegrityResponseSchema.safeParse({
+      integrity: { ...integrity.integrity, foreignKeyCheck: { ok: true, truncated: false, violationCount: -1 } },
+    }).success).toBe(false);
+
+    const backup = {
+      backup: {
+        createdAt: '2026-08-29T00:00:00.000Z',
+        id: 'backup-1',
+        sha256: 'a'.repeat(64),
+        size: 8192,
+      },
+    };
+    expect(MaintenanceBackupResponseSchema.parse(backup)).toEqual(backup);
+    expect(MaintenanceBackupResponseSchema.safeParse({
+      ...backup,
+      backup: { ...backup.backup, path: '/data/app.db', filename: 'app.db' },
+    }).success).toBe(false);
+    expect(MaintenanceBackupResponseSchema.safeParse({
+      ...backup,
+      backup: { ...backup.backup, createdAt: 'not-a-timestamp' },
+    }).success).toBe(false);
   });
 
   it('keeps Provider DTOs strict and secret-free', () => {

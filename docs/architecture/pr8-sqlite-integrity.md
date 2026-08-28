@@ -2,10 +2,9 @@
 
 Status: **Local acceptance passed; remote acceptance pending.**
 
-This is the second PR 8 milestone. It establishes immutable migration history
-and a bounded SQLite integrity-checking core. It does not yet expose a browser
-maintenance API, create online backups, archive media, or repair consistency
-issues.
+These PR 8 milestones establish immutable migration history, a bounded SQLite
+integrity-checking core, and the database-only maintenance boundary. They do
+not archive media, restore data, or repair consistency issues.
 
 ## Migration release manifest
 
@@ -63,17 +62,63 @@ The overall result is unhealthy when:
 - foreign-key enforcement is disabled; or
 - a pragma returns an unexpected shape.
 
-The maintenance API and backup service will decide which subset of this core
-report is safe to expose to the browser.
+The maintenance API exposes only the health flags and counts from this core;
+it does not expose SQLite messages, SQL, table names, row IDs, or row contents.
+The online backup endpoint uses the live SQLite backup API, verifies the
+read-only snapshot with this core, and publishes only database metadata. Media
+files are outside this milestone.
+
+## Database-only maintenance boundary
+
+- `GET /internal/maintenance/integrity` and
+  `POST /internal/maintenance/backups` require a configured and authenticated
+  application administrator. When `APP_PASSWORD` is absent, both fail closed.
+- Requests cannot supply a path, filename, destination, key, or other option.
+  Responses contain only bounded health counts/flags or backup
+  `id/size/sha256/createdAt` metadata.
+- The backup service uses SQLite's Online Backup API against the live WAL
+  database. It never copies `app.db`, `app.db-wal`, or `app.db-shm` directly.
+- A random hidden staging file is created with `0600` permissions inside a
+  checked `0700` staging directory. The completed snapshot passes read-only
+  integrity and foreign-key checks before its final hash is calculated.
+- Final publication uses a same-filesystem hard link, which fails rather than
+  replacing an existing ID. The staging link is then removed and both parent
+  directories are synchronized.
+- Symlink traversal, non-canonical paths, relaxed directory modes, collisions,
+  concurrent backups, partial results, and raw filesystem/SQLite errors fail
+  closed. Cleanup failure is explicit rather than silently claiming success.
+- Server shutdown stops new backups and waits for the active backup before
+  closing SQLite.
+
+The snapshot is sensitive: it contains application records and encrypted
+Provider credential ciphertext. It does not contain `APP_SECRET`,
+`APP_PASSWORD`, media files, Trusted Adapter source files, logs, temporary
+files, or PWA/browser data.
+No download or restore endpoint is exposed in this milestone.
+
+## Remote evidence
+
+The SQLite milestone commit `c0fa70f` passed the recorded GitHub Actions run
+`33183142103`. The maintenance API and online backup changes are locally
+verified and await their remote acceptance run.
 
 ## Local evidence
 
 - The committed migration manifest hashes were recomputed and matched.
-- Full workspace unit suite: 111 test files / 960 tests passed.
+- Full workspace unit suite: 113 test files / 982 tests passed.
 - Workspace lint, typecheck, and production build passed.
 - E2E TypeScript compilation and `git diff --check` passed.
+- The isolated Docker image build and full `docker-smoke.sh` passed with a
+  task-owned Compose project: exactly one `imagine-media` service, one port,
+  and one `/data` volume. The authenticated smoke created an online SQLite
+  backup, verified its `0600` regular-file mode, response hash/size, read-only
+  `integrity_check`/empty foreign-key check, and persisted Job/Asset records;
+  after container restart the same backup remained present and readable.
 - Regression tests cover new and legacy stores, one-time backfill/reopen,
   manifest absence/drift/shape, missing and inserted migrations, duplicate
   sequences, failed DDL rollback, checksum/state corruption, protected-trigger
   loss, protected-table recreation, forged history, bounded integrity results,
-  foreign-key violations, disabled enforcement, and malformed pragma output.
+  foreign-key violations, disabled enforcement, malformed pragma output, live
+  WAL backup, permissions, path/symlink rejection, collision/no-overwrite,
+  staging/sidecar cleanup, injected filesystem failures, administrator and
+  same-origin enforcement, strict request/response DTOs, and shutdown ordering.

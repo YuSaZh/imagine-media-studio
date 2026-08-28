@@ -97,6 +97,43 @@ describe('internalClient', () => {
     }
   });
 
+  it('calls the maintenance integrity and database-only backup endpoints with empty inputs', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        integrity: {
+          foreignKeyCheck: { ok: true, truncated: false, violationCount: 0 },
+          foreignKeysEnabled: true,
+          integrityCheck: { errorCount: 0, ok: true, truncated: false },
+          ok: true,
+        },
+      }), { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        backup: {
+          createdAt: '2026-08-29T00:00:00.000Z',
+          id: 'backup-client-test',
+          sha256: 'a'.repeat(64),
+          size: 8192,
+        },
+      }), { headers: { 'Content-Type': 'application/json' }, status: 201 }));
+
+    await expect(internalClient.getDatabaseIntegrity()).resolves.toMatchObject({
+      integrity: { ok: true, foreignKeysEnabled: true },
+    });
+    await expect(internalClient.createDatabaseBackup()).resolves.toMatchObject({
+      backup: { id: 'backup-client-test', size: 8192 },
+    });
+
+    expect(fetchMock.mock.calls[0]).toEqual([
+      '/internal/maintenance/integrity',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    ]);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      '/internal/maintenance/backups',
+      expect.objectContaining({ credentials: 'same-origin', method: 'POST' }),
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty('body');
+  });
+
   it('fans remote login and logout boundaries out to auth/query observers', async () => {
     const storageValues = new Map<string, string>();
     vi.stubGlobal('localStorage', {

@@ -34,6 +34,8 @@ import {
   JobPageSchema,
   JobResponseSchema,
   JobRetryResponseSchema,
+  MaintenanceBackupResponseSchema,
+  MaintenanceIntegrityResponseSchema,
   ManualModelCreateSchema,
   ManualModelPatchSchema,
   ModelPageSchema,
@@ -687,6 +689,12 @@ export const internalClient = {
     requestJson('/internal/settings', SettingsResponseSchema, {
       method: 'PATCH',
       body: jsonBody({ values }),
+    }),
+  getDatabaseIntegrity: async () =>
+    requestJson('/internal/maintenance/integrity', MaintenanceIntegrityResponseSchema),
+  createDatabaseBackup: async () =>
+    requestJson('/internal/maintenance/backups', MaintenanceBackupResponseSchema, {
+      method: 'POST',
     }),
   listProviders: async (options: { cursor?: string; enabled?: boolean; limit?: number; type?: string } = {}) =>
     requestJson(`/internal/providers${queryString(options)}`, ProviderPageSchema),

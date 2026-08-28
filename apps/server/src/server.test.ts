@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockGenerationRequest } from '@imagine/testkit';
 import type { CustomAdapterRef } from '@imagine/shared';
+import Database from 'better-sqlite3';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -1051,6 +1052,123 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(crossSite.statusCode).toBe(403);
     expect(basic.statusCode).toBe(204);
     expect(sameOrigin.statusCode).toBe(204);
+  });
+
+  it('protects database maintenance and publishes a readable database-only backup', async () => {
+    const publicServer = await createTestServer(false, true, false, null);
+    const publicIntegrity = await publicServer.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/integrity',
+    });
+    const publicBackup = await publicServer.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/backups',
+    });
+    expect(publicIntegrity.statusCode).toBe(403);
+    expect(publicBackup.statusCode).toBe(403);
+
+    const server = await createTestServer(false, true, false, 'test-password');
+    const dataDir = temporaryDirectories.at(-1)!;
+    const unauthenticated = await server.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/integrity',
+    });
+    const adminHeaders = {
+      authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}`,
+    };
+    const integrity = await server.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/integrity',
+      headers: adminHeaders,
+    });
+    const backup = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/backups',
+      headers: adminHeaders,
+    });
+    const body = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/backups',
+      headers: adminHeaders,
+      payload: {},
+    });
+    const query = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/backups?filename=app.db',
+      headers: adminHeaders,
+    });
+    const crossOrigin = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/backups',
+      headers: { ...adminHeaders, host: 'studio.local', origin: 'http://evil.example' },
+    });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(unauthenticated.headers['www-authenticate']).toContain('Basic');
+    expect(integrity.statusCode).toBe(200);
+    expect(integrity.headers['cache-control']).toContain('no-store');
+    expect(integrity.json()).toMatchObject({
+      integrity: {
+        foreignKeyCheck: { ok: true, violationCount: 0 },
+        foreignKeysEnabled: true,
+        integrityCheck: { errorCount: 0, ok: true },
+        ok: true,
+      },
+    });
+    expect(integrity.body).not.toContain('schema_migrations');
+    expect(backup.statusCode).toBe(201);
+    expect(backup.headers['cache-control']).toContain('no-store');
+    const backupBody = backup.json<{ backup: { id: string; size: number; sha256: string; createdAt: string } }>();
+    expect(backupBody.backup).toEqual({
+      createdAt: expect.any(String),
+      id: expect.any(String),
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      size: expect.any(Number),
+    });
+    expect(backup.body).not.toContain('path');
+    expect(backup.body).not.toContain('filename');
+    expect(backup.body).not.toContain(dataDir);
+    const backupPath = resolve(dataDir, 'backups', `${backupBody.backup.id}.db`);
+    const backupStats = await lstat(backupPath);
+    expect(backupStats.mode & 0o777).toBe(0o600);
+    const snapshot = new Database(backupPath, { fileMustExist: true, readonly: true });
+    try {
+      snapshot.pragma('foreign_keys = ON');
+      expect(snapshot.pragma('foreign_keys', { simple: true })).toBe(1);
+      expect(snapshot.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(snapshot.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 7 });
+    } finally {
+      snapshot.close();
+    }
+    expect(body.statusCode).toBe(400);
+    expect(query.statusCode).toBe(400);
+    expect(crossOrigin.statusCode).toBe(403);
+  });
+
+  it('waits for an active database backup before closing SQLite', async () => {
+    const server = await createTestServer(false, true, false, 'test-password');
+    const sqlite = (server.databaseBackup as unknown as { readonly sqlite: Database.Database }).sqlite;
+    let release!: () => void;
+    const released = new Promise<void>((resolveRelease) => { release = resolveRelease; });
+    let started!: () => void;
+    const backupStarted = new Promise<void>((resolveStarted) => { started = resolveStarted; });
+    const realBackup = sqlite.backup.bind(sqlite);
+    vi.spyOn(sqlite, 'backup').mockImplementation(async (destination, options) => {
+      started();
+      await released;
+      return realBackup(destination, options);
+    });
+
+    const active = server.databaseBackup.create();
+    await backupStarted;
+    let closed = false;
+    const closing = server.app.close().then(() => { closed = true; });
+    expect(closed).toBe(false);
+    release();
+    await active;
+    await closing;
+    expect(closed).toBe(true);
+    servers.splice(servers.indexOf(server), 1);
   });
 
   it('wires custom adapter definitions, scoped HTTP, and the worker runtime', async () => {

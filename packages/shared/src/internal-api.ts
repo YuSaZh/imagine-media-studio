@@ -87,6 +87,48 @@ export const AuthLoginSchema = z.object({
 export type AuthStatus = z.infer<typeof AuthStatusSchema>;
 export type AuthLogin = z.infer<typeof AuthLoginSchema>;
 
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+export const MaintenanceIntegrityCheckSchema = z.object({
+  errorCount: z.number().int().nonnegative(),
+  ok: z.boolean(),
+  truncated: z.boolean(),
+}).strict();
+export const MaintenanceForeignKeyCheckSchema = z.object({
+  ok: z.boolean(),
+  truncated: z.boolean(),
+  violationCount: z.number().int().nonnegative(),
+}).strict();
+export const MaintenanceIntegrityDtoSchema = z.object({
+  foreignKeyCheck: MaintenanceForeignKeyCheckSchema,
+  foreignKeysEnabled: z.boolean(),
+  integrityCheck: MaintenanceIntegrityCheckSchema,
+  ok: z.boolean(),
+}).strict();
+export const MaintenanceIntegrityResponseSchema = z.object({
+  integrity: MaintenanceIntegrityDtoSchema,
+}).strict();
+export type MaintenanceIntegrityDto = z.infer<typeof MaintenanceIntegrityDtoSchema>;
+export type MaintenanceIntegrityResponse = z.infer<typeof MaintenanceIntegrityResponseSchema>;
+
+export const MaintenanceBackupDtoSchema = z.object({
+  createdAt: IsoTimestampSchema,
+  id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
+  sha256: Sha256Schema,
+  size: z.number().int().positive(),
+}).strict();
+export const MaintenanceBackupResponseSchema = z.object({
+  backup: MaintenanceBackupDtoSchema,
+}).strict();
+export type MaintenanceBackupDto = z.infer<typeof MaintenanceBackupDtoSchema>;
+export type MaintenanceBackupResponse = z.infer<typeof MaintenanceBackupResponseSchema>;
+
+// Stable aliases for server-side callers that describe the same wire DTOs as
+// database maintenance responses.
+export const DatabaseIntegrityResponseSchema = MaintenanceIntegrityResponseSchema;
+export const DatabaseBackupResponseSchema = MaintenanceBackupResponseSchema;
+export const DatabaseBackupDtoSchema = MaintenanceBackupDtoSchema;
+
 export const CursorPageQuerySchema = z.object({
   cursor: z.string().min(1).max(2048).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),

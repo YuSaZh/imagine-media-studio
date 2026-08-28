@@ -25,6 +25,7 @@ import { OutboxPublisher } from './events/outbox-publisher.js';
 import { JobRunner } from './jobs/job-runner.js';
 import { GenerationInputResolver } from './jobs/generation-input-resolver.js';
 import { createSqliteRunnerOptions } from './jobs/sqlite-adapters.js';
+import { DatabaseBackup } from './maintenance/database-backup.js';
 import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adapter.js';
 import { AssetMediaService } from './media/asset-media-service.js';
 import { SharpImageProcessor } from './media/image-processor.js';
@@ -48,6 +49,10 @@ import {
 } from './routes/error.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerResourceRoutes } from './routes/resources.js';
+import {
+  MaintenanceUnauthenticatedError,
+  registerMaintenanceRoutes,
+} from './routes/maintenance.js';
 import { NetworkPolicy } from './security/network-policy.js';
 import { RemoteMediaDownloader } from './security/remote-download.js';
 import { SafeHttpTransport } from './security/safe-http-transport.js';
@@ -91,6 +96,7 @@ export type TrustedAdapterServiceManagement = Pick<
 
 export interface ImagineServer {
   app: FastifyInstance;
+  databaseBackup: DatabaseBackup;
   adapterDefinitions: ProviderAdapterDefinitionRepository;
   adapterStore: AdapterStoreManagement;
   customAdapterService: CustomAdapterServiceManagement;
@@ -164,6 +170,7 @@ async function closeInOrder(
 
 interface ResourceLedger {
   database?: DatabaseClient;
+  databaseBackup?: DatabaseBackup;
   adapterStore?: AdapterStore;
   adapterWorkerHost?: AdapterWorkerHost;
   trustedAdapterService?: TrustedAdapterService;
@@ -183,6 +190,9 @@ function closeCreatedResources(ledger: ResourceLedger): Promise<void> {
     steps.push(() => ledger.adapterStore!.close());
   }
   if (ledger.database !== undefined) {
+    if (ledger.databaseBackup !== undefined) {
+      steps.push(() => ledger.databaseBackup!.close());
+    }
     const database = ledger.database;
     steps.push(() => {
       if (!ledger.databaseClosed) {
@@ -264,6 +274,8 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
 
     const database = createDatabase(storage.database, options.migrationsDirectory);
     ledger.database = database;
+  const databaseBackup = new DatabaseBackup({ paths: storage, sqlite: database.sqlite });
+  ledger.databaseBackup = databaseBackup;
   const jobs = new JobRepository(database.orm);
   const assets = new AssetRepository(database.orm);
   const settings = new SettingsRepository(database.orm);
@@ -495,6 +507,18 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     }
     outbox.flush();
     await registerAuthRoutes(app, passwordAuth);
+    await registerMaintenanceRoutes(app, {
+      authorization: {
+        adminEnabled: passwordAuth.required,
+        assertAdmin: (request) => {
+          if (!passwordAuth.authenticated(request)) {
+            throw new MaintenanceUnauthenticatedError();
+          }
+        },
+      },
+      backup: databaseBackup,
+      sqlite: database.sqlite,
+    });
     await registerAdapterRoutes(app, {
       custom: customAdapterService,
       trusted: trustedAdapterService,
@@ -551,6 +575,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
 
     return {
       app,
+      databaseBackup,
       adapterDefinitions,
       adapterStore,
       customAdapterService,

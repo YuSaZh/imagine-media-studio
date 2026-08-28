@@ -43,7 +43,7 @@ NODE
 
 compose up --detach --wait --wait-timeout 120
 
-IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id edit_asset_id < <(
+IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id edit_asset_id backup_id backup_sha256 < <(
   BASE_URL="$base_url" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 
@@ -256,8 +256,36 @@ assert.equal(membership.collection.itemCount, 1);
 const withCollection = await json(`/internal/assets/${encodeURIComponent(asset.id)}`);
 assert.ok(withCollection.asset.collectionIds.includes(collectionId));
 
+const integrityResponse = await request('/internal/maintenance/integrity');
+const integrityText = await integrityResponse.text();
+assert.equal(/schema_migrations|\/data|app\.db|path|filename/i.test(integrityText), false);
+assert.equal(integrityText.includes(process.env.APP_PASSWORD ?? ''), false);
+const integrity = JSON.parse(integrityText);
+assert.equal(integrity.integrity?.ok, true);
+assert.equal(integrity.integrity?.foreignKeyCheck?.ok, true);
+assert.equal(integrity.integrity?.integrityCheck?.ok, true);
+
+const backupResponse = await request('/internal/maintenance/backups', { method: 'POST' }, 201);
+const backupText = await backupResponse.text();
+assert.equal(/\/data|app\.db|path|filename/i.test(backupText), false);
+assert.equal(backupText.includes(process.env.APP_PASSWORD ?? ''), false);
+const backupEnvelope = JSON.parse(backupText);
+assert.deepEqual(Object.keys(backupEnvelope).sort(), ['backup']);
+assert.deepEqual(Object.keys(backupEnvelope.backup ?? {}).sort(), [
+  'createdAt',
+  'id',
+  'sha256',
+  'size',
+]);
+const backup = backupEnvelope.backup;
+assert.match(backup.id, /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+assert.equal(Number.isSafeInteger(backup.size), true);
+assert.ok(backup.size > 0);
+assert.match(backup.sha256, /^[a-f0-9]{64}$/);
+assert.match(backup.createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
 process.stdout.write(
-  `${jobId}\t${asset.id}\t${collectionId}\t${source.id}\t${mask.id}\t${editJobId}\t${editAsset.id}\n`,
+  `${jobId}\t${asset.id}\t${collectionId}\t${source.id}\t${mask.id}\t${editJobId}\t${editAsset.id}\t${backup.id}\t${backup.sha256}\n`,
 );
 NODE
 )
@@ -269,6 +297,8 @@ test -n "$source_id"
 test -n "$mask_id"
 test -n "$edit_job_id"
 test -n "$edit_asset_id"
+test -n "$backup_id"
+test -n "$backup_sha256"
 test -s "$DATA_HOST_DIR/app.db"
 test -n "$(find "$DATA_HOST_DIR/media/originals" -maxdepth 1 -type f -print -quit)"
 test "$(find "$DATA_HOST_DIR/media/masks" -maxdepth 1 -type f | wc -l | tr -d ' ')" = "1"
@@ -384,11 +414,13 @@ test -n "$(find "$DATA_HOST_DIR/media/posters" -maxdepth 1 -type f -print -quit)
 JOB_ID="$job_id" ASSET_ID="$asset_id" COLLECTION_ID="$collection_id" \
 SOURCE_ID="$source_id" MASK_ID="$mask_id" EDIT_JOB_ID="$edit_job_id" \
 EDIT_ASSET_ID="$edit_asset_id" VIDEO_JOB_ID="$video_job_id" VIDEO_ASSET_ID="$video_asset_id" \
+BACKUP_ID="$backup_id" BACKUP_SHA256="$backup_sha256" \
   compose exec --no-TTY \
   -e JOB_ID -e ASSET_ID -e COLLECTION_ID -e SOURCE_ID -e MASK_ID -e EDIT_JOB_ID \
-  -e EDIT_ASSET_ID -e VIDEO_JOB_ID -e VIDEO_ASSET_ID imagine-media node --input-type=module <<'NODE'
+  -e EDIT_ASSET_ID -e VIDEO_JOB_ID -e VIDEO_ASSET_ID -e BACKUP_ID -e BACKUP_SHA256 \
+  imagine-media node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
@@ -398,6 +430,12 @@ const migrations = database
   .prepare('SELECT version FROM schema_migrations ORDER BY version')
   .all()
   .map((row) => row.version);
+const migrationChecksums = database
+  .prepare('SELECT checksum_sha256 AS checksum FROM schema_migrations ORDER BY version')
+  .all();
+const migrationLock = database
+  .prepare('SELECT checksums_locked_at AS lockedAt FROM schema_migration_integrity WHERE id = 1')
+  .get();
 const job = database
   .prepare('SELECT status, submit_attempt AS submitAttempt FROM jobs WHERE id = ?')
   .get(process.env.JOB_ID);
@@ -442,6 +480,18 @@ database.close();
 
 if (!migrations.includes('0000_pr0.sql') || !migrations.includes('0001_pr2_core.sql')) {
   throw new Error(`Expected both PR 0 and PR 2 migrations, received ${migrations.join(', ')}`);
+}
+if (!migrations.includes('0006_pr8_migration_checksums.sql')) {
+  throw new Error('Expected the PR 8 migration checksum migration.');
+}
+if (
+  migrationChecksums.length === 0 ||
+  migrationChecksums.some((row) => typeof row.checksum !== 'string' || !/^[a-f0-9]{64}$/.test(row.checksum))
+) {
+  throw new Error('Every applied migration must have a non-null SHA-256 checksum.');
+}
+if (migrationLock?.lockedAt === null || migrationLock?.lockedAt === undefined) {
+  throw new Error('Migration checksum lock was not persisted.');
 }
 if (job?.status !== 'completed' || job.submitAttempt !== 1) {
   throw new Error('Mock Job state or submit attempt was not persisted correctly.');
@@ -527,6 +577,34 @@ if (asset.mimeType !== 'image/png' || asset.fileSize !== bytes.length) {
 }
 if (asset.sha256 !== createHash('sha256').update(bytes).digest('hex')) {
   throw new Error('Mock asset checksum does not match the persisted file.');
+}
+
+const backupId = process.env.BACKUP_ID;
+const backupSha256 = process.env.BACKUP_SHA256;
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(backupId ?? '') || !/^[a-f0-9]{64}$/.test(backupSha256 ?? '')) {
+  throw new Error('The maintenance backup identifiers were not valid.');
+}
+const backupPath = `/data/backups/${backupId}.db`;
+const backupStats = await stat(backupPath);
+if (!backupStats.isFile() || (backupStats.mode & 0o777) !== 0o600) {
+  throw new Error('The database backup must be a regular mode 0600 file.');
+}
+const backupBytes = await readFile(backupPath);
+if (backupBytes.length !== backupStats.size || createHash('sha256').update(backupBytes).digest('hex') !== backupSha256) {
+  throw new Error('The database backup checksum or size did not match its response metadata.');
+}
+const backupDatabase = new Database(backupPath, { readonly: true, fileMustExist: true });
+backupDatabase.pragma('foreign_keys = ON');
+const backupIntegrity = backupDatabase.prepare('PRAGMA integrity_check').get();
+const backupForeignKeys = backupDatabase.prepare('PRAGMA foreign_key_check').all();
+const backupJob = backupDatabase.prepare('SELECT 1 AS present FROM jobs WHERE id = ?').get(process.env.JOB_ID);
+const backupAsset = backupDatabase.prepare('SELECT 1 AS present FROM assets WHERE id = ?').get(process.env.ASSET_ID);
+backupDatabase.close();
+if (backupIntegrity?.integrity_check !== 'ok' || backupForeignKeys.length !== 0) {
+  throw new Error('The database backup failed SQLite integrity or foreign-key validation.');
+}
+if (!backupJob?.present || !backupAsset?.present) {
+  throw new Error('The database backup did not contain the existing Job and Asset.');
 }
 NODE
 
@@ -1232,12 +1310,16 @@ compose up --detach --wait --wait-timeout 120
 CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
 CUSTOM_ADAPTER_ID="$custom_adapter_id" CUSTOM_V2="$custom_v2" CUSTOM_DIGEST_V2="$custom_digest_v2" \
 TRUSTED_ADAPTER_ID="$trusted_adapter_id" TRUSTED_VERSION="$trusted_version" TRUSTED_DIGEST="$trusted_digest" \
+BACKUP_ID="$backup_id" BACKUP_SHA256="$backup_sha256" \
 CUSTOM_SECRET='pr6-custom-http-static-secret' \
   compose exec --no-TTY \
   -e CUSTOM_PROVIDER_ID -e CUSTOM_JOB_ID -e CUSTOM_ADAPTER_ID -e CUSTOM_V2 -e CUSTOM_DIGEST_V2 \
-  -e TRUSTED_ADAPTER_ID -e TRUSTED_VERSION -e TRUSTED_DIGEST -e CUSTOM_SECRET \
+  -e TRUSTED_ADAPTER_ID -e TRUSTED_VERSION -e TRUSTED_DIGEST -e BACKUP_ID -e BACKUP_SHA256 -e CUSTOM_SECRET \
   imagine-media node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
+
 import Database from 'better-sqlite3';
 
 const database = new Database('/data/app.db', { readonly: true });
@@ -1256,6 +1338,22 @@ assert.equal(job?.adapterId, process.env.CUSTOM_ADAPTER_ID);
 assert.equal(job?.adapterVersion, process.env.CUSTOM_V2);
 assert.equal(job?.adapterDigest, process.env.CUSTOM_DIGEST_V2);
 assert.equal(JSON.stringify(job).includes(process.env.CUSTOM_SECRET), false);
+
+const backupId = process.env.BACKUP_ID;
+const backupSha256 = process.env.BACKUP_SHA256;
+assert.match(backupId ?? '', /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+assert.match(backupSha256 ?? '', /^[a-f0-9]{64}$/);
+const backupPath = `/data/backups/${backupId}.db`;
+const backupStats = await stat(backupPath);
+assert.equal(backupStats.isFile(), true);
+assert.equal(backupStats.mode & 0o777, 0o600);
+const backupBytes = await readFile(backupPath);
+assert.equal(createHash('sha256').update(backupBytes).digest('hex'), backupSha256);
+const backupDatabase = new Database(backupPath, { readonly: true, fileMustExist: true });
+backupDatabase.pragma('foreign_keys = ON');
+assert.equal(backupDatabase.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
+assert.deepEqual(backupDatabase.prepare('PRAGMA foreign_key_check').all(), []);
+backupDatabase.close();
 NODE
 
 BASE_URL="$base_url" APP_PASSWORD="$APP_PASSWORD" TRUSTED_ADAPTER_ID="$trusted_adapter_id" \
