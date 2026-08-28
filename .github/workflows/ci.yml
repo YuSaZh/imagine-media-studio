@@ -60,7 +60,7 @@ jobs:
           echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
       - name: Run base Playwright projects
         run: |
-          pnpm test:e2e -- \
+          pnpm test:e2e \
             --project=pr1-desktop-1920x1080 \
             --project=pr1-desktop-1440x900 \
             --project=pr1-mobile-430x932 \
@@ -142,7 +142,7 @@ jobs:
           chmod 0700 "$data_dir"
           echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
       - name: Run PR7 project
-        run: pnpm test:e2e -- --project=${{ matrix.project }}
+        run: pnpm test:e2e --project=${{ matrix.project }}
       - name: Upload PR7 screenshots and visual report
         if: always()
         uses: actions/upload-artifact@v6
