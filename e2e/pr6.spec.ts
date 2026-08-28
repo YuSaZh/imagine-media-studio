@@ -3,7 +3,10 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import {
+  CustomAdapterDefinitionResponseSchema,
+  CustomAdapterErrorResponseSchema,
   CustomAdapterExportEnvelopeSchema,
+  CustomAdapterRevisionListResponseSchema,
   TrustedAdapterResponseSchema,
   type TrustedAdapterResponse,
 } from '../packages/shared/src/internal-api.js';
@@ -13,7 +16,6 @@ import {
   type APIRequestContext,
   type Locator,
   type Page,
-  type Response,
   type TestInfo,
 } from './fixtures.js';
 
@@ -128,11 +130,6 @@ interface CleanupTask {
   readonly run: () => Promise<void>;
 }
 
-interface CapturedResponse {
-  readonly response: Response;
-  readonly bodyText: string;
-}
-
 function executionKey(testInfo: TestInfo): string {
   return `${testInfo.project.name}-retry-${testInfo.retry}`;
 }
@@ -143,13 +140,6 @@ function scopedProviderName(baseName: string, testInfo: TestInfo): string {
 
 function scopedTrustedAdapterId(baseId: string, testInfo: TestInfo): string {
   return `${baseId}-${testInfo.project.name}-r${testInfo.retry}`;
-}
-
-function captureResponseText(responsePromise: Promise<Response>): Promise<CapturedResponse> {
-  return responsePromise.then(async (response) => ({
-    bodyText: await response.text(),
-    response,
-  }));
 }
 
 async function finalizeTestCleanup(
@@ -222,6 +212,32 @@ async function createProvider(
   return body.provider;
 }
 
+async function getProviderByName(
+  request: APIRequestContext,
+  name: string,
+): Promise<ProviderRecord> {
+  const listResponse = await request.get('/internal/providers?limit=100', {
+    headers: authHeaders(),
+  });
+  expect(listResponse.status()).toBe(200);
+  const list = await listResponse.json() as {
+    readonly items: readonly ProviderRecord[];
+    readonly nextCursor?: string | null;
+  };
+  const matches = list.items.filter((provider) => provider.name === name);
+  expect(matches).toHaveLength(1);
+  const match = matches[0];
+  if (match === undefined) throw new Error(`Provider ${name} was not found after creation.`);
+
+  const getResponse = await request.get(`/internal/providers/${encodeURIComponent(match.id)}`, {
+    headers: authHeaders(),
+  });
+  expect(getResponse.status()).toBe(200);
+  const body = await getResponse.json() as { readonly provider: ProviderRecord };
+  expect(body.provider).toMatchObject({ id: match.id, name });
+  return body.provider;
+}
+
 async function putCustomSpec(
   request: APIRequestContext,
   providerId: string,
@@ -241,6 +257,42 @@ async function putCustomSpec(
   const body = await response.json() as AdapterDefinitionResponse;
   expect(body.definition.ref.version).toBe(version);
   return body.definition.ref;
+}
+
+async function getCurrentCustomAdapter(
+  request: APIRequestContext,
+  providerId: string,
+): Promise<AdapterDefinitionResponse> {
+  const response = await request.get(
+    `/internal/providers/${encodeURIComponent(providerId)}/adapter`,
+    { headers: authHeaders() },
+  );
+  expect(response.status()).toBe(200);
+  return CustomAdapterDefinitionResponseSchema.parse(await response.json());
+}
+
+async function getExactCustomAdapter(
+  request: APIRequestContext,
+  providerId: string,
+  ref: AdapterRef,
+): Promise<AdapterDefinitionResponse> {
+  const query = new URLSearchParams({
+    kind: ref.kind,
+    adapterId: ref.adapterId,
+    version: ref.version,
+    digest: ref.digest,
+    limit: '1',
+  });
+  const response = await request.get(
+    `/internal/providers/${encodeURIComponent(providerId)}/adapter/revisions?${query.toString()}`,
+    { headers: authHeaders() },
+  );
+  expect(response.status()).toBe(200);
+  const body = CustomAdapterRevisionListResponseSchema.parse(await response.json());
+  expect(body.items).toHaveLength(1);
+  const definition = body.items[0];
+  if (definition === undefined) throw new Error('The exact adapter revision was not returned.');
+  return { definition };
 }
 
 async function exportEnvelope(
@@ -373,7 +425,7 @@ async function assertWorkspaceGeometry(page: Page): Promise<void> {
 
   const revisionSection = page.locator('section[aria-labelledby="adapter-revisions-heading"]');
   const wrapping = await revisionSection.evaluate((section) => {
-    const candidate = [...section.querySelectorAll('span')].find((element) => /[a-f0-9]{64}/u.test(element.textContent ?? ''));
+    const candidate = Array.from(section.querySelectorAll('span')).find((element) => /[a-f0-9]{64}/u.test(element.textContent ?? ''));
     if (candidate === undefined) return null;
     const box = candidate.getBoundingClientRect();
     const parent = section.getBoundingClientRect();
@@ -441,18 +493,66 @@ async function runWorkspaceAction(
   endpoint: string,
   completion: string,
   method = 'POST',
-): Promise<CapturedResponse> {
+): Promise<void> {
   const expectedPath = endpoint === 'adapter'
     ? `/internal/providers/${encodeURIComponent(providerId)}/adapter`
     : `/internal/providers/${encodeURIComponent(providerId)}/adapter/${endpoint}`;
-  const responsePromise = captureResponseText(page.waitForResponse((response) =>
+  const responsePromise = page.waitForResponse((response) =>
     response.request().method() === method && new URL(response.url()).pathname === expectedPath,
-  ));
+  );
   await workspace.getByRole('button', { name: action, exact: true }).click();
-  const { response, bodyText } = await responsePromise;
+  const response = await responsePromise;
   expect(response.status()).toBe(200);
   await expect(workspace.locator('[aria-label="Adapter command feedback"]')).toContainText(completion);
-  return { bodyText, response };
+}
+
+async function findRevisionLoadButton(revisions: Locator, ref: AdapterRef): Promise<Locator> {
+  const target = revisions
+    .getByText(`${ref.version} / ${ref.digest}`, { exact: true })
+    .locator('..')
+    .locator('..')
+    .getByRole('button', { name: `Load revision ${ref.version}`, exact: true });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await target.count() > 0) {
+      await expect(target).toHaveCount(1);
+      return target;
+    }
+    const loadMore = revisions.getByRole('button', { name: 'Load more revisions', exact: true });
+    if (await loadMore.count() === 0) break;
+    await loadMore.click();
+    await expect.poll(() => target.count()).toBeGreaterThan(0);
+  }
+  await expect(target).toHaveCount(1);
+  return target;
+}
+
+async function loadExactRevision(
+  page: Page,
+  request: APIRequestContext,
+  revisions: Locator,
+  providerId: string,
+  ref: AdapterRef,
+): Promise<AdapterRef> {
+  const expectedPath = `/internal/providers/${encodeURIComponent(providerId)}/adapter/revisions`;
+  const responsePromise = page.waitForResponse((response) => {
+    if (response.request().method() !== 'GET') return false;
+    const url = new URL(response.url());
+    return url.pathname === expectedPath &&
+      url.searchParams.get('kind') === ref.kind &&
+      url.searchParams.get('adapterId') === ref.adapterId &&
+      url.searchParams.get('version') === ref.version &&
+      url.searchParams.get('digest') === ref.digest &&
+      url.searchParams.get('limit') === '1';
+  });
+  const loadButton = await findRevisionLoadButton(revisions, ref);
+  await loadButton.click();
+  const response = await responsePromise;
+  expect(response.status()).toBe(200);
+  // Browser Response bodies are backed by CDP and can disappear after the
+  // keyed workspace remount. Read the strict response through the API client.
+  const loaded = await getExactCustomAdapter(request, providerId, ref);
+  expect(loaded.definition.ref).toEqual(ref);
+  return loaded.definition.ref;
 }
 
 function acceptNextConfirm(page: Page): void {
@@ -542,14 +642,14 @@ test('exposes both PR6 custom Provider profiles and opens Manage after creation'
     await profile.selectOption('custom-http-v1');
     await editor.getByLabel('Base URL (required)', { exact: true }).fill('https://api.example.test/v1');
     await editor.getByLabel('API key', { exact: true }).fill(API_SECRET);
-    const createResponsePromise = captureResponseText(page.waitForResponse((response) =>
+    const createResponsePromise = page.waitForResponse((response) =>
       response.request().method() === 'POST' && new URL(response.url()).pathname === '/internal/providers',
-    ));
+    );
     await editor.getByRole('button', { name: 'Save provider', exact: true }).click();
-    const { response: createResponse, bodyText: createResponseText } = await createResponsePromise;
+    const createResponse = await createResponsePromise;
     expect(createResponse.status()).toBe(201);
-    const created = JSON.parse(createResponseText) as { readonly provider: ProviderRecord };
-    providerId = created.provider.id;
+    const created = await getProviderByName(request, providerName);
+    providerId = created.id;
 
     const workspace = page.getByTestId('custom-adapter-workspace');
     await expect(workspace).toBeVisible();
@@ -714,10 +814,14 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
     await runWorkspaceAction(page, workspace, fixture.provider.id, 'Preview capabilities', 'capabilities-preview', 'Capability preview complete.');
     await expect(workspace.locator('section[aria-labelledby="adapter-capabilities-heading"]')).toContainText('pr6-image-model');
 
-    const jsonSaveResponse = await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
-    const jsonSaved = JSON.parse(jsonSaveResponse.bodyText) as AdapterDefinitionResponse;
+    await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
+    const jsonSaved = await getCurrentCustomAdapter(request, fixture.provider.id);
     expect(jsonSaved.definition.ref.digest).toBe(fixture.initialRef.digest);
     expect(jsonSaved.definition.ref.version).toBe('1.0.1');
+    const exactJsonSaved = await getExactCustomAdapter(request, fixture.provider.id, jsonSaved.definition.ref);
+    expect(exactJsonSaved.definition.ref.digest).toBe(fixture.initialRef.digest);
+    expect(exactJsonSaved.definition.ref.version).toBe('1.0.1');
+    expect(exactJsonSaved.definition.ref).toEqual(jsonSaved.definition.ref);
     await expect(workspace.locator('section[aria-labelledby="adapter-revisions-heading"]')).toContainText('1.0.1 /');
 
     await workspace.locator('input[aria-label="Import JSON or YAML document"]').setInputFiles({
@@ -729,10 +833,14 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
     await expect(workspace).toHaveAttribute('data-import-pending', 'false');
     await expect(workspace.getByRole('button', { name: 'YAML', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(versionField).toHaveValue('1.0.0');
-    const yamlSaveResponse = await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
-    const yamlSaved = JSON.parse(yamlSaveResponse.bodyText) as AdapterDefinitionResponse;
+    await runWorkspaceAction(page, workspace, fixture.provider.id, 'Save revision', 'adapter', 'Save complete.', 'PUT');
+    const yamlSaved = await getCurrentCustomAdapter(request, fixture.provider.id);
     expect(yamlSaved.definition.ref.digest).toBe(fixture.initialRef.digest);
     expect(yamlSaved.definition.ref.version).toBe('1.0.0');
+    const exactYamlSaved = await getExactCustomAdapter(request, fixture.provider.id, yamlSaved.definition.ref);
+    expect(exactYamlSaved.definition.ref.digest).toBe(fixture.initialRef.digest);
+    expect(exactYamlSaved.definition.ref.version).toBe('1.0.0');
+    expect(exactYamlSaved.definition.ref).toEqual(yamlSaved.definition.ref);
     const revisions = workspace.locator('section[aria-labelledby="adapter-revisions-heading"]');
     await expect(revisions).toContainText('1.0.1 /');
 
@@ -760,8 +868,12 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
 
     const validateRoute = `**/internal/providers/${fixture.provider.id}/adapter/validate`;
     await page.route(validateRoute, async (route) => {
+      const response = CustomAdapterErrorResponseSchema.parse({
+        error: 'administrator_required',
+        message: 'Administrator authorization is required.',
+      });
       await route.fulfill({
-        body: JSON.stringify({ error: 'administrator_required', message: 'Administrator authorization is required.' }),
+        body: JSON.stringify(response),
         contentType: 'application/json',
         status: 403,
       });
@@ -779,6 +891,80 @@ test('manages JSON/YAML revisions, safe previews, simulation tools, and exact hi
     await expect(reopenedWorkspace.locator('[data-state="admin-unavailable"]')).toBeHidden();
     await expect(reopenedWorkspace.getByRole('button', { name: 'Validate', exact: true })).toBeEnabled();
     await capturePr6Screenshot(page, testInfo, 'http-management');
+
+    const reopenedRevisions = reopenedWorkspace.locator('section[aria-labelledby="adapter-revisions-heading"]');
+    const localBaseUrl = 'https://local-load.example.test';
+    const localRequestJson = JSON.stringify({ prompt: 'keep across revision load' }, null, 2);
+    const localSimulationJson = JSON.stringify({ status: 'local-pending' }, null, 2);
+    const localPathTestJson = JSON.stringify({ data: [{ id: 'local-path-value' }] }, null, 2);
+    await reopenedWorkspace.getByRole('textbox', { name: 'Base URL', exact: true }).fill(localBaseUrl);
+    await reopenedWorkspace.getByRole('textbox', { name: 'Generation request JSON', exact: true }).fill(localRequestJson);
+    await reopenedWorkspace.getByLabel('Simulation HTTP status', { exact: true }).fill('202');
+    await reopenedWorkspace.getByRole('textbox', { name: 'Simulation response JSON', exact: true }).fill(localSimulationJson);
+    await reopenedWorkspace.getByRole('textbox', { name: 'JSON Pointer path', exact: true }).fill('/data/0/id');
+    await reopenedWorkspace.getByRole('textbox', { name: 'Path test response JSON', exact: true }).fill(localPathTestJson);
+    await expect(reopened.dialog.getByText('Unsaved changes', { exact: true })).toBeVisible();
+
+    // Loading a revision must request the full immutable ref. The container
+    // intentionally keeps local request/simulation/path inputs across the
+    // keyed server-document remount.
+    acceptNextConfirm(page);
+    const loadedRef = await loadExactRevision(page, request, reopenedRevisions, fixture.provider.id, jsonSaved.definition.ref);
+    expect(loadedRef).toEqual(jsonSaved.definition.ref);
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Adapter version', exact: true })).toHaveValue('1.0.1');
+    await expect(reopenedWorkspace.getByTestId('custom-http-document')).toHaveValue(/pr6-safe-sync-image/u);
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Base URL', exact: true })).toHaveValue(localBaseUrl);
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Generation request JSON', exact: true })).toHaveValue(localRequestJson);
+    await expect(reopenedWorkspace.getByLabel('Simulation HTTP status', { exact: true })).toHaveValue('202');
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Simulation response JSON', exact: true })).toHaveValue(localSimulationJson);
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'JSON Pointer path', exact: true })).toHaveValue('/data/0/id');
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Path test response JSON', exact: true })).toHaveValue(localPathTestJson);
+    await expect(reopenedWorkspace.getByTestId('custom-adapter-revision-loading')).toHaveCount(0);
+    await expect(reopenedWorkspace.getByTestId('custom-adapter-revision-error')).toHaveCount(0);
+    await expect(reopenedWorkspace).not.toContainText('Select Retry');
+
+    // The Provider API deletes only its current revision; historical exact
+    // revisions remain visible and addressable after the current is removed.
+    const deleteButton = reopenedRevisions.getByRole('button', { name: 'Delete revision 1.0.0', exact: true });
+    await expect(deleteButton).toHaveCount(1);
+    const deleteResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === 'DELETE' &&
+      new URL(response.url()).pathname === `/internal/providers/${encodeURIComponent(fixture.provider.id)}/adapter`,
+    );
+    acceptNextConfirm(page);
+    await deleteButton.click();
+    const deleteResponse = await deleteResponsePromise;
+    expect(deleteResponse.status()).toBe(204);
+
+    await expect(reopenedWorkspace.locator('[data-state="success"]')).toBeVisible();
+    await expect(reopenedRevisions).not.toContainText('(current)');
+    await expect(reopenedWorkspace).not.toContainText('Select Retry');
+    await expect(reopenedWorkspace.getByTestId('custom-adapter-revision-loading')).toHaveCount(0);
+    await expect(reopenedWorkspace.getByTestId('custom-adapter-revision-error')).toHaveCount(0);
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Adapter version', exact: true })).toHaveValue('1.0.0');
+    await expect(reopenedWorkspace.getByTestId('custom-http-document')).toHaveValue(/"id": "custom-adapter"/u);
+    await expect(reopenedWorkspace.getByTestId('custom-http-document')).not.toHaveValue(/pr6-safe-sync-image/u);
+    await expect(reopenedWorkspace.getByRole('button', { name: 'JSON', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Base URL', exact: true })).toHaveValue('');
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Generation request JSON', exact: true })).toHaveValue(JSON.stringify({ prompt: 'A test prompt' }, null, 2));
+    await expect(reopenedWorkspace.getByLabel('Simulation HTTP status', { exact: true })).toHaveValue('200');
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Simulation response JSON', exact: true })).toHaveValue(JSON.stringify({ status: 'completed' }, null, 2));
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'JSON Pointer path', exact: true })).toHaveValue('/status');
+    await expect(reopenedWorkspace.getByRole('textbox', { name: 'Path test response JSON', exact: true })).toHaveValue(JSON.stringify({ status: 'completed' }, null, 2));
+    await expect(reopened.dialog.getByText('Unsaved changes', { exact: true })).toBeHidden();
+
+    const currentAfterDelete = await request.get(`/internal/providers/${encodeURIComponent(fixture.provider.id)}/adapter`, {
+      headers: authHeaders(),
+    });
+    expect(currentAfterDelete.status()).toBe(404);
+    const revisionsAfterDelete = await request.get(
+      `/internal/providers/${encodeURIComponent(fixture.provider.id)}/adapter/revisions?limit=100`,
+      { headers: authHeaders() },
+    );
+    expect(revisionsAfterDelete.status()).toBe(200);
+    const remainingRevisions = CustomAdapterRevisionListResponseSchema.parse(await revisionsAfterDelete.json());
+    expect(remainingRevisions.items).not.toHaveLength(0);
+    expect(remainingRevisions.items.some((item) => item.isCurrent)).toBe(false);
   } catch (error) {
     testFailed = true;
     testError = error;

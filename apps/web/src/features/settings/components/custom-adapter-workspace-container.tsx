@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { LoaderCircle, X } from 'lucide-react';
 import {
   CustomAdapterRefSchema,
   TrustedAdapterManifestSchema,
   type CustomAdapterDefinitionDto,
+  type CustomAdapterDefinitionResponse,
   type CustomAdapterRef,
   type ProviderDto,
   type TrustedAdapterBindingDto,
@@ -81,12 +82,38 @@ function toRef(value: CustomAdapterRef): AdapterRevisionRef {
   };
 }
 
-function fromRef(value: AdapterRevisionRef): CustomAdapterRef {
-  return CustomAdapterRefSchema.parse(value);
+/**
+ * AdapterRevision values also carry display state. Keep only the immutable
+ * reference fields before crossing the strict API/schema boundary.
+ */
+export function projectAdapterRevisionRef(value: AdapterRevisionRef): CustomAdapterRef {
+  return CustomAdapterRefSchema.parse({
+    kind: value.kind,
+    adapterId: value.adapterId,
+    version: value.version,
+    digest: value.digest,
+  });
 }
+
+const fromRef = projectAdapterRevisionRef;
 
 function refsEqual(left: CustomAdapterRef, right: CustomAdapterRef): boolean {
   return left.kind === right.kind && left.adapterId === right.adapterId && left.version === right.version && left.digest === right.digest;
+}
+
+const EXACT_REVISION_NOT_FOUND_ERROR = new InternalApiError(
+  404,
+  'adapter_not_found',
+  'The selected adapter revision was not found.',
+);
+
+/** Only an exact immutable ref may populate the revision editor. */
+export function resolveExactAdapterDefinition(
+  response: CustomAdapterDefinitionResponse | null | undefined,
+  ref: CustomAdapterRef,
+): CustomAdapterDefinitionDto | null {
+  const definition = response?.definition ?? null;
+  return definition !== null && refsEqual(definition.ref, ref) ? definition : null;
 }
 
 function trustedManifestSummary(manifest: TrustedAdapterManagementDto['manifest']): TrustedManifestSummary {
@@ -182,10 +209,142 @@ export function customAdapterWorkspaceKey(input: {
   ]);
 }
 
-function customDraft(definition: CustomAdapterDefinitionDto | null): Partial<CustomHttpDraft> {
-  return definition?.definition === null || definition?.definition === undefined
-    ? {}
-    : { document: JSON.stringify(definition.definition, null, 2), version: definition.ref.version };
+type CustomHttpLocalDraft = Pick<
+  CustomHttpDraft,
+  'format' | 'document' | 'version' | 'baseUrl' | 'requestJson' | 'simulationStatus' | 'simulationJson' | 'path' | 'pathTestJson'
+>;
+
+export interface CustomAdapterWorkspaceContainerState {
+  readonly adminAvailable: boolean;
+  readonly actionError: string | null;
+  readonly customLocalDraft: Partial<CustomHttpLocalDraft>;
+  readonly dirty: boolean;
+  readonly message: string | null;
+  readonly pendingAction: string | null;
+  readonly preserveCustomDocument: boolean;
+  readonly selectedRevision: CustomAdapterRef | null;
+  readonly trustedLookupId: string;
+}
+
+export type CustomAdapterWorkspaceContainerAction =
+  | { readonly type: 'reset' }
+  | { readonly type: 'set-admin-available'; readonly value: boolean }
+  | { readonly type: 'set-action-error'; readonly value: string | null }
+  | { readonly type: 'set-custom-local-draft'; readonly value: Partial<CustomHttpLocalDraft> }
+  | { readonly type: 'clear-custom-document-draft' }
+  | { readonly type: 'set-dirty'; readonly value: boolean }
+  | { readonly type: 'set-message'; readonly value: string | null }
+  | { readonly type: 'set-pending-action'; readonly value: string | null }
+  | { readonly type: 'set-preserve-custom-document'; readonly value: boolean }
+  | { readonly type: 'set-selected-revision'; readonly value: CustomAdapterRef | null }
+  | { readonly type: 'set-trusted-lookup-id'; readonly value: string }
+  | { readonly type: 'delete-current-success' }
+  | { readonly type: 'delete-current-success-preserve-draft' };
+
+export function createCustomAdapterWorkspaceContainerState(): CustomAdapterWorkspaceContainerState {
+  return {
+    adminAvailable: true,
+    actionError: null,
+    customLocalDraft: {},
+    dirty: false,
+    message: null,
+    pendingAction: null,
+    preserveCustomDocument: false,
+    selectedRevision: null,
+    trustedLookupId: '',
+  };
+}
+
+/** Keeps lifecycle resets and post-delete state changes atomic and testable. */
+export function reduceCustomAdapterWorkspaceContainerState(
+  state: CustomAdapterWorkspaceContainerState,
+  action: CustomAdapterWorkspaceContainerAction,
+): CustomAdapterWorkspaceContainerState {
+  switch (action.type) {
+    case 'reset':
+      return createCustomAdapterWorkspaceContainerState();
+    case 'set-admin-available':
+      return { ...state, adminAvailable: action.value };
+    case 'set-action-error':
+      return { ...state, actionError: action.value };
+    case 'set-custom-local-draft':
+      return { ...state, customLocalDraft: action.value };
+    case 'clear-custom-document-draft': {
+      const { document: _document, version: _version, ...localDraft } = state.customLocalDraft;
+      return { ...state, customLocalDraft: localDraft, preserveCustomDocument: false };
+    }
+    case 'set-dirty':
+      return { ...state, dirty: action.value };
+    case 'set-message':
+      return { ...state, message: action.value };
+    case 'set-pending-action':
+      return { ...state, pendingAction: action.value };
+    case 'set-preserve-custom-document':
+      return { ...state, preserveCustomDocument: action.value };
+    case 'set-selected-revision':
+      return { ...state, selectedRevision: action.value };
+    case 'set-trusted-lookup-id':
+      return { ...state, trustedLookupId: action.value };
+    case 'delete-current-success':
+      return {
+        ...state,
+        actionError: null,
+        customLocalDraft: {},
+        dirty: false,
+        preserveCustomDocument: false,
+        selectedRevision: null,
+      };
+    case 'delete-current-success-preserve-draft':
+      return {
+        ...state,
+        actionError: null,
+        preserveCustomDocument: true,
+        selectedRevision: null,
+      };
+  }
+}
+
+/** Dispatches the destructive cleanup only after the server mutation succeeds. */
+export async function executeDeleteCurrentMutation(
+  mutation: () => Promise<unknown>,
+  dispatch: (action: CustomAdapterWorkspaceContainerAction) => void,
+  shouldClearDraft: () => boolean = () => true,
+): Promise<void> {
+  await mutation();
+  dispatch({ type: shouldClearDraft() ? 'delete-current-success' : 'delete-current-success-preserve-draft' });
+}
+
+/** Commits mutation state only when no newer local edit happened in flight. */
+export async function executeMutationWithEditGuard(
+  mutation: () => Promise<unknown>,
+  snapshot: number,
+  currentRevision: () => number,
+  onUnchanged: () => void,
+  onChanged?: () => void,
+): Promise<void> {
+  await mutation();
+  if (currentRevision() === snapshot) onUnchanged();
+  else onChanged?.();
+}
+
+function customDraft(
+  definition: CustomAdapterDefinitionDto | null,
+  localDraft: Partial<CustomHttpLocalDraft> = {},
+  preserveDocument = false,
+): Partial<CustomHttpDraft> {
+  const { document: localDocument, version: localVersion, ...ephemeralDraft } = localDraft;
+  return {
+    ...(definition?.definition === null || definition?.definition === undefined
+      ? {}
+      : { document: JSON.stringify(definition.definition, null, 2), version: definition.ref.version }),
+    ...(preserveDocument
+      ? {
+          ...(localDocument === undefined ? {} : { document: localDocument }),
+          ...(localVersion === undefined ? {} : { version: localVersion }),
+        }
+      : {}),
+    ...ephemeralDraft,
+  };
 }
 
 export const mapCustomDefinitionToDraft = customDraft;
@@ -241,6 +400,34 @@ function isAdminError(error: unknown): boolean {
   return error instanceof InternalApiError && (error.code === 'administrator_required' || error.status === 403);
 }
 
+export function resolveAdapterWorkspaceStatus(input: {
+  readonly actionError?: string | null;
+  readonly adminAvailable: boolean;
+  readonly disabled: boolean;
+  readonly hasData: boolean;
+  readonly loading: boolean;
+  readonly online: boolean;
+  readonly queryError: unknown;
+}): AdapterWorkspaceStatus {
+  return !input.online
+    ? 'offline'
+    : !input.adminAvailable
+      ? 'admin-unavailable'
+      : isAdminError(input.queryError)
+        ? 'admin-unavailable'
+        : input.actionError !== null && input.actionError !== undefined
+          ? 'error'
+          : input.queryError
+            ? 'error'
+            : input.loading
+              ? 'loading'
+              : input.disabled
+                ? 'disabled'
+                : input.hasData
+                  ? 'success'
+                  : 'empty';
+}
+
 function downloadText(text: string, filename: string, contentType: string): void {
   if (typeof document === 'undefined' || typeof URL === 'undefined') return;
   const blob = new Blob([text], { type: contentType });
@@ -262,18 +449,47 @@ export async function executeAdapterAction(
   task: () => Promise<void>,
   onMessage: (message: string) => void,
   onAdminError?: () => void,
+  onActionError?: (message: string) => void,
 ): Promise<void> {
   try {
     await task();
     onMessage(`${label} complete.`);
   } catch (error) {
     if (isAdminError(error)) onAdminError?.();
-    onMessage(errorMessage(error, `${label} failed.`));
+    const failureMessage = errorMessage(error, `${label} failed.`);
+    onMessage(failureMessage);
+    onActionError?.(failureMessage);
     throw error;
   }
 }
 
-export function CustomAdapterWorkspaceContainer({
+export function customAdapterWorkspaceContainerKey(input: {
+  readonly open: boolean;
+  readonly providerId: string;
+  readonly providerType: ProviderDto['type'];
+}): string {
+  return JSON.stringify([input.providerId, input.providerType, input.open]);
+}
+
+/**
+ * Keep session state below an identity boundary. Provider settings can swap
+ * the managed Provider while the dialog remains open, and an effect-based
+ * reset would otherwise run after the first render/query for the new identity.
+ */
+export function CustomAdapterWorkspaceContainer(props: CustomAdapterWorkspaceContainerProps) {
+  return (
+    <CustomAdapterWorkspaceContainerContent
+      key={customAdapterWorkspaceContainerKey({
+        open: props.open,
+        providerId: props.provider.id,
+        providerType: props.provider.type,
+      })}
+      {...props}
+    />
+  );
+}
+
+function CustomAdapterWorkspaceContainerContent({
   confirm: confirmAction,
   fixtureMode,
   onOpenChange,
@@ -283,27 +499,40 @@ export function CustomAdapterWorkspaceContainer({
   const isCustomHttp = provider.type === 'custom-http-v1';
   const isTrustedJs = provider.type === 'custom-js-v1';
   const online = useOnlineStatus();
-  const [adminAvailable, setAdminAvailable] = useState(true);
-  const [dirty, setDirty] = useState(false);
-  const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [selectedRevision, setSelectedRevision] = useState<CustomAdapterRef | null>(null);
-  const [trustedLookupId, setTrustedLookupId] = useState('');
+  const [session, dispatch] = useReducer(
+    reduceCustomAdapterWorkspaceContainerState,
+    undefined,
+    createCustomAdapterWorkspaceContainerState,
+  );
+  const {
+    adminAvailable,
+    actionError,
+    customLocalDraft,
+    dirty,
+    message,
+    pendingAction,
+    preserveCustomDocument,
+    selectedRevision,
+    trustedLookupId,
+  } = session;
+  // The keyed workspace intentionally remounts for a new immutable revision.
+  // Keep fields that are local test input so that remount cannot erase them.
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const editRevisionRef = useRef(0);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
 
-  const customCurrentQuery = useCustomAdapterQuery(provider.id, fixtureMode, isCustomHttp);
-  const customRevisionsQuery = useCustomAdapterRevisionsQuery(provider.id, {}, fixtureMode, isCustomHttp);
+  const customCurrentQuery = useCustomAdapterQuery(provider.id, fixtureMode, open && isCustomHttp);
+  const customRevisionsQuery = useCustomAdapterRevisionsQuery(provider.id, {}, fixtureMode, open && isCustomHttp);
   const customRevisionQuery = useCustomAdapterRevisionQuery(
     provider.id,
     selectedRevision ?? customCurrentQuery.data?.definition.ref ?? EMPTY_REF,
     fixtureMode,
-    isCustomHttp && selectedRevision !== null,
+    open && isCustomHttp && selectedRevision !== null,
   );
-  const trustedBindingQuery = useTrustedBindingQuery(provider.id, undefined, fixtureMode, isTrustedJs);
-  const trustedBindingsQuery = useTrustedBindingsQuery(provider.id, {}, fixtureMode, isTrustedJs);
-  const trustedAdaptersQuery = useTrustedAdaptersQuery(fixtureMode, isTrustedJs);
-  const trustedLookupQuery = useTrustedAdapterQuery(trustedLookupId || 'adapter-placeholder', fixtureMode, isTrustedJs && trustedLookupId.length > 0);
+  const trustedBindingQuery = useTrustedBindingQuery(provider.id, undefined, fixtureMode, open && isTrustedJs);
+  const trustedBindingsQuery = useTrustedBindingsQuery(provider.id, {}, fixtureMode, open && isTrustedJs);
+  const trustedAdaptersQuery = useTrustedAdaptersQuery(fixtureMode, open && isTrustedJs);
+  const trustedLookupQuery = useTrustedAdapterQuery(trustedLookupId || 'adapter-placeholder', fixtureMode, open && isTrustedJs && trustedLookupId.length > 0);
 
   const validate = useValidateCustomAdapter(fixtureMode);
   const preview = usePreviewCustomAdapter(fixtureMode);
@@ -322,13 +551,10 @@ export function CustomAdapterWorkspaceContainer({
   const ask = (prompt: string): boolean => confirmAction ? confirmAction(prompt) : typeof window === 'undefined' ? true : window.confirm(prompt);
 
   useEffect(() => {
-    if (!open) return undefined;
-    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+    if (open && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
       restoreFocusRef.current = document.activeElement;
     }
-    setDirty(false);
-    setMessage(null);
-    setAdminAvailable(true);
+    dispatch({ type: 'reset' });
     return undefined;
   }, [open, provider.id]);
 
@@ -351,10 +577,13 @@ export function CustomAdapterWorkspaceContainer({
   }, [open]);
 
   const currentCustomDefinition = isCustomHttp ? customCurrentQuery.data?.definition ?? null : null;
+  const exactCustomDefinition = selectedRevision === null
+    ? null
+    : resolveExactAdapterDefinition(customRevisionQuery.data, selectedRevision);
   const customDefinition = isCustomHttp
     ? selectedRevision === null
       ? currentCustomDefinition
-      : customRevisionQuery.data?.definition ?? null
+      : exactCustomDefinition
     : null;
   const customRevisionItems = useMemo(() => flattenCustomAdapterRevisionPages(customRevisionsQuery.data).map(customRevisionSummary), [customRevisionsQuery.data]);
   const trustedBindingRecords = useMemo(() => flattenTrustedBindingPages(trustedBindingsQuery.data), [trustedBindingsQuery.data]);
@@ -370,35 +599,37 @@ export function CustomAdapterWorkspaceContainer({
     : trustedBindingQuery.error ?? trustedBindingsQuery.error ?? trustedAdaptersQuery.error;
   const exactRevisionPending = isCustomHttp && selectedRevision !== null && (customRevisionQuery.isPending || customRevisionQuery.isFetching);
   const exactRevisionError = isCustomHttp && selectedRevision !== null ? customRevisionQuery.error : null;
+  const exactRevisionMissing = isCustomHttp && selectedRevision !== null && !exactRevisionPending && (exactRevisionError === null || exactRevisionError === undefined) && exactCustomDefinition === null;
+  const resolvedExactRevisionError = exactRevisionError ?? (exactRevisionMissing ? EXACT_REVISION_NOT_FOUND_ERROR : null);
   const trustedLookupPending = isTrustedJs && trustedLookupId.length > 0 && (trustedLookupQuery.isPending || trustedLookupQuery.isFetching);
   const trustedLookupError = isTrustedJs && trustedLookupId.length > 0 ? trustedLookupQuery.error : null;
-  const effectiveQueryError = exactRevisionError ?? trustedLookupError ?? queryError;
+  const effectiveQueryError = resolvedExactRevisionError ?? trustedLookupError ?? queryError;
 
   const loading = exactRevisionPending || trustedLookupPending || (isCustomHttp
     ? customCurrentQuery.isPending || customRevisionsQuery.isPending
     : trustedBindingQuery.isPending || trustedBindingsQuery.isPending || trustedAdaptersQuery.isPending);
-  const status: AdapterWorkspaceStatus = !online
-    ? 'offline'
-    : !adminAvailable
-      ? 'admin-unavailable'
-    : isAdminError(effectiveQueryError)
-      ? 'admin-unavailable'
-      : effectiveQueryError
-        ? 'error'
-        : loading
-          ? 'loading'
-          : (isCustomHttp ? customDefinition?.disabled : trustedBinding?.disabled) === true
-            ? 'disabled'
-            : (isCustomHttp ? customDefinition !== null || customRevisionItems.length > 0 : trustedBinding !== null || trustedItems.length > 0)
-              ? 'success'
-              : 'empty';
+  const status = resolveAdapterWorkspaceStatus({
+    actionError,
+    adminAvailable,
+    disabled: (isCustomHttp ? customDefinition?.disabled : trustedBinding?.disabled) === true,
+    hasData: isCustomHttp ? customDefinition !== null || customRevisionItems.length > 0 : trustedBinding !== null || trustedItems.length > 0,
+    loading,
+    online,
+    queryError: effectiveQueryError,
+  });
+
+  useEffect(() => {
+    if (!isCustomHttp || selectedRevision === null || exactRevisionPending || resolvedExactRevisionError !== null || exactCustomDefinition === null) return;
+    dispatch({ type: 'set-message', value: `Loaded revision ${selectedRevision.version}.` });
+  }, [exactCustomDefinition, exactRevisionPending, isCustomHttp, resolvedExactRevisionError, selectedRevision]);
+
   const currentTrustedSummary = bindingSummary(trustedBinding);
   const retryFailedQueries = async () => {
     const requests: Array<() => Promise<unknown>> = [];
     if (isCustomHttp) {
       if (customCurrentQuery.error) requests.push(() => customCurrentQuery.refetch());
       if (customRevisionsQuery.error) requests.push(() => customRevisionsQuery.refetch());
-      if (exactRevisionError) requests.push(() => customRevisionQuery.refetch());
+      if (resolvedExactRevisionError) requests.push(() => customRevisionQuery.refetch());
     } else {
       if (trustedBindingQuery.error) requests.push(() => trustedBindingQuery.refetch());
       if (trustedBindingsQuery.error) requests.push(() => trustedBindingsQuery.refetch());
@@ -409,18 +640,48 @@ export function CustomAdapterWorkspaceContainer({
   };
 
   const execute = async (label: string, task: () => Promise<void>) => {
-    setPendingAction(label);
-    setMessage(null);
+    dispatch({ type: 'set-pending-action', value: label });
+    dispatch({ type: 'set-message', value: null });
+    dispatch({ type: 'set-action-error', value: null });
     try {
-      await executeAdapterAction(label, task, setMessage, () => setAdminAvailable(false));
+      await executeAdapterAction(
+        label,
+        task,
+        (nextMessage) => dispatch({ type: 'set-message', value: nextMessage }),
+        () => dispatch({ type: 'set-admin-available', value: false }),
+        (nextMessage) => dispatch({ type: 'set-action-error', value: nextMessage }),
+      );
     } finally {
-      setPendingAction(null);
+      dispatch({ type: 'set-pending-action', value: null });
     }
   };
 
   const actions: CustomAdapterWorkspaceActions = {
-    onCustomHttpChange: () => setDirty(true),
-    onTrustedJsChange: () => setDirty(true),
+    onCustomHttpChange: (draft) => {
+      editRevisionRef.current += 1;
+      dispatch({ type: 'set-action-error', value: null });
+      dispatch({ type: 'set-dirty', value: true });
+      dispatch({ type: 'set-preserve-custom-document', value: true });
+      dispatch({
+        type: 'set-custom-local-draft',
+        value: {
+          format: draft.format,
+          document: draft.document,
+          version: draft.version,
+          baseUrl: draft.baseUrl,
+          requestJson: draft.requestJson,
+          simulationStatus: draft.simulationStatus,
+          simulationJson: draft.simulationJson,
+          path: draft.path,
+          pathTestJson: draft.pathTestJson,
+        },
+      });
+    },
+    onTrustedJsChange: () => {
+      editRevisionRef.current += 1;
+      dispatch({ type: 'set-action-error', value: null });
+      dispatch({ type: 'set-dirty', value: true });
+    },
     onImportDocument: (file) => readImportedDocument(file),
     onValidate: (payload) => execute('Validate', async () => {
       await validate.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format, ...(payload.baseUrl ? { baseUrl: payload.baseUrl } : {}), ...(payload.request === undefined ? {} : { request: payload.request as never }) } });
@@ -441,8 +702,17 @@ export function CustomAdapterWorkspaceContainer({
       await capabilities.mutateAsync({ providerId: provider.id, request: { document: payload.document, format: payload.format } });
     }),
     onSave: (payload) => execute('Save', async () => {
-      await put.mutateAsync({ providerId: provider.id, document: payload.document, formatOrOptions: { format: payload.format, version: payload.version ?? '1.0.0' } });
-      setDirty(false);
+      const snapshot = editRevisionRef.current;
+      await executeMutationWithEditGuard(
+        () => put.mutateAsync({ providerId: provider.id, document: payload.document, formatOrOptions: { format: payload.format, version: payload.version ?? '1.0.0' } }),
+        snapshot,
+        () => editRevisionRef.current,
+        () => {
+          dispatch({ type: 'set-preserve-custom-document', value: false });
+          dispatch({ type: 'set-dirty', value: false });
+        },
+        () => dispatch({ type: 'set-preserve-custom-document', value: true }),
+      );
     }),
     onExport: (payload) => execute('Export', async () => {
       const ref = payload.ref === undefined ? undefined : fromRef(payload.ref);
@@ -452,9 +722,11 @@ export function CustomAdapterWorkspaceContainer({
     }),
     onLoadRevision: (revision) => {
       if (dirty && !ask(`Discard unsaved changes and load revision ${revision.version}?`)) return false;
-      setDirty(false);
-      setSelectedRevision(fromRef(revision));
-      setMessage(`Loaded revision ${revision.version}.`);
+      dispatch({ type: 'set-action-error', value: null });
+      dispatch({ type: 'clear-custom-document-draft' });
+      dispatch({ type: 'set-dirty', value: false });
+      dispatch({ type: 'set-selected-revision', value: fromRef(revision) });
+      dispatch({ type: 'set-message', value: `Loading revision ${revision.version}.` });
     },
     onLoadMoreRevisions: () => execute('Load more revisions', async () => { await customRevisionsQuery.fetchNextPage(); }),
     onLoadMoreTrustedBindings: () => execute('Load more binding history', async () => { await trustedBindingsQuery.fetchNextPage(); }),
@@ -466,24 +738,44 @@ export function CustomAdapterWorkspaceContainer({
       if (revision !== undefined) {
         const exact = fromRef(revision);
         if (currentCustomDefinition?.ref === undefined || !refsEqual(currentCustomDefinition.ref, exact)) {
-          setMessage('Only the current revision can be deleted by this Provider API.');
+          const failureMessage = 'Only the current revision can be deleted by this Provider API.';
+          dispatch({ type: 'set-message', value: failureMessage });
+          dispatch({ type: 'set-action-error', value: failureMessage });
           return false;
         }
       }
       if (!ask(`Delete adapter revision ${revision?.version ?? 'current'}?`)) return false;
-      return execute('Delete', async () => { await deleteCurrent.mutateAsync(provider.id); setDirty(false); });
+      return execute('Delete', async () => {
+        const exact = revision === undefined ? currentCustomDefinition?.ref : fromRef(revision);
+        if (exact === undefined) throw new Error('A current adapter revision is required before deleting.');
+        const snapshot = editRevisionRef.current;
+        await executeDeleteCurrentMutation(
+          () => deleteCurrent.mutateAsync({ providerId: provider.id, ref: exact }),
+          dispatch,
+          () => editRevisionRef.current === snapshot,
+        );
+      });
     },
     onManifestFileImport: (file) => file.text(),
-    onSourceFileSelect: () => setDirty(true),
+    onSourceFileSelect: () => {
+      editRevisionRef.current += 1;
+      dispatch({ type: 'set-action-error', value: null });
+      dispatch({ type: 'set-dirty', value: true });
+    },
     onInstall: (payload) => execute('Install', async () => {
       const manifest = TrustedAdapterManifestSchema.parse(payload.manifest);
-      await installTrusted.mutateAsync({ manifest, source: payload.source, ...(payload.providerId ? { providerId: payload.providerId } : {}) });
-      setDirty(false);
+      const snapshot = editRevisionRef.current;
+      await executeMutationWithEditGuard(
+        () => installTrusted.mutateAsync({ manifest, source: payload.source, ...(payload.providerId ? { providerId: payload.providerId } : {}) }),
+        snapshot,
+        () => editRevisionRef.current,
+        () => dispatch({ type: 'set-dirty', value: false }),
+      );
     }),
     onListTrusted: () => execute('List', async () => { await trustedAdaptersQuery.refetch(); }),
     onGetTrusted: (adapterId) => {
-      setTrustedLookupId(adapterId);
-      setMessage(`Loading ${adapterId}.`);
+      dispatch({ type: 'set-trusted-lookup-id', value: adapterId });
+      dispatch({ type: 'set-message', value: `Loading ${adapterId}.` });
     },
     onRemoveTrusted: (adapterId) => {
       if (!ask(`Remove trusted adapter ${adapterId}?`)) return false;
@@ -514,7 +806,7 @@ export function CustomAdapterWorkspaceContainer({
   const statusMessage = message ?? (pendingAction ? `${pendingAction} in progress.` : undefined);
   const close = () => {
     if (dirty && !ask('Discard unsaved adapter changes?')) return;
-    setDirty(false);
+    dispatch({ type: 'set-dirty', value: false });
     const restore = restoreFocusRef.current;
     onOpenChange(false);
     if (restore && typeof window !== 'undefined') window.setTimeout(() => restore.focus(), 0);
@@ -547,7 +839,7 @@ export function CustomAdapterWorkspaceContainer({
               )}
               {exactRevisionPending ? (
                 <div aria-live="polite" className="custom-adapter-revision-loading" data-testid="custom-adapter-revision-loading" role="status">Loading selected revision</div>
-              ) : exactRevisionError ? (
+              ) : resolvedExactRevisionError ? (
                 <div aria-live="polite" className="custom-adapter-revision-error" data-testid="custom-adapter-revision-error" role="alert">Select Retry to load the revision.</div>
               ) : isCustomHttp || isTrustedJs ? (
                 <CustomAdapterWorkspace
@@ -561,7 +853,7 @@ export function CustomAdapterWorkspaceContainer({
                   actions={actions}
                   adminAvailable={adminAvailable}
                   capabilityPreview={capabilities.data}
-                  customHttp={customDraft(customDefinition)}
+                  customHttp={customDraft(customDefinition, customLocalDraft, preserveCustomDocument)}
                   mode={isCustomHttp ? 'custom-http' : 'trusted-js'}
                   modeLocked
                   online={online}
@@ -571,7 +863,7 @@ export function CustomAdapterWorkspaceContainer({
                   revisions={isCustomHttp ? customRevisionItems : trustedBindingItems}
                   revisionsCursor={isCustomHttp ? customRevisionsQuery.hasNextPage ? 'next' : null : trustedBindingsQuery.hasNextPage ? 'next' : null}
                   simulationResult={simulate.data}
-                  status={exactRevisionError ? 'error' : status}
+                  status={resolvedExactRevisionError ? 'error' : status}
                   statusMessage={statusMessage ?? ''}
                   dryRunResult={dryRun.data}
                   trustedAdapterRef={currentTrustedSummary?.ref ?? null}
@@ -587,7 +879,7 @@ export function CustomAdapterWorkspaceContainer({
               )}
               {pendingAction && <p aria-live="polite" className="custom-adapter-dialog-pending" role="status"><LoaderCircle aria-hidden="true" className="is-spinning" size={15} />{pendingAction} in progress</p>}
             </div>
-            <footer className="custom-adapter-dialog-footer"><span aria-live="polite" role="status">{dirty ? 'Unsaved changes' : status === 'success' ? 'Saved' : ''}</span><button aria-label="Close adapter workspace" className="custom-adapter-dialog-footer-close" onClick={close} type="button">Done</button></footer>
+            <footer className="custom-adapter-dialog-footer"><span aria-live="polite" role="status">{actionError ?? (dirty ? 'Unsaved changes' : status === 'success' ? 'Saved' : '')}</span><button aria-label="Close adapter workspace" className="custom-adapter-dialog-footer-close" onClick={close} type="button">Done</button></footer>
           </Dialog.Content>
         </Dialog.Portal>
       )}

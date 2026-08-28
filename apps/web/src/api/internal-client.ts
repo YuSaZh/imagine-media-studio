@@ -5,6 +5,7 @@ import {
   CustomAdapterCapabilityPreviewRequestSchema,
   CustomAdapterCapabilityPreviewResponseSchema,
   CustomAdapterCompiledPreviewSchema,
+  CustomAdapterDeleteBodySchema,
   CustomAdapterDefinitionResponseSchema,
   CustomAdapterDocumentSchema,
   CustomAdapterDryRunRequestSchema,
@@ -784,11 +785,15 @@ export const internalClient = {
       ...requestSignal(normalized.options),
     });
   },
-  deleteCustomAdapter: async (providerId: string, options: InternalRequestOptions = {}) => {
+  deleteCustomAdapter: async (providerId: string, ref: CustomAdapterRef, options: InternalRequestOptions = {}) => {
     const parsedProviderId = ProviderIdSchema.parse(providerId);
+    const parsedRef = parseRef(ref);
+    const body = CustomAdapterDeleteBodySchema.parse({ ref: parsedRef });
     parseEmptyQuery();
     return requestEmpty(`/internal/providers/${encodeURIComponent(parsedProviderId)}/adapter`, {
       method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: jsonBody(body),
       ...requestSignal(options),
     });
   },

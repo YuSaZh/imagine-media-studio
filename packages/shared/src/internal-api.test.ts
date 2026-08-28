@@ -15,6 +15,7 @@ import {
   SettingsPatchSchema,
   ProviderTypeSchema,
   CustomAdapterRefSchema,
+  CustomAdapterDeleteBodySchema,
   AdapterFormatQuerySchema,
   EmptyQuerySchema,
   ProviderIdValueSchema,
@@ -609,6 +610,23 @@ describe('internal API schemas', () => {
     expect(CustomAdapterRevisionListQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
     expect(CustomAdapterExportQuerySchema.safeParse({ ...ref, format: 'toml' }).success).toBe(false);
     expect(CustomAdapterExportQuerySchema.safeParse({ ...ref, source: 'adapter.mjs' }).success).toBe(false);
+  });
+
+  it('requires a complete immutable ref for current adapter deletion', () => {
+    const ref = {
+      kind: 'declarative-http' as const,
+      adapterId: 'custom-video',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    expect(CustomAdapterDeleteBodySchema.parse({ ref })).toEqual({ ref });
+    for (const key of ['kind', 'adapterId', 'version', 'digest']) {
+      const partialRef = { ...ref };
+      delete partialRef[key as keyof typeof partialRef];
+      expect(CustomAdapterDeleteBodySchema.safeParse({ ref: partialRef }).success).toBe(false);
+    }
+    expect(CustomAdapterDeleteBodySchema.safeParse(ref).success).toBe(false);
+    expect(CustomAdapterDeleteBodySchema.safeParse({ ref, source: 'adapter.mjs' }).success).toBe(false);
   });
 
   it('validates extracted simulation output as a safe success/pending/failed union', () => {

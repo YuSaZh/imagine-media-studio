@@ -7,6 +7,7 @@ import {
   CustomAdapterCapabilityPreviewResponseSchema,
   CustomAdapterCompiledPreviewSchema,
   CustomAdapterDocumentSchema,
+  CustomAdapterDeleteBodySchema,
   CustomAdapterDefinitionDtoSchema,
   CustomAdapterDefinitionPageSchema,
   CustomAdapterDefinitionResponseSchema,
@@ -174,6 +175,7 @@ type CustomService = Pick<
   CustomAdapterService,
   | 'capabilities'
   | 'delete'
+  | 'deleteCurrent'
   | 'disable'
   | 'dryRun'
   | 'export'
@@ -222,6 +224,7 @@ const SERVICE_MESSAGES: Readonly<Record<string, string>> = {
   adapter_references_in_use: 'The adapter is still referenced and cannot be removed.',
   adapter_references_unavailable: 'Adapter references could not be verified.',
   referenced_jobs: 'The adapter is referenced by a retained Job.',
+  current_conflict: 'The current adapter revision changed; reload before deleting.',
   referenced_definitions: 'The adapter is referenced by a retained definition.',
   tombstoned: 'The adapter id is no longer available.',
   invalid_format: 'The adapter document format is invalid.',
@@ -934,11 +937,11 @@ export async function registerAdapterRoutes(
   });
 
   app.delete<{ Params: { providerId: string } }>('/internal/providers/:providerId/adapter', async (request, reply) => {
-    if (!ensureNoBody(request, reply)) return;
     const params = providerParams(request.params);
-    if (params === null || !EmptyQuerySchema.safeParse(request.query).success) return invalidRequest(reply);
+    const body = CustomAdapterDeleteBodySchema.safeParse(request.body);
+    if (params === null || !EmptyQuerySchema.safeParse(request.query).success || !body.success) return invalidRequest(reply);
     return callTool(reply, async () => {
-      const deleted = await services.custom.delete(params.providerId);
+      const deleted = await services.custom.deleteCurrent(params.providerId, body.data.ref);
       return deleted;
     }, (deleted) => deleted
       ? reply.code(204).send()

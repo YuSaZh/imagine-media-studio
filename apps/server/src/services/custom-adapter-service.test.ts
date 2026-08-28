@@ -322,6 +322,7 @@ describe('CustomAdapterService', () => {
       () => denied.list(target),
       () => denied.disable(target),
       () => denied.delete(target),
+      () => denied.deleteCurrent(provider.id, ref),
       () => denied.export(target),
       () => denied.exportDefinition(target),
       () => denied.capabilities(target),
@@ -372,6 +373,25 @@ describe('CustomAdapterService', () => {
     });
     await boundService.replace({ providerId: provider.id, version: '5.0.0', document: fixture('sync-image/adapter.json') });
     expect(boundOutbox.count).toBe(1);
+  });
+
+  it('deletes only the expected current revision and maps stale refs to a conflict', async () => {
+    const { provider, service, flushState } = await harness();
+    const first = await service.create({ providerId: provider.id, version: '1.0.0', document: fixture('sync-image/adapter.json') });
+    const second = await service.replace({ providerId: provider.id, version: '2.0.0', document: fixture('sync-image/adapter.json') });
+
+    await expect(service.deleteCurrent(provider.id, first.ref)).rejects.toMatchObject({
+      code: 'current_conflict',
+      statusCode: 409,
+    });
+    expect(service.current(provider.id)?.ref).toEqual(second.ref);
+    expect(service.getExact(provider.id, first.ref)?.ref).toEqual(first.ref);
+    expect(flushState.count).toBe(2);
+
+    await expect(service.deleteCurrent(provider.id, second.ref)).resolves.toBe(true);
+    expect(service.current(provider.id)).toBeNull();
+    expect(service.getExact(provider.id, second.ref)).toBeNull();
+    expect(flushState.count).toBe(3);
   });
 
   it('uses bounded strict JSON path tests and redacts credential-like values', async () => {

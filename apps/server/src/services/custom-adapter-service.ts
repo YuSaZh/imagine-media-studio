@@ -84,7 +84,7 @@ const PATH_RESPONSE_LIMITS: ParseLimits = {
 type ProviderLookup = Pick<ProviderRepository, 'get'>;
 type DefinitionRepository = Pick<
   ProviderAdapterDefinitionRepository,
-  'create' | 'replace' | 'disable' | 'delete' | 'getCurrent' | 'getByRef'
+  'create' | 'replace' | 'disable' | 'delete' | 'deleteCurrent' | 'getCurrent' | 'getByRef'
 > & {
   list?: (providerId: string) => readonly ProviderAdapterDefinitionRecord[];
 };
@@ -286,6 +286,7 @@ export type CustomAdapterServiceErrorCode =
   | 'provider_type_mismatch'
   | 'provider_adapter_kind_mismatch'
   | 'already_exists'
+  | 'current_conflict'
   | 'not_found'
   | 'adapter_not_found'
   | 'referenced_jobs'
@@ -362,6 +363,7 @@ function serviceErrorStatus(code: CustomAdapterServiceErrorCode): number {
     case 'provider_type_mismatch':
     case 'provider_adapter_kind_mismatch':
     case 'already_exists':
+    case 'current_conflict':
     case 'referenced_jobs':
       return 409;
     case 'storage_error':
@@ -911,6 +913,7 @@ function mapError(error: unknown): CustomAdapterServiceError {
       'digest_mismatch',
       'provider_not_found',
       'already_exists',
+      'current_conflict',
       'not_found',
       'referenced_jobs',
       'referenced_definitions',
@@ -1172,6 +1175,19 @@ export class CustomAdapterService {
         if (current === null) return false;
       }
       const removed = this.definitions.delete(providerId, ref);
+      if (removed) await this.flushAfterMutation();
+      return removed;
+    } catch (error) {
+      throw mapError(error);
+    }
+  }
+
+  public async deleteCurrent(providerId: string, ref: CustomAdapterRef): Promise<boolean> {
+    this.assertAdmin('write');
+    try {
+      this.assertProvider(providerId);
+      this.assertRefKind(ref);
+      const removed = this.definitions.deleteCurrent(providerId, ref);
       if (removed) await this.flushAfterMutation();
       return removed;
     } catch (error) {

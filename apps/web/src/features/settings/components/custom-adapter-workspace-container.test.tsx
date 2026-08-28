@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   TrustedAdapterManifestSchema,
   type CustomAdapterDefinitionDto,
@@ -14,14 +14,19 @@ import {
   CustomAdapterWorkspaceContainer,
   customAdapterWorkspaceKey,
   executeAdapterAction,
+  executeMutationWithEditGuard,
   mapCustomDefinitionToDraft,
   mapCustomRevisionToSummary,
   mapTrustedAdapterToSummary,
   mapTrustedBindingRevisionToSummary,
+  projectAdapterRevisionRef,
   readImportedDocument,
   projectTrustedWorkspaceState,
+  resolveAdapterWorkspaceStatus,
+  resolveExactAdapterDefinition,
 } from './custom-adapter-workspace-container.js';
-import { resolveWorkspaceStatusMessage } from './custom-adapter-workspace.js';
+import { InternalApiError } from '../../../api/internal-client.js';
+import { resolveWorkspaceStatusMessage, type AdapterRevision } from './custom-adapter-workspace.js';
 
 const manifest = TrustedAdapterManifestSchema.parse({
   schemaVersion: 1,
@@ -61,6 +66,15 @@ const customDefinition = {
   updatedAt: '2026-08-25T00:00:00.000Z',
 } as CustomAdapterDefinitionDto;
 
+const displayedRevision = {
+  ...ref,
+  current: false,
+  disabled: true,
+  createdAt: '2026-08-24T00:00:00.000Z',
+  updatedAt: '2026-08-25T00:00:00.000Z',
+  displayName: 'Custom fixture revision',
+} satisfies AdapterRevision;
+
 const binding = {
   providerId: 'provider-1',
   adapter: {
@@ -96,6 +110,72 @@ describe('custom adapter workspace container mappings', () => {
     expect(messages).toEqual(['Save complete.']);
   });
 
+  it('turns an empty or mismatched exact revision response into a missing revision', () => {
+    expect(resolveExactAdapterDefinition(null, ref)).toBeNull();
+    expect(resolveExactAdapterDefinition(undefined, ref)).toBeNull();
+    expect(resolveExactAdapterDefinition({ definition: { ...customDefinition, ref: { ...ref, version: '2.0.0' } } }, ref)).toBeNull();
+    expect(resolveExactAdapterDefinition({ definition: customDefinition }, ref)).toBe(customDefinition);
+  });
+
+  it('keeps Save dirty when a newer edit arrives while the request is deferred', async () => {
+    let revision = 0;
+    let committed = false;
+    let stillDirty = false;
+    let resolveRequest: (() => void) | undefined;
+    const request = new Promise<void>((resolve) => { resolveRequest = resolve; });
+    const save = executeMutationWithEditGuard(
+      () => request,
+      revision,
+      () => revision,
+      () => { committed = true; },
+      () => { stillDirty = true; },
+    );
+
+    revision += 1;
+    resolveRequest?.();
+    await save;
+
+    expect(committed).toBe(false);
+    expect(stillDirty).toBe(true);
+  });
+
+  it('keeps action failures separate from success status and clears the old success message', async () => {
+    const messages: string[] = [];
+    let actionError: string | null = null;
+    await expect(executeAdapterAction(
+      'Save',
+      async () => { throw new Error('Save request failed.'); },
+      (message) => messages.push(message),
+      undefined,
+      (message) => { actionError = message; },
+    )).rejects.toThrow('Save request failed.');
+
+    expect(messages).toEqual(['Save request failed.']);
+    expect(actionError).toBe('Save request failed.');
+    expect(resolveAdapterWorkspaceStatus({
+      actionError,
+      adminAvailable: true,
+      disabled: false,
+      hasData: true,
+      loading: false,
+      online: true,
+      queryError: null,
+    })).toBe('error');
+  });
+
+  it('classifies a structured administrator 403 and records its server message', async () => {
+    const messages: string[] = [];
+    const onAdminError = vi.fn();
+    const error = new InternalApiError(403, 'administrator_required', 'Administrator authorization is required.');
+
+    await expect(executeAdapterAction('Validate', async () => {
+      throw error;
+    }, (message) => messages.push(message), onAdminError)).rejects.toBe(error);
+
+    expect(onAdminError).toHaveBeenCalledOnce();
+    expect(messages).toEqual(['Administrator authorization is required.']);
+  });
+
   it('keeps Save feedback when a full-ref key change remounts the child workspace', async () => {
     const beforeRef = ref;
     const afterRef = { ...ref, version: '1.0.1', digest: 'c'.repeat(64) };
@@ -117,6 +197,45 @@ describe('custom adapter workspace container mappings', () => {
     expect(mapTrustedBindingRevisionToSummary(binding)).toMatchObject({ kind: 'trusted-javascript', current: true });
     expect(mapTrustedAdapterToSummary(binding.adapter)).not.toHaveProperty('source');
   });
+
+  it('keeps local test inputs when a server revision changes the keyed workspace', () => {
+    const requestJson = JSON.stringify({
+      operation: 'image.generate',
+      providerId: 'provider-1',
+      modelId: 'custom-fixture',
+      prompt: 'Keep this sample request',
+      inputs: [],
+    });
+    const draft = mapCustomDefinitionToDraft(customDefinition, {
+      baseUrl: 'https://api.example.com/v1',
+      format: 'yaml',
+      requestJson,
+      simulationStatus: '202',
+      simulationJson: '{"status":"pending"}',
+      path: '/data/0/id',
+      pathTestJson: '{"data":[{"id":"fixture"}]}',
+    });
+
+    expect(draft.document).toContain('custom-fixture');
+    expect(draft.version).toBe(ref.version);
+    expect(draft).toMatchObject({
+      baseUrl: 'https://api.example.com/v1',
+      format: 'yaml',
+      requestJson,
+      simulationStatus: '202',
+      simulationJson: '{"status":"pending"}',
+      path: '/data/0/id',
+      pathTestJson: '{"data":[{"id":"fixture"}]}',
+    });
+  });
+
+  it.each(['Export', 'Load', 'Disable', 'Delete'] as const)(
+    'projects the exact ref before the %s revision action',
+    () => {
+      expect(() => projectAdapterRevisionRef(displayedRevision)).not.toThrow(/unrecognized_keys/u);
+      expect(projectAdapterRevisionRef(displayedRevision)).toEqual(ref);
+    },
+  );
 
   it('keeps container SSR-safe and exposes the independent dialog contract', () => {
     const provider = {

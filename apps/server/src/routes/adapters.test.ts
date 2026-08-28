@@ -97,6 +97,7 @@ function customTools() {
   return {
     capabilities: vi.fn(async () => ({ capabilities })),
     delete: vi.fn(async () => true),
+    deleteCurrent: vi.fn(async () => true),
     disable: vi.fn(async () => customRecord),
     dryRun: vi.fn(async () => ({ network: false as const, performed: false as const, endpoint: 'submit' as const, request: { ...compiled, capabilities }, preview: { ...compiled, capabilities }, capabilities })),
     export: vi.fn(() => ({ content: '{"schemaVersion":1}', document: '{"schemaVersion":1}', format: 'json' as const, ref: customRef })),
@@ -449,6 +450,43 @@ describe('adapter management routes', () => {
       expect(missing.json()).toEqual({ error: 'provider_not_found', message: 'The Provider was not found.' });
       const invalidQuery = await app.inject({ method: 'GET', url: '/internal/adapters/anything?unexpected=true' });
       expect(invalidQuery.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('requires the complete current ref for custom adapter deletion and maps CAS conflicts', async () => {
+    const custom = customTools();
+    custom.deleteCurrent.mockRejectedValueOnce(new CustomAdapterServiceError('current_conflict', 'raw revision detail'));
+    const { app } = await createRouteApp(trustedTools(), custom);
+    try {
+      const stale = await app.inject({
+        method: 'DELETE',
+        url: '/internal/providers/provider-1/adapter',
+        headers: { 'content-type': 'application/json' },
+        payload: { ref: { ...customRef, version: '2.0.0' } },
+      });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).toEqual({
+        error: 'current_conflict',
+        message: 'The current adapter revision changed; reload before deleting.',
+      });
+      expect(custom.deleteCurrent).toHaveBeenCalledWith('provider-1', { ...customRef, version: '2.0.0' });
+
+      const missing = await app.inject({
+        method: 'DELETE',
+        url: '/internal/providers/provider-1/adapter',
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const partial = await app.inject({
+        method: 'DELETE',
+        url: '/internal/providers/provider-1/adapter',
+        headers: { 'content-type': 'application/json' },
+        payload: { ref: { kind: customRef.kind, adapterId: customRef.adapterId } },
+      });
+      expect(partial.statusCode).toBe(400);
+      expect(custom.deleteCurrent).toHaveBeenCalledOnce();
     } finally {
       await app.close();
     }

@@ -627,6 +627,57 @@ describe('internalClient', () => {
     }
   });
 
+  it('preserves structured administrator-required adapter errors from 403 responses', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        error: 'administrator_required',
+        message: 'Administrator authorization is required.',
+      }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 403,
+      }),
+    );
+
+    await expect(internalClient.validateCustomAdapter('provider-1', {
+      document: {
+        schemaVersion: 1,
+        version: '1.0.0',
+        definition: { id: 'custom-fixture' },
+      },
+    })).rejects.toEqual(new InternalApiError(
+      403,
+      'administrator_required',
+      'Administrator authorization is required.',
+    ));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('sends the complete custom adapter ref in the current-delete body', async () => {
+    const ref = {
+      kind: 'declarative-http' as const,
+      adapterId: 'custom-delete',
+      version: '1.0.0',
+      digest: 'a'.repeat(64),
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+
+    await expect(internalClient.deleteCustomAdapter('provider-1', ref)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/internal/providers/provider-1/adapter',
+      expect.objectContaining({
+        body: JSON.stringify({ ref }),
+        headers: expect.objectContaining({
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        }),
+        method: 'DELETE',
+      }),
+    );
+
+    await expect(internalClient.deleteCustomAdapter('provider-1', { ...ref, digest: 'invalid' })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('reads exact trusted bindings, disables provider bindings, and unbinds without global removal', async () => {
     const manifest = TrustedAdapterManifestSchema.parse({
       schemaVersion: 1,

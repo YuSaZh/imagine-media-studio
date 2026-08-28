@@ -247,6 +247,36 @@ describe('ProviderAdapterDefinitionRepository', () => {
     expect(repository.delete(provider.id)).toBe(true);
   });
 
+  it('deletes only an exact current revision with an atomic CAS predicate', async () => {
+    const database = await createTestDatabase();
+    const provider = new ProviderRepository(database.orm).create({ name: 'Current CAS', type: 'custom-http-v1' });
+    const repository = new ProviderAdapterDefinitionRepository(database.orm);
+    const declarative = await declarativeRef();
+    const first = repository.create(provider.id, declarative);
+    const secondRef = { ...first.ref, version: '2.0.0' };
+    const second = repository.replace(provider.id, { ref: secondRef, definition: declarative.definition });
+
+    expect(() => repository.deleteCurrent(provider.id, first.ref)).toThrow(
+      expect.objectContaining({ code: 'current_conflict' }),
+    );
+    expect(repository.getCurrent(provider.id)?.ref).toEqual(second.ref);
+    expect(repository.getByRef(provider.id, first.ref)?.ref).toEqual(first.ref);
+
+    const jobs = new JobRepository(database.orm);
+    const retained = jobs.create(createMockGenerationRequest({ providerId: provider.id }), second.ref);
+    expect(() => repository.deleteCurrent(provider.id, second.ref)).toThrow(
+      expect.objectContaining({ code: 'referenced_jobs' }),
+    );
+    expect(repository.getCurrent(provider.id)?.ref).toEqual(second.ref);
+
+    const claimed = jobs.claimQueued(retained.id, retained.revision);
+    if (!claimed) throw new Error('Expected the retained adapter Job to be claimed.');
+    expect(jobs.compareAndSetStatus(retained.id, claimed.revision, ['submitting'], 'failed', 'failed')).not.toBeNull();
+    expect(jobs.softDelete(retained.id)).toBe(true);
+    expect(repository.deleteCurrent(provider.id, second.ref)).toBe(true);
+    expect(repository.getCurrent(provider.id)).toBeNull();
+  });
+
   it('snapshots refs into jobs, preserves them through retry and SQLite reopen, and rejects partial persisted refs', async () => {
     const database = await createTestDatabase();
     const provider = new ProviderRepository(database.orm).create({ name: 'Declarative', type: 'custom-http-v1' });

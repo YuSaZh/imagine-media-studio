@@ -6,7 +6,7 @@ import {
   assertSafeCustomFields,
   type CustomAdapterRef,
 } from '@imagine/shared';
-import { and, asc, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, notExists, or } from 'drizzle-orm';
 
 import {
   canonicalDeclarativeSpec,
@@ -84,6 +84,7 @@ export class ProviderAdapterDefinitionError extends Error {
       | 'digest_mismatch'
       | 'provider_not_found'
       | 'already_exists'
+      | 'current_conflict'
       | 'disabled_revision'
       | 'not_found'
       | 'referenced_jobs'
@@ -503,6 +504,42 @@ function hasReferencedJobs(
     return true;
   }
   return false;
+}
+
+/**
+ * Retained references that prevent deleting one exact adapter revision.
+ *
+ * The database trigger normally keeps all four job columns populated or all
+ * four null. The incomplete branch remains deliberately conservative for
+ * legacy/corrupt rows, matching hasReferencedJobs's fail-closed behavior.
+ */
+function retainedJobReferenceCondition(providerId: string, ref: CustomAdapterRef) {
+  const anyReference = or(
+    isNotNull(jobs.adapterKind),
+    isNotNull(jobs.adapterId),
+    isNotNull(jobs.adapterVersion),
+    isNotNull(jobs.adapterDigest),
+  );
+  const incompleteReference = and(
+    anyReference,
+    or(
+      isNull(jobs.adapterKind),
+      isNull(jobs.adapterId),
+      isNull(jobs.adapterVersion),
+      isNull(jobs.adapterDigest),
+    ),
+  );
+  const exactReference = and(
+    eq(jobs.adapterKind, ref.kind),
+    eq(jobs.adapterId, ref.adapterId),
+    eq(jobs.adapterVersion, ref.version),
+    eq(jobs.adapterDigest, ref.digest),
+  );
+  return and(
+    eq(jobs.providerId, providerId),
+    isNull(jobs.deletedAt),
+    or(incompleteReference, exactReference),
+  );
 }
 
 function eventPayload(providerId: string, ref: CustomAdapterRef): Record<string, string> {
@@ -1215,6 +1252,74 @@ export class ProviderAdapterDefinitionRepository {
         )
         .run();
       return true;
+    });
+  }
+
+  /** Deletes only when the supplied immutable ref is still the current row. */
+  public deleteCurrent(providerId: string, rawRef: CustomAdapterRef): boolean {
+    const expected = parseRef(rawRef);
+    return this.database.transaction((transaction) => {
+      // Keep the expected ref and current marker in the same SQL predicate as
+      // the delete. This is the CAS boundary; no preceding read can select a
+      // newer revision for deletion after a concurrent replace commits.
+      const deleted = transaction
+        .delete(providerAdapterDefinitions)
+        .where(and(
+          eq(providerAdapterDefinitions.providerId, providerId),
+          eq(providerAdapterDefinitions.isCurrent, true),
+          exactRefCondition(expected),
+          notExists(
+            transaction
+              .select({ id: jobs.id })
+              .from(jobs)
+              .where(retainedJobReferenceCondition(providerId, expected)),
+          ),
+        ))
+        .run();
+      if (deleted.changes === 1) {
+        transaction
+          .insert(changeEvents)
+          .values(
+            toChangeEventValues({
+              aggregateType: 'provider_adapter_definition',
+              aggregateId: providerId,
+              eventType: 'provider_adapter_definition.deleted',
+              payload: eventPayload(providerId, expected),
+            }),
+          )
+          .run();
+        return true;
+      }
+
+      // The failed CAS is classified while the transaction still owns its
+      // snapshot. A changed current ref is a stable conflict, while no
+      // current row preserves the existing not-found behavior.
+      const current = currentRef(transaction, providerId);
+      if (current === null) return false;
+      if (
+        current.kind !== expected.kind ||
+        current.adapterId !== expected.adapterId ||
+        current.version !== expected.version ||
+        current.digest !== expected.digest
+      ) {
+        throw new ProviderAdapterDefinitionError(
+          'current_conflict',
+          'The current adapter revision changed; reload before deleting.',
+        );
+      }
+      if (hasReferencedJobs(transaction, providerId, expected)) {
+        throw new ProviderAdapterDefinitionError(
+          'referenced_jobs',
+          'Adapter definition is referenced by a retained Job.',
+        );
+      }
+      // A current row that survived the CAS without a retained reference is
+      // only possible if a database trigger changed it during the statement.
+      // Treat it as a failed CAS rather than claiming a deletion occurred.
+      throw new ProviderAdapterDefinitionError(
+        'current_conflict',
+        'The current adapter revision changed; reload before deleting.',
+      );
     });
   }
 }

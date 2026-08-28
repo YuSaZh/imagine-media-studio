@@ -635,11 +635,16 @@ export async function loadCustomAdapterRevisionData(
   providerId: string,
   ref: CustomAdapterRef,
   requestOptions: InternalRequestOptions = {},
-): Promise<CustomAdapterDefinitionResponse | null> {
+): Promise<CustomAdapterDefinitionResponse> {
   const parsedProviderId = parseProviderId(providerId);
   const parsedRef = parseRef(ref);
-  if (fixture) return parsedProviderId === FIXTURE_PROVIDER_ID ? fixtureCustomResponse(parsedRef) : null;
-  return internalClient.getCustomAdapterRevision(parsedProviderId, parsedRef, requestOptions);
+  const result = fixture
+    ? parsedProviderId === FIXTURE_PROVIDER_ID ? fixtureCustomResponse(parsedRef) : null
+    : await internalClient.getCustomAdapterRevision(parsedProviderId, parsedRef, requestOptions);
+  if (result === null) {
+    throw new InternalApiError(404, 'adapter_not_found', 'Adapter revision was not found.');
+  }
+  return result;
 }
 
 export async function loadCustomAdapterRevisionsData(
@@ -989,10 +994,9 @@ export function useDeleteCustomAdapter(fixture = isVisualFixtureMode()) {
   const queryClient = useQueryClient();
   return useMutation({
     gcTime: 0,
-    mutationFn: async (value: string | (Readonly<{ providerId: string }> & WithMutationOptions)) => {
+    mutationFn: async (value: Readonly<{ providerId: string; ref: CustomAdapterRef }> & WithMutationOptions) => {
       if (fixture) throw new Error('Visual fixtures cannot delete adapters.');
-      if (typeof value === 'string') return internalClient.deleteCustomAdapter(value);
-      return internalClient.deleteCustomAdapter(value.providerId, mutationOptions(value));
+      return internalClient.deleteCustomAdapter(value.providerId, value.ref, mutationOptions(value));
     },
     onSuccess: () => invalidateAdapterQueries(queryClient, fixture),
   });

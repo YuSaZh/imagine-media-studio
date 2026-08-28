@@ -519,6 +519,14 @@ export const CustomAdapterTargetSchema = z.object({
 }).strict();
 export type CustomAdapterTarget = z.infer<typeof CustomAdapterTargetSchema>;
 
+/** Provider-scoped deletion always carries the exact current revision ref. */
+export const CustomAdapterDeleteBodySchema = z.object({
+  ref: CustomAdapterRefSchema,
+}).strict();
+export type CustomAdapterDeleteBody = z.infer<typeof CustomAdapterDeleteBodySchema>;
+export const CustomAdapterDeleteRequestSchema = CustomAdapterDeleteBodySchema;
+export type CustomAdapterDeleteRequest = CustomAdapterDeleteBody;
+
 /** The exact envelope emitted by declarative adapter export. */
 export const CustomAdapterImportEnvelopeSchema = z.object({
   schemaVersion: z.literal(1),
@@ -1327,6 +1335,7 @@ export const AdapterErrorCodeSchema = z.enum([
   'provider_type_mismatch',
   'provider_adapter_kind_mismatch',
   'already_exists',
+  'current_conflict',
   'not_found',
   'adapter_not_found',
   'referenced_jobs',
