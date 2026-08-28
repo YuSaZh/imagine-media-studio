@@ -139,12 +139,26 @@ function isSafeMaintenanceStoredPath(value: string): boolean {
   return value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
+export const MaintenanceMediaStoredPathSchema = z.string().min(1).max(4_096).refine(isSafeMaintenanceStoredPath, {
+  message: 'Maintenance stored paths must be POSIX-relative or a bounded sentinel.',
+});
+export const MaintenanceMediaRepairKindSchema = z.enum([
+  'hash_mismatch',
+  'missing',
+  'orphan',
+  'size_mismatch',
+  'unsafe',
+  'unreadable',
+]);
+export const MaintenanceMediaRepairStateSchema = z.enum(['open', 'running', 'resolved', 'manual']);
+const MaintenanceMediaRepairErrorCodeSchema = z.string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u)
+  .nullable();
+
 export const MaintenanceMediaIssueSchema = z.object({
   assetId: z.string().min(1).max(255).nullable(),
-  kind: z.enum(['hash_mismatch', 'missing', 'orphan', 'size_mismatch', 'unsafe', 'unreadable']),
-  storedPath: z.string().min(1).max(4_096).refine(isSafeMaintenanceStoredPath, {
-    message: 'Maintenance stored paths must be POSIX-relative or a bounded sentinel.',
-  }),
+  kind: MaintenanceMediaRepairKindSchema,
+  storedPath: MaintenanceMediaStoredPathSchema,
 }).strict();
 export const MaintenanceMediaResponseSchema = z.object({
   media: z.object({
@@ -159,6 +173,53 @@ export const MaintenanceMediaResponseSchema = z.object({
 }).strict();
 export type MaintenanceMediaIssue = z.infer<typeof MaintenanceMediaIssueSchema>;
 export type MaintenanceMediaResponse = z.infer<typeof MaintenanceMediaResponseSchema>;
+
+export const MaintenanceMediaReconcileResponseSchema = z.object({
+  media: z.object({
+    scan: z.object({
+      assetCount: z.number().int().nonnegative(),
+      fileCount: z.number().int().nonnegative(),
+      hashedBytes: z.number().int().nonnegative(),
+      issueCount: z.number().int().nonnegative(),
+      ok: z.boolean(),
+      truncated: z.boolean(),
+    }).strict(),
+    queue: z.object({
+      inserted: z.number().int().nonnegative(),
+      reopened: z.number().int().nonnegative(),
+      resolved: z.number().int().nonnegative(),
+      seen: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+      updated: z.number().int().nonnegative(),
+    }).strict(),
+  }).strict(),
+}).strict();
+export type MaintenanceMediaReconcileResponse = z.infer<typeof MaintenanceMediaReconcileResponseSchema>;
+
+export const MaintenanceMediaRepairRecordSchema = z.object({
+  assetId: z.string().min(1).max(255).nullable(),
+  attempts: z.number().int().nonnegative().max(1_000_000),
+  firstSeenAt: IsoTimestampSchema,
+  issueKey: Sha256Schema,
+  jobId: z.string().min(1).max(255).nullable(),
+  kind: MaintenanceMediaRepairKindSchema,
+  lastErrorCode: MaintenanceMediaRepairErrorCodeSchema,
+  lastSeenAt: IsoTimestampSchema,
+  leaseUntil: IsoTimestampSchema.nullable(),
+  nextAttemptAt: IsoTimestampSchema,
+  resolvedAt: IsoTimestampSchema.nullable(),
+  state: MaintenanceMediaRepairStateSchema,
+  storedPath: MaintenanceMediaStoredPathSchema,
+}).strict();
+export type MaintenanceMediaRepairRecord = z.infer<typeof MaintenanceMediaRepairRecordSchema>;
+export const MaintenanceMediaRepairsResponseSchema = z.object({
+  repairs: z.object({
+    count: z.number().int().nonnegative(),
+    items: z.array(MaintenanceMediaRepairRecordSchema).max(100),
+    truncated: z.boolean(),
+  }).strict(),
+}).strict();
+export type MaintenanceMediaRepairsResponse = z.infer<typeof MaintenanceMediaRepairsResponseSchema>;
 
 // Stable aliases for server-side callers that describe the same wire DTOs as
 // database maintenance responses.

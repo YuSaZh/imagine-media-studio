@@ -97,7 +97,7 @@ describe('internalClient', () => {
     }
   });
 
-  it('calls the maintenance integrity and database-only backup endpoints with empty inputs', async () => {
+  it('calls the maintenance integrity, media audit, reconcile, and repair endpoints with bounded inputs', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({
         integrity: {
@@ -125,6 +125,33 @@ describe('internalClient', () => {
           ok: true,
           truncated: false,
         },
+      }), { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        media: {
+          queue: { inserted: 1, reopened: 0, resolved: 2, seen: 3, truncated: false, updated: 0 },
+          scan: { assetCount: 4, fileCount: 8, hashedBytes: 128, issueCount: 3, ok: false, truncated: false },
+        },
+      }), { headers: { 'Content-Type': 'application/json' }, status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        repairs: {
+          count: 1,
+          items: [{
+            assetId: 'asset-1',
+            attempts: 2,
+            firstSeenAt: '2026-08-29T00:00:00.000Z',
+            issueKey: 'a'.repeat(64),
+            jobId: null,
+            kind: 'missing',
+            lastErrorCode: 'repair_failed',
+            lastSeenAt: '2026-08-29T00:01:00.000Z',
+            leaseUntil: null,
+            nextAttemptAt: '2026-08-29T00:02:00.000Z',
+            resolvedAt: null,
+            state: 'open',
+            storedPath: 'media/uploads/missing.png',
+          }],
+          truncated: false,
+        },
       }), { headers: { 'Content-Type': 'application/json' }, status: 200 }));
 
     await expect(internalClient.getDatabaseIntegrity()).resolves.toMatchObject({
@@ -135,6 +162,12 @@ describe('internalClient', () => {
     });
     await expect(internalClient.getMediaConsistency()).resolves.toMatchObject({
       media: { ok: true, issueCount: 0 },
+    });
+    await expect(internalClient.reconcileMediaConsistency()).resolves.toMatchObject({
+      media: { queue: { inserted: 1, resolved: 2 }, scan: { truncated: false } },
+    });
+    await expect(internalClient.getMediaRepairs()).resolves.toMatchObject({
+      repairs: { count: 1, items: [{ storedPath: 'media/uploads/missing.png' }] },
     });
 
     expect(fetchMock.mock.calls[0]).toEqual([
@@ -148,6 +181,15 @@ describe('internalClient', () => {
     expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty('body');
     expect(fetchMock.mock.calls[2]).toEqual([
       '/internal/maintenance/media',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    ]);
+    expect(fetchMock.mock.calls[3]).toEqual([
+      '/internal/maintenance/media/reconcile',
+      expect.objectContaining({ credentials: 'same-origin', method: 'POST' }),
+    ]);
+    expect(fetchMock.mock.calls[3]?.[1]).not.toHaveProperty('body');
+    expect(fetchMock.mock.calls[4]).toEqual([
+      '/internal/maintenance/media/repairs',
       expect.objectContaining({ credentials: 'same-origin' }),
     ]);
   });

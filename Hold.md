@@ -25,8 +25,8 @@ This file records non-blocking work that cannot currently be proven or completed
 ### PR 8 provider-output cleanup reconciliation
 
 - **Affects:** PR 8 media consistency and repair.
-- **Status:** The first PR 8 media-consistency milestone now performs bounded audit reporting and startup reconciliation. A process crash can still leave provider-result files that are not represented by a durable cleanup queue, and durable repair remains a later milestone.
-- **Current handling:** At startup, delete only deterministic provider provisional outputs for a known terminal Job when no Asset references any derived path. Preserve active, unknown, referenced, unsafe, or ambiguous entries. The authenticated media report flags managed-tree drift but never deletes orphan or referenced media.
+- **Status:** PR 8 now has bounded audit reporting, startup reconciliation, a durable repair queue, and authenticated scan/queue report endpoints. A process crash can still leave provider-result files that are not represented by a durable cleanup action, and media-service repair execution remains a later milestone.
+- **Current handling:** At startup, delete only deterministic provider provisional outputs for a known terminal Job when no Asset references any derived path. Preserve active, unknown, referenced, unsafe, or ambiguous entries. Reconcile persists safe issue records but does not execute repairs or delete managed-tree orphans.
 
 ### Dynamic model catalog pagination
 

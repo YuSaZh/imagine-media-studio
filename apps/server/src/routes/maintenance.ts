@@ -3,6 +3,8 @@ import {
   MaintenanceBackupResponseSchema,
   MaintenanceIntegrityResponseSchema,
   MaintenanceMediaResponseSchema,
+  MaintenanceMediaReconcileResponseSchema,
+  MaintenanceMediaRepairsResponseSchema,
 } from '@imagine/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -14,6 +16,10 @@ import {
   DatabaseBackupCollisionError,
   type DatabaseBackupResult,
 } from '../maintenance/database-backup.js';
+import type {
+  MediaRepairListResult,
+  MediaRepairReconcileResult,
+} from '../media/media-repair-coordinator.js';
 import type { MediaConsistencyReport } from '../media/maintenance.js';
 
 export class MaintenanceUnauthenticatedError extends Error {
@@ -31,6 +37,8 @@ export interface MaintenanceBackupPort {
 
 export interface MaintenanceMediaPort {
   audit(): Promise<MediaConsistencyReport>;
+  listRepairs(): Promise<MediaRepairListResult>;
+  reconcile(): Promise<MediaRepairReconcileResult>;
 }
 
 export interface MaintenanceRoutesOptions {
@@ -141,6 +149,34 @@ function mediaResponse(report: MediaConsistencyReport): unknown {
   return MaintenanceMediaResponseSchema.parse({ media: report });
 }
 
+function mediaReconcileResponse(result: MediaRepairReconcileResult): unknown {
+  return MaintenanceMediaReconcileResponseSchema.parse({ media: result });
+}
+
+function mediaRepairsResponse(result: MediaRepairListResult): unknown {
+  return MaintenanceMediaRepairsResponseSchema.parse({
+    repairs: {
+      count: result.count,
+      items: result.items.map((item) => ({
+        assetId: item.assetId,
+        attempts: item.attempts,
+        firstSeenAt: item.firstSeenAt.toISOString(),
+        issueKey: item.issueKey,
+        jobId: item.jobId,
+        kind: item.kind,
+        lastErrorCode: item.lastErrorCode,
+        lastSeenAt: item.lastSeenAt.toISOString(),
+        leaseUntil: item.leaseUntil?.toISOString() ?? null,
+        nextAttemptAt: item.nextAttemptAt.toISOString(),
+        resolvedAt: item.resolvedAt?.toISOString() ?? null,
+        state: item.state,
+        storedPath: item.storedPath,
+      })),
+      truncated: result.truncated,
+    },
+  });
+}
+
 function backupFailure(reply: FastifyReply, error: unknown): void {
   if (error instanceof BackupInProgressError) {
     void reply.code(409).send({
@@ -183,6 +219,28 @@ export async function registerMaintenanceRoutes(
     if (!ensureEmptyRequest(request, reply)) return;
     try {
       return mediaResponse(await options.media.audit());
+    } catch {
+      safeFailure(reply);
+      return;
+    }
+  });
+
+  app.post('/internal/maintenance/media/reconcile', async (request, reply) => {
+    if (!await requireAdmin(request, reply, options.authorization)) return;
+    if (!ensureEmptyRequest(request, reply)) return;
+    try {
+      return mediaReconcileResponse(await options.media.reconcile());
+    } catch {
+      safeFailure(reply);
+      return;
+    }
+  });
+
+  app.get('/internal/maintenance/media/repairs', async (request, reply) => {
+    if (!await requireAdmin(request, reply, options.authorization)) return;
+    if (!ensureEmptyRequest(request, reply)) return;
+    try {
+      return mediaRepairsResponse(await options.media.listRepairs());
     } catch {
       safeFailure(reply);
       return;

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   and,
   asc,
+  count,
   eq,
   isNotNull,
   lte,
@@ -380,6 +381,14 @@ export class MediaRepairQueueRepository {
       .limit(limit)
       .all();
     return rows.map(mapMediaRepairRow);
+  }
+
+  public count(): number {
+    const row = this.database
+      .select({ value: count() })
+      .from(mediaRepairQueue)
+      .get();
+    return row?.value ?? 0;
   }
 
   public upsertScan(

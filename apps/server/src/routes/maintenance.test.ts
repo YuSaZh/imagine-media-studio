@@ -7,6 +7,10 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDatabase } from '../database/client.js';
+import type {
+  MediaRepairListResult,
+  MediaRepairReconcileResult,
+} from '../media/media-repair-coordinator.js';
 import type { MediaConsistencyReport } from '../media/maintenance.js';
 import type { DatabaseBackupResult } from '../maintenance/database-backup.js';
 import {
@@ -37,6 +41,45 @@ const MEDIA_RESULT: MediaConsistencyReport = {
   truncated: false,
 };
 
+const MEDIA_RECONCILE_RESULT: MediaRepairReconcileResult = {
+  queue: {
+    inserted: 1,
+    reopened: 0,
+    resolved: 2,
+    seen: 3,
+    truncated: false,
+    updated: 0,
+  },
+  scan: {
+    assetCount: 4,
+    fileCount: 8,
+    hashedBytes: 128,
+    issueCount: 3,
+    ok: false,
+    truncated: false,
+  },
+};
+
+const MEDIA_REPAIRS_RESULT: MediaRepairListResult = {
+  count: 1,
+  items: [{
+    assetId: 'asset-1',
+    attempts: 2,
+    firstSeenAt: new Date('2026-08-29T00:00:00.000Z'),
+    issueKey: 'a'.repeat(64),
+    jobId: null,
+    kind: 'missing',
+    lastErrorCode: 'repair_failed',
+    lastSeenAt: new Date('2026-08-29T00:01:00.000Z'),
+    leaseUntil: null,
+    nextAttemptAt: new Date('2026-08-29T00:02:00.000Z'),
+    resolvedAt: null,
+    state: 'open',
+    storedPath: 'media/uploads/missing.png',
+  }],
+  truncated: false,
+};
+
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
   await Promise.all(
@@ -48,14 +91,23 @@ afterEach(async () => {
 async function createRouteApp(options: {
   readonly adminEnabled?: boolean;
   readonly backup?: { create(): Promise<DatabaseBackupResult> };
-  readonly media?: { audit(): Promise<MediaConsistencyReport> };
+  readonly media?: Partial<{
+    audit(): Promise<MediaConsistencyReport>;
+    listRepairs(): Promise<MediaRepairListResult>;
+    reconcile(): Promise<MediaRepairReconcileResult>;
+  }>;
   readonly assertAdmin?: (request: FastifyRequest) => void;
 } = {}): Promise<FastifyInstance> {
   const dataDir = await mkdtemp(join(tmpdir(), 'imagine-maintenance-route-'));
   temporaryDirectories.push(dataDir);
   const database = createDatabase(resolve(dataDir, 'app.db'), migrationsDirectory);
   const backup = options.backup ?? { create: vi.fn().mockResolvedValue(RESULT) };
-  const media = options.media ?? { audit: vi.fn().mockResolvedValue(MEDIA_RESULT) };
+  const media = {
+    audit: vi.fn().mockResolvedValue(MEDIA_RESULT),
+    listRepairs: vi.fn().mockResolvedValue(MEDIA_REPAIRS_RESULT),
+    reconcile: vi.fn().mockResolvedValue(MEDIA_RECONCILE_RESULT),
+    ...options.media,
+  };
   const app = Fastify({ logger: false });
   apps.push(app);
   app.addHook('onClose', async () => {
@@ -235,6 +287,65 @@ describe('maintenance routes', () => {
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toContain('/data/app.db');
     expect(response.body).not.toContain('unsafe stored path');
+  });
+
+  it('reconciles media into the queue and projects bounded repair records', async () => {
+    const reconcile = vi.fn().mockResolvedValue(MEDIA_RECONCILE_RESULT);
+    const listRepairs = vi.fn().mockResolvedValue(MEDIA_REPAIRS_RESULT);
+    const app = await createRouteApp({ media: { listRepairs, reconcile } });
+    const headers = { authorization: 'Basic admin' };
+    const reconcileResponse = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile',
+      headers,
+    });
+    const reconcileBody = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile',
+      headers,
+      payload: {},
+    });
+    const reconcileQuery = await app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile?limit=1',
+      headers,
+    });
+    const repairsResponse = await app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media/repairs',
+      headers,
+    });
+    const repairsQuery = await app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media/repairs?state=open',
+      headers,
+    });
+
+    expect(reconcileResponse.statusCode).toBe(200);
+    expect(reconcileResponse.json()).toEqual({
+      media: {
+        queue: MEDIA_RECONCILE_RESULT.queue,
+        scan: MEDIA_RECONCILE_RESULT.scan,
+      },
+    });
+    expect(reconcileBody.statusCode).toBe(400);
+    expect(reconcileQuery.statusCode).toBe(400);
+    expect(repairsResponse.statusCode).toBe(200);
+    expect(repairsResponse.json()).toEqual({
+      repairs: {
+        count: 1,
+        items: [{
+          ...MEDIA_REPAIRS_RESULT.items[0],
+          firstSeenAt: '2026-08-29T00:00:00.000Z',
+          lastSeenAt: '2026-08-29T00:01:00.000Z',
+          nextAttemptAt: '2026-08-29T00:02:00.000Z',
+        }],
+        truncated: false,
+      },
+    });
+    expect(repairsQuery.statusCode).toBe(400);
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(listRepairs).toHaveBeenCalledOnce();
   });
 
   it.each([

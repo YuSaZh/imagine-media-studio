@@ -26,6 +26,7 @@ import { JobRunner } from './jobs/job-runner.js';
 import { GenerationInputResolver } from './jobs/generation-input-resolver.js';
 import { createSqliteRunnerOptions } from './jobs/sqlite-adapters.js';
 import { DatabaseBackup } from './maintenance/database-backup.js';
+import { MediaRepairQueueRepository } from './database/media-repair.js';
 import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adapter.js';
 import { AssetMediaService } from './media/asset-media-service.js';
 import { SharpImageProcessor } from './media/image-processor.js';
@@ -33,6 +34,7 @@ import {
   cleanupTerminalProviderOutputs,
   inspectMediaConsistency,
 } from './media/maintenance.js';
+import { MediaRepairCoordinator } from './media/media-repair-coordinator.js';
 import { VideoProcessor } from './media/video-processor.js';
 import {
   createProviderHttpClient,
@@ -108,6 +110,7 @@ export interface ImagineServer {
   jobs: JobRepository;
   assets: AssetRepository;
   collections: CollectionRepository;
+  mediaRepairQueue: MediaRepairQueueRepository;
   providers: ProviderService;
   settings: SettingsRepository;
   trustedAdapterService: TrustedAdapterServiceManagement;
@@ -392,8 +395,18 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     repository: mediaRepository,
     videoProcessor,
   });
-  const mediaMaintenance = {
+  const mediaAudit = {
     audit: () => inspectMediaConsistency({ jobs, paths: storage, repository: mediaRepository }),
+  };
+  const mediaRepairQueue = new MediaRepairQueueRepository(database.orm);
+  const mediaRepairCoordinator = new MediaRepairCoordinator({
+    audit: mediaAudit,
+    queue: mediaRepairQueue,
+  });
+  const mediaMaintenance = {
+    ...mediaAudit,
+    listRepairs: () => mediaRepairCoordinator.listRepairs(),
+    reconcile: () => mediaRepairCoordinator.reconcile(),
   };
   await cleanupTerminalProviderOutputs({
     jobs,
@@ -596,6 +609,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       jobs,
       assets,
       collections,
+      mediaRepairQueue,
       providers: providerService,
       settings,
       trustedAdapterService,

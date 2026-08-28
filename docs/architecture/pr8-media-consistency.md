@@ -91,9 +91,19 @@ attempt/lease pair, preventing an old worker from completing a newer claim.
 Retry scheduling uses deterministic exponential backoff with a hard maximum,
 and only a bounded error code token is retained.
 
-This milestone supplies the durable database core and tests only. Media scan
-invocation, administrator repair actions, and media-service repair execution
-remain separate integration work; no automatic orphan deletion is introduced.
+The integration coordinator now connects the bounded audit to the durable
+queue. `POST /internal/maintenance/media/reconcile` requires the configured
+administrator and an empty request, persists only safe `assetId`/`kind`/path
+issue data with `jobId` reserved as null, and returns bounded scan and queue
+counts. `GET /internal/maintenance/media/repairs` exposes a fixed bounded page
+and total count of safe queue DTOs; it accepts no state or limit query
+parameters. Both responses are `no-store` and inherit the server CSP and
+same-origin write policy.
+
+The coordinator and queue core have no resident worker and do not execute
+repairs. Media-service repair execution, administrator state actions, and
+additional retention controls remain separate integration work; no automatic
+orphan deletion is introduced.
 
 ## Acceptance evidence
 
@@ -103,6 +113,7 @@ referenced completed output preservation, unknown-directory preservation, and
 incomplete-reference fail-closed behavior. Queue tests verify new/old database
 migration, manifest drift, schema checks, foreign-key nulling, deterministic
 idempotent upsert, concurrent claims, lease expiry/restart, bounded retry,
-manual/resolve transitions, and truncated-scan behavior. Route and server
-tests verify the strict request boundary, administrator protection, no-store
-response, CSP, and safe DTO projection.
+manual/resolve transitions, and truncated-scan behavior. Coordinator, route,
+server, and client tests verify truncated propagation, active-lease retention,
+strict request boundaries, administrator/CSRF protection, restart persistence,
+no-store/CSP headers, and safe DTO projection.

@@ -54,6 +54,8 @@ import {
   MaintenanceIntegrityResponseSchema,
   MaintenanceBackupResponseSchema,
   MaintenanceMediaResponseSchema,
+  MaintenanceMediaReconcileResponseSchema,
+  MaintenanceMediaRepairsResponseSchema,
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
@@ -183,6 +185,48 @@ describe('internal API schemas', () => {
         media: { ...media.media, issues: [{ assetId: null, kind: 'unsafe', storedPath }] },
       }).success).toBe(false);
     }
+
+    const reconcile = {
+      media: {
+        queue: { inserted: 1, reopened: 0, resolved: 2, seen: 3, truncated: false, updated: 0 },
+        scan: { assetCount: 4, fileCount: 8, hashedBytes: 128, issueCount: 3, ok: false, truncated: false },
+      },
+    };
+    expect(MaintenanceMediaReconcileResponseSchema.parse(reconcile)).toEqual(reconcile);
+    expect(MaintenanceMediaReconcileResponseSchema.safeParse({
+      ...reconcile,
+      media: { ...reconcile.media, queue: { ...reconcile.media.queue, rawError: 'secret' } },
+    }).success).toBe(false);
+
+    const repairs = {
+      repairs: {
+        count: 1,
+        items: [{
+          assetId: 'asset-1',
+          attempts: 2,
+          firstSeenAt: '2026-08-29T00:00:00.000Z',
+          issueKey: 'a'.repeat(64),
+          jobId: null,
+          kind: 'missing',
+          lastErrorCode: 'repair_failed',
+          lastSeenAt: '2026-08-29T00:01:00.000Z',
+          leaseUntil: null,
+          nextAttemptAt: '2026-08-29T00:02:00.000Z',
+          resolvedAt: null,
+          state: 'open',
+          storedPath: 'media/uploads/missing.png',
+        }],
+        truncated: false,
+      },
+    };
+    expect(MaintenanceMediaRepairsResponseSchema.parse(repairs)).toEqual(repairs);
+    expect(MaintenanceMediaRepairsResponseSchema.safeParse({
+      ...repairs,
+      repairs: {
+        ...repairs.repairs,
+        items: [{ ...repairs.repairs.items[0], storedPath: '/data/app.db', rawError: 'secret' }],
+      },
+    }).success).toBe(false);
   });
 
   it('keeps Provider DTOs strict and secret-free', () => {

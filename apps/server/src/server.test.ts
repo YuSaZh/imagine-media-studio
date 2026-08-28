@@ -1171,6 +1171,125 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(crossOrigin.statusCode).toBe(403);
   });
 
+  it('reconciles a bounded media audit into a persistent repair queue', async () => {
+    const server = await createTestServer(false, true, false, 'test-password');
+    const dataDir = temporaryDirectories.at(-1)!;
+    const missing = server.assets.create({
+      filePath: 'media/uploads/reconcile-missing.png',
+      fileSize: 1,
+      mimeType: 'image/png',
+      role: 'upload',
+      sha256: 'a'.repeat(64),
+      type: 'image',
+    });
+    const adminHeaders = {
+      authorization: `Basic ${Buffer.from('studio:test-password').toString('base64')}`,
+    };
+    const unauthenticated = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile',
+    });
+    const crossOrigin = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile',
+      headers: { ...adminHeaders, host: 'studio.local', origin: 'http://evil.example' },
+    });
+    const body = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile',
+      headers: adminHeaders,
+      payload: {},
+    });
+    const query = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile?limit=1',
+      headers: adminHeaders,
+    });
+    const reconcile = await server.app.inject({
+      method: 'POST',
+      url: '/internal/maintenance/media/reconcile',
+      headers: adminHeaders,
+    });
+    const repairs = await server.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media/repairs',
+      headers: adminHeaders,
+    });
+    const repairsQuery = await server.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media/repairs?state=open',
+      headers: adminHeaders,
+    });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(crossOrigin.statusCode).toBe(403);
+    expect(body.statusCode).toBe(400);
+    expect(query.statusCode).toBe(400);
+    expect(reconcile.statusCode).toBe(200);
+    expect(reconcile.headers['cache-control']).toContain('no-store');
+    expect(reconcile.headers['content-security-policy']).toContain("object-src 'none'");
+    expect(reconcile.json()).toEqual({
+      media: {
+        queue: {
+          inserted: 1,
+          reopened: 0,
+          resolved: 0,
+          seen: 1,
+          truncated: false,
+          updated: 0,
+        },
+        scan: {
+          assetCount: 1,
+          fileCount: 0,
+          hashedBytes: 0,
+          issueCount: 1,
+          ok: false,
+          truncated: false,
+        },
+      },
+    });
+    expect(repairs.statusCode).toBe(200);
+    expect(repairs.headers['cache-control']).toContain('no-store');
+    expect(repairs.headers['content-security-policy']).toContain("object-src 'none'");
+    expect(repairs.json()).toEqual({
+      repairs: {
+        count: 1,
+        items: [{
+          assetId: missing.id,
+          attempts: 0,
+          firstSeenAt: expect.any(String),
+          issueKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          jobId: null,
+          kind: 'missing',
+          lastErrorCode: null,
+          lastSeenAt: expect.any(String),
+          leaseUntil: null,
+          nextAttemptAt: expect.any(String),
+          resolvedAt: null,
+          state: 'open',
+          storedPath: 'media/uploads/reconcile-missing.png',
+        }],
+        truncated: false,
+      },
+    });
+    expect(repairsQuery.statusCode).toBe(400);
+    expect(server.mediaRepairQueue.count()).toBe(1);
+
+    await server.app.close();
+    servers.splice(servers.indexOf(server), 1);
+    const reopened = await reopenTestServer(dataDir, 'test-password');
+    const persisted = await reopened.app.inject({
+      method: 'GET',
+      url: '/internal/maintenance/media/repairs',
+      headers: adminHeaders,
+    });
+    expect(persisted.statusCode).toBe(200);
+    expect(persisted.json<{ repairs: { count: number; items: Array<{ assetId: string | null }> } }>()).toMatchObject({
+      repairs: { count: 1, items: [{ assetId: missing.id }] },
+    });
+    expect(reopened.mediaRepairQueue.count()).toBe(1);
+  });
+
   it('waits for an active database backup before closing SQLite', async () => {
     const server = await createTestServer(false, true, false, 'test-password');
     const sqlite = (server.databaseBackup as unknown as { readonly sqlite: Database.Database }).sqlite;
