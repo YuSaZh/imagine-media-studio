@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import {
@@ -67,10 +67,11 @@ async function dismissPwaNotice(page: Page): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (await dismiss.isVisible().catch(() => false)) {
       await dismiss.click();
-      return;
+      break;
     }
     await page.waitForTimeout(200);
   }
+  await expect(page.locator('.toast-notice--passive')).toBeHidden({ timeout: 6_000 });
 }
 
 async function waitForAppShell(page: Page, path = '/imagine'): Promise<void> {
@@ -407,13 +408,133 @@ async function capturePr7Screenshot(page: Page, testInfo: TestInfo): Promise<voi
   await dismissPwaNotice(page);
   await writeFile(
     resolve(directory, 'visual-diff-report.md'),
-    '# PR7 visual diff report\n\nScreenshots are captured at the approved PR7 viewports with animations disabled. The responsive gallery state uses the fixed PR1 Mock fixture; the production cold-offline and unknown-marker checks run at every PR7 viewport. No pixel comparison was run locally.\n\n| Viewport | State | Baseline / diff |\n| --- | --- | --- |\n| desktop-1920x1080 | gallery | CI artifact only |\n| desktop-1440x900 | gallery | CI artifact only |\n| desktop-1280x800 | gallery | CI artifact only |\n| tablet-1024x1366 | gallery | CI artifact only |\n| tablet-834x1194 | gallery | CI artifact only |\n| mobile-430x932 | gallery | CI artifact only |\n| mobile-390x844 | gallery | CI artifact only |\n| mobile-360x800 | gallery | CI artifact only |\n',
+    '# PR7 visual diff report\n\nScreenshots are captured at the approved PR7 viewports with animations disabled. The responsive gallery state uses the fixed PR1 Mock fixture; the production cold-offline and unknown-marker checks run at every PR7 viewport. No pixel comparison was run locally.\n\nKeyboard screenshots named `*-keyboard-mock.png` use an injected visualViewport and CSS safe-area mock for geometry coverage. They are not real iOS or Android keyboard/device evidence.\n\n| Viewport | State | Baseline / diff |\n| --- | --- | --- |\n| desktop-1920x1080 | gallery | CI artifact only |\n| desktop-1440x900 | gallery | CI artifact only |\n| desktop-1280x800 | gallery | CI artifact only |\n| tablet-1024x1366 | gallery | CI artifact only |\n| tablet-834x1194 | gallery | CI artifact only |\n| mobile-430x932 | gallery | CI artifact only |\n| mobile-390x844 | gallery | CI artifact only |\n| mobile-360x800 | gallery | CI artifact only |\n| mobile-430x932 | keyboard + safe-area mock | CI artifact only |\n| mobile-390x844 | keyboard + safe-area mock | CI artifact only |\n',
     'utf8',
   );
+  const reportPath = resolve(directory, 'visual-diff-report.md');
+  const report = await readFile(reportPath, 'utf8');
+  if (!report.includes('| mobile-430x932 | mobile selection |')) {
+    await writeFile(
+      reportPath,
+      `${report}| mobile-430x932 | mobile selection | CI artifact only |\n| mobile-390x844 | mobile selection | CI artifact only |\n| tablet-1024x1366 | tablet menu / selection | CI artifact only |\n| tablet-834x1194 | tablet menu / selection | CI artifact only |\n| mobile-430x932 | mobile image viewer / video viewer | CI artifact only |\n| mobile-390x844 | mobile image viewer / video viewer | CI artifact only |\n`,
+      'utf8',
+    );
+  }
   await page.screenshot({
     animations: 'disabled',
     path: resolve(directory, `${testInfo.project.name.replace(/^pr7-/, '')}.png`),
   });
+}
+
+async function capturePr7KeyboardMockScreenshot(page: Page, testInfo: TestInfo): Promise<void> {
+  if (!['pr7-mobile-390x844', 'pr7-mobile-430x932'].includes(testInfo.project.name)) return;
+  const directory = resolve('artifacts/visual/pr7');
+  await mkdir(directory, { recursive: true });
+  await dismissPwaNotice(page);
+  await page.screenshot({
+    animations: 'disabled',
+    path: resolve(directory, `${testInfo.project.name.replace(/^pr7-/, '')}-keyboard-mock.png`),
+  });
+}
+
+async function captureGalleryInteractionScreenshot(
+  page: Page,
+  testInfo: TestInfo,
+  state: 'menu' | 'selection',
+): Promise<void> {
+  const width = page.viewportSize()?.width;
+  if (width !== 390 && width !== 430 && width !== 834 && width !== 1024) return;
+  if (state === 'menu' && width !== 834 && width !== 1024) return;
+  const directory = resolve('artifacts/visual/pr7');
+  await mkdir(directory, { recursive: true });
+  await dismissPwaNotice(page);
+  await page.screenshot({
+    animations: 'disabled',
+    path: resolve(directory, `${testInfo.project.name.replace(/^pr7-/, '')}-gallery-${state}.png`),
+  });
+}
+
+async function captureViewerScreenshot(
+  page: Page,
+  testInfo: TestInfo,
+  state: 'image-viewer' | 'video-viewer',
+): Promise<void> {
+  const width = page.viewportSize()?.width;
+  if (width !== 390 && width !== 430) return;
+  await dismissPwaNotice(page);
+  await expect(page.locator('.viewer-metadata')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Previous item', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next item', exact: true })).toBeVisible();
+  await expect(page.locator('.viewer-top-actions')).toBeVisible();
+  const directory = resolve('artifacts/visual/pr7');
+  await mkdir(directory, { recursive: true });
+  await page.screenshot({
+    animations: 'disabled',
+    path: resolve(directory, `${testInfo.project.name}-${state}.png`),
+  });
+}
+
+interface TouchSequenceOptions {
+  readonly contextmenu?: boolean;
+  readonly move?: { readonly x: number; readonly y: number };
+  readonly scroll?: boolean;
+}
+
+async function dispatchTouchSequence(
+  page: Page,
+  target: ReturnType<Page['locator']>,
+  durationMs: number,
+  options: TouchSequenceOptions = {},
+): Promise<void> {
+  const targetBox = await target.boundingBox();
+  if (targetBox === null) throw new Error('Touch coverage requires a measurable Gallery card.');
+  const cdp = await page.context().newCDPSession(page);
+  const touchId = 17;
+  const start = {
+    id: touchId,
+    x: Math.round(targetBox.x + targetBox.width / 2),
+    y: Math.round(targetBox.y + Math.min(targetBox.height / 2, 180)),
+  };
+  const move = options.move === undefined
+    ? start
+    : { id: touchId, x: start.x + options.move.x, y: start.y + options.move.y };
+  try {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [start],
+    });
+    const setupDelay = options.move !== undefined || options.scroll || options.contextmenu ? 100 : 0;
+    if (setupDelay > 0) await page.waitForTimeout(setupDelay);
+    if (options.contextmenu) {
+      await target.dispatchEvent('contextmenu', { button: 2 });
+    }
+    if (options.move !== undefined) {
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [move],
+      });
+    }
+    if (options.scroll) {
+      await page.locator('.page-scroll').evaluate((element) => {
+        element.scrollTop = Math.min(element.scrollTop + 160, element.scrollHeight);
+      });
+    }
+    const remaining = Math.max(0, durationMs - setupDelay);
+    if (remaining > 0) await page.waitForTimeout(remaining);
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+    });
+  } finally {
+    await cdp.detach();
+  }
+}
+
+async function closeViewerIfOpen(page: Page): Promise<void> {
+  const dialog = page.getByRole('dialog');
+  if (await dialog.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'Close viewer', exact: true }).click();
+  }
 }
 
 async function installStandaloneMediaQueryMock(page: Page): Promise<void> {
@@ -449,6 +570,58 @@ async function installStandaloneMediaQueryMock(page: Page): Promise<void> {
         standaloneQuery.dispatchEvent(new Event('change'));
       },
     });
+  });
+}
+
+async function installVisualViewportMock(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+    let offsetTop = 0;
+    let offsetLeft = 0;
+    const listeners = new Set<(event: Event) => void>();
+    const viewport = {
+      get height() { return height; },
+      get offsetLeft() { return offsetLeft; },
+      get offsetTop() { return offsetTop; },
+      get width() { return width; },
+      addEventListener(type: string, listener: (event: Event) => void) {
+        if (type === 'resize' || type === 'scroll') listeners.add(listener);
+      },
+      removeEventListener(type: string, listener: (event: Event) => void) {
+        if (type === 'resize' || type === 'scroll') listeners.delete(listener);
+      },
+      dispatchEvent(event: Event) {
+        listeners.forEach((listener) => listener(event));
+        return true;
+      },
+      setMetrics(next: { height: number; width: number; offsetLeft: number; offsetTop: number }) {
+        width = next.width;
+        height = next.height;
+        offsetLeft = next.offsetLeft;
+        offsetTop = next.offsetTop;
+        this.dispatchEvent(new Event('resize'));
+        this.dispatchEvent(new Event('scroll'));
+      },
+    };
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: viewport,
+    });
+  });
+}
+
+async function installSafeAreaMock(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const apply = () => {
+      const root = document.documentElement;
+      root.style.setProperty('--safe-area-inset-top', '24px');
+      root.style.setProperty('--safe-area-inset-right', '18px');
+      root.style.setProperty('--safe-area-inset-bottom', '28px');
+      root.style.setProperty('--safe-area-inset-left', '16px');
+    };
+    if (document.documentElement) apply();
+    else document.addEventListener('DOMContentLoaded', apply, { once: true });
   });
 }
 
@@ -675,6 +848,77 @@ test('keeps offline App settings, update state, and touch layout inside every vi
   await capturePr7Screenshot(page, testInfo);
 });
 
+test('keeps Gallery long-press selection deterministic across touch and keyboard entry points', async ({
+  page,
+}, testInfo) => {
+  test.skip(!/(mobile|tablet)/u.test(testInfo.project.name), 'Touch coverage runs in touch-enabled PR7 projects.');
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('imagine.visual-fixtures', 'pr1-v1');
+  });
+  await waitForAppShell(page);
+
+  const card = page.locator('[data-item-id="image-03"]');
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('aria-describedby', /media-card-status-image-03/u);
+  await expect(card.locator('.media-card-status')).toContainText('Task status: completed.');
+  await expect(card.locator('.media-card-status')).toContainText('Progress: 100%.');
+
+  const viewport = page.viewportSize();
+  const isCoarseTablet = viewport?.width === 834 || viewport?.width === 1024;
+  if (isCoarseTablet) {
+    const cardActions = card.locator('.media-card-actions');
+    await expect(cardActions).toBeVisible();
+    await expect(cardActions.getByRole('button', { name: 'Card actions', exact: true })).toBeVisible();
+    await expect.poll(() => cardActions.evaluate((element) => getComputedStyle(element).opacity)).toBe('1');
+    expect(await cardActions.locator('.desktop-card-action').evaluateAll((buttons) =>
+      buttons.every((button) => getComputedStyle(button).display === 'none'))).toBe(true);
+    await expect(page.locator('.card-actions-popover')).toHaveCount(0);
+  }
+
+  await dispatchTouchSequence(page, card, 100);
+  await closeViewerIfOpen(page);
+  await expect(card).not.toHaveClass(/is-selected/u);
+
+  await dispatchTouchSequence(page, card, 520, { contextmenu: true });
+  await expect(card).toHaveClass(/is-selected/u);
+  await expect(page.getByTestId('gallery-selection-announcement')).toContainText(/Selected/u);
+  await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+
+  await dispatchTouchSequence(page, card, 700);
+  await expect(card).toHaveClass(/is-selected/u);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await captureGalleryInteractionScreenshot(page, testInfo, 'selection');
+  await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
+
+  await dispatchTouchSequence(page, card, 700, { move: { x: 24, y: 0 } });
+  await closeViewerIfOpen(page);
+  await expect(card).not.toHaveClass(/is-selected/u);
+
+  await dispatchTouchSequence(page, card, 700, { scroll: true });
+  await closeViewerIfOpen(page);
+  await expect(card).not.toHaveClass(/is-selected/u);
+  await page.locator('.page-scroll').evaluate((element) => { element.scrollTop = 0; });
+
+  const selectionToggle = card.locator('.selection-toggle');
+  await selectionToggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(card).toHaveClass(/is-selected/u);
+  await page.keyboard.press('Space');
+  await expect(card).not.toHaveClass(/is-selected/u);
+
+  const menuTrigger = card.getByRole('button', { name: 'Card actions', exact: true });
+  if (await menuTrigger.isVisible()) {
+    await menuTrigger.click();
+    const menu = page.locator('.card-actions-popover');
+    await expect(menu).toBeVisible();
+    await captureGalleryInteractionScreenshot(page, testInfo, 'menu');
+    await menu.getByRole('button', { name: /^Select /u }).click();
+    await expect(card).toHaveClass(/is-selected/u);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.card-actions-popover')).toHaveCount(0);
+  }
+});
+
 test('captures a stable PR7 responsive workspace state at every required viewport', async ({
   page,
 }, testInfo) => {
@@ -686,4 +930,285 @@ test('captures a stable PR7 responsive workspace state at every required viewpor
   await expect(page.locator('[aria-label="Media gallery"]')).toBeVisible();
   await assertViewportLayout(page);
   await capturePr7Screenshot(page, testInfo);
+});
+
+test('keeps Viewer gestures bounded while preserving keyboard and button navigation', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('imagine.visual-fixtures', 'pr1-v1');
+  });
+  await waitForAppShell(page);
+
+  const trigger = page.locator('.media-card-open').first();
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.locator('.viewer-metadata')).toContainText('Provider');
+  await expect(page.locator('.viewer-metadata')).toContainText('Model');
+  await expect(page.locator('.viewer-metadata')).toContainText('Size');
+  await expect(page.locator('.viewer-metadata')).toContainText('Time');
+  await captureViewerScreenshot(page, testInfo, 'image-viewer');
+
+  const navigationButtons = page.locator('.viewer-nav');
+  await expect(navigationButtons).toHaveCount(2);
+  for (const button of await navigationButtons.all()) {
+    const box = await button.boundingBox();
+    if (!box) throw new Error('Viewer navigation buttons must have measurable boxes.');
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+
+  const stage = page.locator('.viewer-stage');
+  const stageBox = await stage.boundingBox();
+  if (!stageBox) throw new Error('Viewer stage must have a measurable box.');
+  const centerX = stageBox.x + stageBox.width / 2;
+  const centerY = stageBox.y + stageBox.height / 2;
+  const counter = page.locator('.viewer-counter');
+  const counterBeforePinch = (await counter.textContent())?.trim();
+  expect(counterBeforePinch).toBeTruthy();
+
+  type TouchPoint = { readonly id: number; readonly x: number; readonly y: number };
+  const cdp = await page.context().newCDPSession(page);
+  const dispatchTouch = async (
+    type: 'touchCancel' | 'touchEnd' | 'touchMove' | 'touchStart',
+    touchPoints: readonly TouchPoint[],
+  ) => {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: touchPoints.map((touchPoint) => ({
+        ...touchPoint,
+        force: 1,
+        radiusX: 1,
+        radiusY: 1,
+      })),
+    });
+  };
+  const tap = async (id: number, x = centerX, y = centerY) => {
+    await dispatchTouch('touchStart', [{ id, x, y }]);
+    await dispatchTouch('touchEnd', []);
+  };
+
+  try {
+    await tap(1, centerX - 40, centerY);
+    await tap(2, centerX - 40, centerY);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '2');
+    await page.waitForTimeout(360);
+    await tap(3, centerX - 40, centerY);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '2');
+    await page.waitForTimeout(360);
+    await tap(4, centerX - 40, centerY);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '2');
+    await tap(5, centerX - 40, centerY);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '1');
+
+    const pinchPoints = [
+      { id: 6, x: centerX - 60, y: centerY },
+      { id: 7, x: centerX + 60, y: centerY },
+    ] as const;
+    await dispatchTouch('touchStart', pinchPoints);
+    await dispatchTouch('touchMove', [
+      pinchPoints[0],
+      { id: 7, x: centerX + 300, y: centerY },
+    ]);
+    await expect.poll(() => stage.getAttribute('data-viewer-scale')).toBe('3');
+    await expect(counter).toHaveText(counterBeforePinch!);
+
+    const thirdPointer = { id: 8, x: centerX + 180, y: centerY } as const;
+    await dispatchTouch('touchStart', [
+      { id: 6, x: centerX - 60, y: centerY },
+      { id: 7, x: centerX + 300, y: centerY },
+      thirdPointer,
+    ]);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '3');
+    await dispatchTouch('touchEnd', [
+      { id: 7, x: centerX + 300, y: centerY },
+      thirdPointer,
+    ]);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '3');
+    await dispatchTouch('touchMove', [
+      { id: 7, x: centerX + 300, y: centerY },
+      thirdPointer,
+    ]);
+    await expect(stage).toHaveAttribute('data-viewer-scale', '3');
+    await dispatchTouch('touchEnd', [thirdPointer]);
+    await expect(stage).toHaveAttribute('data-viewer-gesture', 'pan');
+    await dispatchTouch('touchMove', [{ id: 8, x: centerX + 1000, y: centerY + 1000 }]);
+    const clampedX = Number(await stage.getAttribute('data-position-x'));
+    const clampedY = Number(await stage.getAttribute('data-position-y'));
+    expect(Number.isFinite(clampedX)).toBe(true);
+    expect(Number.isFinite(clampedY)).toBe(true);
+    await dispatchTouch('touchEnd', []);
+
+    const counterBeforeCancel = (await counter.textContent())?.trim();
+    await dispatchTouch('touchStart', [{ id: 9, x: centerX, y: centerY }]);
+    await dispatchTouch('touchCancel', []);
+    await expect(counter).toHaveText(counterBeforeCancel!);
+
+    await page.getByRole('button', { name: 'Reset zoom', exact: true }).click();
+    await expect(stage).toHaveAttribute('data-viewer-scale', '1');
+    await dispatchTouch('touchStart', [{ id: 10, x: centerX, y: centerY }]);
+    await dispatchTouch('touchMove', [{ id: 10, x: centerX - 100, y: centerY }]);
+    await dispatchTouch('touchEnd', []);
+    await expect(counter).not.toHaveText(counterBeforePinch!);
+
+    await page.getByRole('button', { name: 'Close viewer', exact: true }).click();
+    await page.getByRole('button', { name: 'Videos', exact: true }).click();
+    const videoCard = page.locator('[data-item-id="video-01"] .media-card-open');
+    await expect(videoCard).toBeVisible();
+    await videoCard.click();
+    const videoCounter = (await counter.textContent())?.trim();
+    const video = page.locator('video.viewer-media');
+    await expect(video).toHaveCount(1);
+    const videoBox = await video.boundingBox();
+    if (!videoBox) throw new Error('Video Viewer must have a measurable media box.');
+    await captureViewerScreenshot(page, testInfo, 'video-viewer');
+    const videoCenterX = videoBox.x + videoBox.width / 2;
+    const videoCenterY = videoBox.y + videoBox.height / 2;
+    await dispatchTouch('touchStart', [{ id: 11, x: videoCenterX, y: videoCenterY }]);
+    await dispatchTouch('touchMove', [{ id: 11, x: videoCenterX - 120, y: videoCenterY }]);
+    await dispatchTouch('touchEnd', []);
+    await expect(counter).toHaveText(videoCounter!);
+    await expect(page.locator('.viewer-stage')).toHaveAttribute('data-viewer-scale', '1');
+    await dispatchTouch('touchStart', [
+      { id: 12, x: videoCenterX - 40, y: videoCenterY },
+      { id: 13, x: videoCenterX + 40, y: videoCenterY },
+    ]);
+    await dispatchTouch('touchMove', [
+      { id: 12, x: videoCenterX - 100, y: videoCenterY },
+      { id: 13, x: videoCenterX + 100, y: videoCenterY },
+    ]);
+    await dispatchTouch('touchEnd', []);
+    await expect(counter).toHaveText(videoCounter!);
+    await expect(page.locator('.viewer-stage')).toHaveAttribute('data-viewer-scale', '1');
+  } finally {
+    await cdp.detach();
+  }
+});
+
+test('keeps the mobile Composer inside safe areas while the visual viewport opens and closes the keyboard', async ({
+  page,
+}, testInfo) => {
+  test.skip((page.viewportSize()?.width ?? 0) > 720, 'The visual viewport keyboard geometry runs on mobile.');
+  await installVisualViewportMock(page);
+  await installSafeAreaMock(page);
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem('imagine.visual-fixtures', 'pr1-v1');
+  });
+  await waitForAppShell(page);
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+
+  const initial = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const header = document.querySelector('.mobile-header')?.getBoundingClientRect();
+    const composer = document.querySelector('.composer')?.getBoundingClientRect();
+    return {
+      composer,
+      header,
+      safeBottom: root.getPropertyValue('--safe-area-bottom').trim(),
+      safeLeft: root.getPropertyValue('--safe-area-left').trim(),
+      safeRight: root.getPropertyValue('--safe-area-right').trim(),
+      safeTop: root.getPropertyValue('--safe-area-top').trim(),
+      headerPaddingTop: getComputedStyle(document.querySelector('.mobile-header')!).paddingTop,
+    };
+  });
+  expect(initial.safeTop).toBe('24px');
+  expect(initial.safeRight).toBe('18px');
+  expect(initial.safeBottom).toBe('28px');
+  expect(initial.safeLeft).toBe('16px');
+  expect(Number.parseFloat(initial.headerPaddingTop)).toBeGreaterThanOrEqual(24);
+  if (!initial.composer || !initial.header) throw new Error('Mobile shell geometry is unavailable.');
+  expect(initial.composer.x).toBeGreaterThanOrEqual(16);
+  expect(initial.composer.x + initial.composer.width).toBeLessThanOrEqual((page.viewportSize()?.width ?? 0) - 18 + 1);
+  expect(initial.composer.y + initial.composer.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) - 28 + 1);
+
+  await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
+  const menu = await page.locator('.mobile-menu-content').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      box: element.getBoundingClientRect(),
+      paddingBottom: style.paddingBottom,
+      paddingLeft: style.paddingLeft,
+      paddingRight: style.paddingRight,
+      paddingTop: style.paddingTop,
+    };
+  });
+  expect(Number.parseFloat(menu.paddingTop)).toBeGreaterThanOrEqual(24);
+  expect(Number.parseFloat(menu.paddingRight)).toBeGreaterThanOrEqual(18);
+  expect(Number.parseFloat(menu.paddingBottom)).toBeGreaterThanOrEqual(28);
+  expect(Number.parseFloat(menu.paddingLeft)).toBeGreaterThanOrEqual(16);
+  await page.keyboard.press('Escape');
+
+  const prompt = page.getByRole('textbox', { name: 'Prompt', exact: true });
+  await prompt.evaluate((element) => (element as HTMLTextAreaElement).focus({ preventScroll: true }));
+  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '')).toBe('Prompt');
+
+  const scrollBefore = await page.locator('.page-scroll').evaluate((element) => {
+    element.scrollTop = Math.min(48, element.scrollHeight - element.clientHeight);
+    return element.scrollTop;
+  });
+  const keyboard = await page.evaluate(() => {
+    const viewport = window.visualViewport as unknown as {
+      setMetrics?: (next: { height: number; width: number; offsetLeft: number; offsetTop: number }) => void;
+    };
+    viewport.setMetrics?.({
+      height: window.innerHeight - 260,
+      width: window.innerWidth - 16,
+      offsetLeft: 8,
+      offsetTop: 12,
+    });
+    return {
+      height: window.innerHeight - 260,
+      keyboardOffset: 248,
+      offsetLeft: 8,
+      offsetTop: 12,
+    };
+  });
+  await expect.poll(() => page.evaluate(() => ({
+    height: getComputedStyle(document.documentElement).getPropertyValue('--visual-viewport-height').trim(),
+    keyboardOffset: getComputedStyle(document.documentElement).getPropertyValue('--keyboard-offset').trim(),
+    left: getComputedStyle(document.documentElement).getPropertyValue('--visual-viewport-offset-left').trim(),
+    open: getComputedStyle(document.documentElement).getPropertyValue('--keyboard-open').trim(),
+    top: getComputedStyle(document.documentElement).getPropertyValue('--visual-viewport-offset-top').trim(),
+  }))).toEqual({
+    height: `${keyboard.height}px`,
+    keyboardOffset: `${keyboard.keyboardOffset}px`,
+    left: `${keyboard.offsetLeft}px`,
+    open: '1',
+    top: `${keyboard.offsetTop}px`,
+  });
+  const keyboardGeometry = await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    const composer = document.querySelector('.composer')?.getBoundingClientRect();
+    const prompt = document.querySelector('textarea[aria-label="Prompt"]')?.getBoundingClientRect();
+    const generate = document.querySelector('button[aria-label="Generate"]')?.getBoundingClientRect();
+    return {
+      composer,
+      generate,
+      prompt,
+      viewportBottom: viewport.offsetTop + viewport.height,
+      viewportTop: viewport.offsetTop,
+    };
+  });
+  for (const box of [keyboardGeometry.composer, keyboardGeometry.prompt, keyboardGeometry.generate]) {
+    if (!box) throw new Error('Keyboard geometry is unavailable.');
+    expect(box.y).toBeGreaterThanOrEqual(keyboardGeometry.viewportTop - 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(keyboardGeometry.viewportBottom + 1);
+  }
+  await capturePr7KeyboardMockScreenshot(page, testInfo);
+  expect(await page.locator('.page-scroll').evaluate((element) => element.scrollTop)).toBe(scrollBefore);
+
+  await page.evaluate(() => {
+    const viewport = window.visualViewport as unknown as {
+      setMetrics?: (next: { height: number; width: number; offsetLeft: number; offsetTop: number }) => void;
+    };
+    viewport.setMetrics?.({
+      height: window.innerHeight,
+      width: window.innerWidth,
+      offsetLeft: 0,
+      offsetTop: 0,
+    });
+  });
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--keyboard-open').trim())).toBe('0');
+  const restored = await page.locator('.composer').boundingBox();
+  if (!restored) throw new Error('The Composer has no measurable box after keyboard close.');
+  expect(restored.y + restored.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) - 28 + 1);
 });

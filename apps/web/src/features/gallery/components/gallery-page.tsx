@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Trash2, X } from 'lucide-react';
 import { useOutletContext } from 'react-router-dom';
 
@@ -49,6 +49,8 @@ function matchesFilter(item: FixtureGalleryItem, filter: GalleryFilter): boolean
 
 export function GalleryPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const previousSelection = useRef<ReadonlySet<string>>(new Set<string>());
+  const [selectionAnnouncement, setSelectionAnnouncement] = useState('');
   const { isOnline } = useOutletContext<{ isOnline: boolean; isStandalone: boolean }>();
   const { data = [] } = useGalleryQuery();
   const actions = useGalleryActions();
@@ -61,6 +63,32 @@ export function GalleryPage() {
     [activeFilter, data],
   );
   const selectedItems = data.filter((item) => selectedAssetIds.has(item.id));
+
+  useEffect(() => {
+    const previous = previousSelection.current;
+    const added = [...selectedAssetIds].filter((id) => !previous.has(id));
+    const removed = [...previous].filter((id) => !selectedAssetIds.has(id));
+    const changed = added[0] ?? removed[0];
+    const changedItem = changed === undefined
+      ? undefined
+      : data.find((item) => item.id === changed);
+
+    if (added.length === 1 && changedItem !== undefined) {
+      setSelectionAnnouncement(
+        `Selected ${changedItem.alt}. ${selectedAssetIds.size} ${selectedAssetIds.size === 1 ? 'item' : 'items'} selected.`,
+      );
+    } else if (removed.length === 1 && changedItem !== undefined) {
+      setSelectionAnnouncement(
+        `Unselected ${changedItem.alt}. ${selectedAssetIds.size} ${selectedAssetIds.size === 1 ? 'item' : 'items'} selected.`,
+      );
+    } else if (selectedAssetIds.size === 0 && previous.size > 0) {
+      setSelectionAnnouncement('Selection cleared. No items selected.');
+    } else if (added.length > 0 || removed.length > 0) {
+      setSelectionAnnouncement(`${selectedAssetIds.size} items selected.`);
+    }
+
+    previousSelection.current = new Set(selectedAssetIds);
+  }, [data, selectedAssetIds]);
 
   const downloadSelected = () => {
     for (const item of selectedItems) {
@@ -101,6 +129,16 @@ export function GalleryPage() {
           scrollElementRef={scrollRef}
         />
       </div>
+
+      <span
+        aria-atomic="true"
+        aria-live="polite"
+        className="sr-only"
+        data-testid="gallery-selection-announcement"
+        role="status"
+      >
+        {selectionAnnouncement}
+      </span>
 
       {selectedAssetIds.size > 0 && (
         <div className="selection-bar" role="toolbar" aria-label="Selection actions">

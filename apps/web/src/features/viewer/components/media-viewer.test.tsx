@@ -3,7 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import { VIDEO_PLACEHOLDER_PATH } from '../../gallery/model/api-mapper.js';
-import { isNativeMediaInteractionTarget, VideoPreview } from './media-viewer.js';
+import {
+  formatViewerTime,
+  isNativeMediaInteractionTarget,
+  isViewerGestureInteractionTarget,
+  shouldHandleViewerDoubleClick,
+  VideoPreview,
+} from './media-viewer.js';
 
 describe('VideoPreview', () => {
   it('recognizes video and native control event targets before viewer navigation', () => {
@@ -17,6 +23,27 @@ describe('VideoPreview', () => {
     expect(isNativeMediaInteractionTarget(controlTarget)).toBe(true);
     expect(isNativeMediaInteractionTarget(dialogTarget)).toBe(false);
     expect(isNativeMediaInteractionTarget(null)).toBe(false);
+  });
+
+  it('keeps Viewer controls out of the gesture stream while allowing image surfaces', () => {
+    const buttonTarget = {
+      closest: (selectors: string) => selectors.includes('button') ? {} : null,
+    } as unknown as EventTarget;
+    const imageTarget = {
+      closest: () => null,
+    } as unknown as EventTarget;
+
+    expect(isViewerGestureInteractionTarget(buttonTarget)).toBe(true);
+    expect(isViewerGestureInteractionTarget(imageTarget)).toBe(false);
+    expect(isViewerGestureInteractionTarget({ tagName: 'VIDEO' } as unknown as EventTarget)).toBe(true);
+    expect(shouldHandleViewerDoubleClick('image', imageTarget)).toBe(true);
+    expect(shouldHandleViewerDoubleClick('image', buttonTarget)).toBe(false);
+    expect(shouldHandleViewerDoubleClick('video', imageTarget)).toBe(false);
+  });
+
+  it('formats metadata time as a compact deterministic UTC value', () => {
+    expect(formatViewerTime('2026-08-24T18:30:00.000Z')).toBe('2026-08-24 18:30 UTC');
+    expect(formatViewerTime('not-a-timestamp')).toBe('not-a-timestamp');
   });
 
   it('renders native, keyboard-accessible video controls with bounded media URLs', () => {

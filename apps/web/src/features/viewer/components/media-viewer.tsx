@@ -24,6 +24,14 @@ import { useGalleryActions } from '../../gallery/api/gallery-query';
 import { VIDEO_PLACEHOLDER_PATH } from '../../gallery/model/api-mapper';
 import type { FixtureGalleryItem } from '../../gallery/model/types';
 import { canContinueWithImageInput } from '../../gallery/model/input-eligibility';
+import {
+  createViewerGestureState,
+  setViewerGestureTransform,
+  transitionViewerGesture,
+  type ViewerGestureLayout,
+  type ViewerGestureMode,
+  type ViewerGestureState,
+} from '../model/viewer-gestures';
 
 interface MediaViewerProps {
   items: readonly FixtureGalleryItem[];
@@ -75,6 +83,49 @@ export function isNativeMediaInteractionTarget(target: EventTarget | null): bool
     candidate.closest('video, audio, input[type="range"], [role="slider"]') !== null;
 }
 
+export function isViewerGestureInteractionTarget(target: EventTarget | null): boolean {
+  if (isNativeMediaInteractionTarget(target)) return true;
+  if (!target || typeof target !== 'object') return false;
+  const candidate = target as EventTarget & {
+    closest?: (selectors: string) => Element | null;
+  };
+  return typeof candidate.closest === 'function' &&
+    candidate.closest('a, button, input, select, textarea, [role="button"], [data-viewer-control]') !== null;
+}
+
+export function shouldHandleViewerDoubleClick(
+  kind: FixtureGalleryItem['kind'],
+  target: EventTarget | null,
+): boolean {
+  return kind === 'image' && !isViewerGestureInteractionTarget(target);
+}
+
+export function formatViewerTime(createdAt: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/u.exec(createdAt.trim());
+  return match ? `${match[1]} ${match[2]} UTC` : createdAt;
+}
+
+function viewerGestureLayout(stage: HTMLElement, scale: number): ViewerGestureLayout {
+  const stageRect = stage.getBoundingClientRect();
+  const media = stage.querySelector<HTMLElement>('.viewer-media');
+  const mediaRect = media?.getBoundingClientRect();
+  const normalizedScale = Math.max(1, scale);
+  return {
+    center: {
+      x: stageRect.left + stageRect.width / 2,
+      y: stageRect.top + stageRect.height / 2,
+    },
+    media: {
+      height: mediaRect ? mediaRect.height / normalizedScale : stageRect.height,
+      width: mediaRect ? mediaRect.width / normalizedScale : stageRect.width,
+    },
+    viewport: {
+      height: stageRect.height,
+      width: stageRect.width,
+    },
+  };
+}
+
 export function MediaViewer({ items }: MediaViewerProps) {
   const navigate = useNavigate();
   const viewerAssetId = useUiStore((state) => state.viewerAssetId);
@@ -86,11 +137,16 @@ export function MediaViewer({ items }: MediaViewerProps) {
   const actions = useGalleryActions();
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const previousViewerAssetId = useRef<string | null>(null);
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const dragOffset = useRef<{ x: number; y: number } | null>(null);
+  const gestureRef = useRef<ViewerGestureState>(createViewerGestureState());
+  const capturedPointerIds = useRef<Set<number>>(new Set());
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  const lastTouchDoubleTapAt = useRef(0);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [gestureMode, setGestureMode] = useState<ViewerGestureMode>('idle');
+  const [viewerAnnouncement, setViewerAnnouncement] = useState('');
   const [videoPlaybackError, setVideoPlaybackError] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const currentIndex =
@@ -110,11 +166,16 @@ export function MediaViewer({ items }: MediaViewerProps) {
   }, [viewerAssetId]);
 
   useEffect(() => {
-    setScale(1);
-    setPosition({ x: 0, y: 0 });
+    gestureRef.current = createViewerGestureState();
+    lastTapRef.current = null;
+    lastTouchDoubleTapAt.current = 0;
+    setScale(gestureRef.current.scale);
+    setPosition(gestureRef.current.position);
+    setGestureMode(gestureRef.current.mode);
+    setViewerAnnouncement(item ? `${item.kind === 'video' ? 'Video' : 'Image'} ${currentIndex + 1} of ${items.length}` : '');
     setVideoPlaybackError(false);
     setCopyStatus('');
-  }, [item?.id]);
+  }, [currentIndex, item?.id, item?.kind, items.length]);
 
   const move = (offset: number) => {
     if (items.length === 0) return;
@@ -124,9 +185,46 @@ export function MediaViewer({ items }: MediaViewerProps) {
   };
 
   const setZoom = (nextScale: number) => {
-    const normalizedScale = Math.min(4, Math.max(1, nextScale));
-    setScale(normalizedScale);
-    if (normalizedScale === 1) setPosition({ x: 0, y: 0 });
+    const layout = stageRef.current
+      ? viewerGestureLayout(stageRef.current, gestureRef.current.scale)
+      : undefined;
+    const next = setViewerGestureTransform(
+      gestureRef.current,
+      nextScale,
+      gestureRef.current.position,
+      layout,
+    );
+    gestureRef.current = next;
+    setScale(next.scale);
+    setPosition(next.position);
+    setGestureMode(next.mode);
+  };
+
+  const applyGestureTransition = (transition: ReturnType<typeof transitionViewerGesture>) => {
+    gestureRef.current = transition.state;
+    setScale(transition.state.scale);
+    setPosition(transition.state.position);
+    setGestureMode(transition.state.mode);
+    if (transition.effect === 'next') move(1);
+    if (transition.effect === 'previous') move(-1);
+  };
+
+  const applyTouchDoubleTap = (layout: ViewerGestureLayout) => {
+    const transition = transitionViewerGesture(gestureRef.current, {
+      layout,
+      type: 'doubletap',
+    });
+    lastTouchDoubleTapAt.current = Date.now();
+    applyGestureTransition(transition);
+  };
+
+  const releasePointerCapture = (stage: HTMLDivElement, pointerId: number) => {
+    capturedPointerIds.current.delete(pointerId);
+    try {
+      if (stage.hasPointerCapture(pointerId)) stage.releasePointerCapture(pointerId);
+    } catch {
+      // Pointer capture can already be released by the browser during cancellation.
+    }
   };
 
   const continueWith = (intent: 'edit' | 'reference' | 'video') => {
@@ -179,22 +277,10 @@ export function MediaViewer({ items }: MediaViewerProps) {
           }}
           onKeyDown={(event) => {
             if (isNativeMediaInteractionTarget(event.target)) return;
-            if (event.key === 'ArrowLeft') move(-1);
-            if (event.key === 'ArrowRight') move(1);
-          }}
-          onTouchEnd={(event) => {
-            const start = touchStart.current;
-            const end = event.changedTouches[0];
-            touchStart.current = null;
-            if (!start || !end || scale !== 1) return;
-            const deltaX = start.x - end.clientX;
-            const deltaY = start.y - end.clientY;
-            if (Math.abs(deltaX) < 48 || Math.abs(deltaY) > 60) return;
-            move(deltaX > 0 ? 1 : -1);
-          }}
-          onTouchStart={(event) => {
-            const point = event.touches[0];
-            touchStart.current = point ? { x: point.clientX, y: point.clientY } : null;
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+              event.preventDefault();
+              move(event.key === 'ArrowLeft' ? -1 : 1);
+            }
           }}
           ref={contentRef}
           tabIndex={-1}
@@ -203,6 +289,7 @@ export function MediaViewer({ items }: MediaViewerProps) {
           <Dialog.Description className="sr-only">
             Generated {item.kind} preview and actions
           </Dialog.Description>
+          <span aria-live="polite" className="sr-only" role="status">{viewerAnnouncement}</span>
 
           <div className="viewer-topbar">
             <span className="viewer-counter">
@@ -247,17 +334,82 @@ export function MediaViewer({ items }: MediaViewerProps) {
 
           <div
             className="viewer-stage"
-            onDoubleClick={() => setZoom(scale === 1 ? 2 : 1)}
+            data-media-kind={item.kind}
+            data-position-x={position.x}
+            data-position-y={position.y}
+            data-viewer-gesture={gestureMode}
+            data-viewer-scale={scale}
+            onDoubleClick={(event) => {
+              if (!shouldHandleViewerDoubleClick(item.kind, event.target)) return;
+              if (Date.now() - lastTouchDoubleTapAt.current < 500) return;
+              const stage = stageRef.current;
+              if (!stage) return;
+              applyGestureTransition(transitionViewerGesture(gestureRef.current, {
+                layout: viewerGestureLayout(stage, gestureRef.current.scale),
+                type: 'doubletap',
+              }));
+            }}
             onPointerDown={(event) => {
-              if (scale === 1) return;
-              dragOffset.current = { x: event.clientX - position.x, y: event.clientY - position.y };
-              event.currentTarget.setPointerCapture(event.pointerId);
+              if (isViewerGestureInteractionTarget(event.target)) return;
+              const transition = transitionViewerGesture(gestureRef.current, {
+                layout: viewerGestureLayout(event.currentTarget, gestureRef.current.scale),
+                point: { x: event.clientX, y: event.clientY },
+                pointerId: event.pointerId,
+                type: 'pointerdown',
+              });
+              applyGestureTransition(transition);
+              capturedPointerIds.current.add(event.pointerId);
+              try {
+                event.currentTarget.setPointerCapture(event.pointerId);
+              } catch {
+                // Browsers can reject capture for an already-cancelled pointer.
+              }
             }}
             onPointerMove={(event) => {
-              const offset = dragOffset.current;
-              if (offset) setPosition({ x: event.clientX - offset.x, y: event.clientY - offset.y });
+              if (!gestureRef.current.pointers.has(event.pointerId)) return;
+              applyGestureTransition(transitionViewerGesture(gestureRef.current, {
+                layout: viewerGestureLayout(event.currentTarget, gestureRef.current.scale),
+                point: { x: event.clientX, y: event.clientY },
+                pointerId: event.pointerId,
+                type: 'pointermove',
+              }));
             }}
-            onPointerUp={() => { dragOffset.current = null; }}
+            onPointerUp={(event) => {
+              const stage = event.currentTarget;
+              const transition = transitionViewerGesture(gestureRef.current, {
+                layout: viewerGestureLayout(stage, gestureRef.current.scale),
+                point: { x: event.clientX, y: event.clientY },
+                pointerId: event.pointerId,
+                type: 'pointerup',
+              });
+              releasePointerCapture(stage, event.pointerId);
+              applyGestureTransition(transition);
+              if (transition.effect !== 'tap' || !['touch', 'pen'].includes(event.pointerType)) return;
+              const now = Date.now();
+              const previousTap = lastTapRef.current;
+              if (previousTap && now - previousTap.time <= 320 &&
+                Math.hypot(previousTap.x - event.clientX, previousTap.y - event.clientY) <= 28) {
+                lastTapRef.current = null;
+                applyTouchDoubleTap(viewerGestureLayout(stage, gestureRef.current.scale));
+                return;
+              }
+              lastTapRef.current = { time: now, x: event.clientX, y: event.clientY };
+            }}
+            onPointerCancel={(event) => {
+              releasePointerCapture(event.currentTarget, event.pointerId);
+              applyGestureTransition(transitionViewerGesture(gestureRef.current, {
+                pointerId: event.pointerId,
+                type: 'pointercancel',
+              }));
+            }}
+            onLostPointerCapture={(event) => {
+              capturedPointerIds.current.delete(event.pointerId);
+              applyGestureTransition(transitionViewerGesture(gestureRef.current, {
+                pointerId: event.pointerId,
+                type: 'lostcapture',
+              }));
+            }}
+            ref={stageRef}
           >
             {item.kind === 'video' ? (
               videoStatusMessage ? (
@@ -325,12 +477,13 @@ export function MediaViewer({ items }: MediaViewerProps) {
               />
             </div>
             <dl className="viewer-metadata">
+              <div><dt>Provider</dt><dd>{item.providerId}</dd></div>
               <div><dt>Model</dt><dd>{item.modelId}</dd></div>
               <div><dt>Size</dt><dd>{item.width} x {item.height}</dd></div>
               <div><dt>Aspect</dt><dd>{item.aspectRatio}</dd></div>
               <div><dt>References</dt><dd>{item.referenceCount}</dd></div>
               <div><dt>Status</dt><dd>{videoStatusMessage ?? item.stage}</dd></div>
-              <div><dt>Created</dt><dd>{item.createdAt.slice(0, 10)}</dd></div>
+              <div><dt>Time</dt><dd>{formatViewerTime(item.createdAt)}</dd></div>
             </dl>
             <div className="viewer-create-actions">
               {canContinue && <button onClick={() => continueWith('reference')} type="button"><ImagePlus size={17} />Use as reference</button>}

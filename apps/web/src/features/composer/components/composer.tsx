@@ -16,6 +16,7 @@ import { IconButton } from '../../../components/icon-button';
 import { internalQueryKeys } from '../../../api/query-keys';
 import { useUiStore } from '../../../stores/ui-store';
 import { isVisualFixtureMode } from '../../../visual-fixture';
+import { useVisualViewport } from '../../../hooks/use-visual-viewport.js';
 import { ReferenceStrip, type ReferenceStripItem } from '../../media-input/components/reference-strip';
 import { useReferenceUploads } from '../../media-input/hooks/use-reference-uploads';
 import {
@@ -112,6 +113,7 @@ export function Composer({ isOnline }: ComposerProps) {
   const dragDepthRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLElement>(null);
+  const viewportMetrics = useVisualViewport();
   const composerMode = useUiStore((state) => state.composerMode);
   const composerExpanded = useUiStore((state) => state.composerExpanded);
   const paramsOpen = useUiStore((state) => state.composerParamsOpen);
@@ -274,23 +276,6 @@ export function Composer({ isOnline }: ComposerProps) {
   }, [draftPersistence, prompt, visualFixtures]);
 
   useEffect(() => () => draftPersistence.dispose(), [draftPersistence]);
-
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    const updateOffset = () => {
-      const offset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
-      document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`);
-    };
-    updateOffset();
-    viewport.addEventListener('resize', updateOffset);
-    viewport.addEventListener('scroll', updateOffset);
-    return () => {
-      viewport.removeEventListener('resize', updateOffset);
-      viewport.removeEventListener('scroll', updateOffset);
-      document.documentElement.style.removeProperty('--keyboard-offset');
-    };
-  }, []);
 
   useEffect(() => {
     const element = composerRef.current;
@@ -546,7 +531,7 @@ export function Composer({ isOnline }: ComposerProps) {
   return (
     <section
       aria-label="Generation composer"
-      className={`composer ${composerExpanded ? 'is-expanded' : ''} ${dragActive ? 'is-dragging' : ''}`}
+      className={`composer ${composerExpanded ? 'is-expanded' : ''} ${dragActive ? 'is-dragging' : ''} ${viewportMetrics.keyboardOpen ? 'is-keyboard-open' : ''}`}
       onDragEnter={(event) => {
         event.preventDefault();
         dragDepthRef.current += 1;

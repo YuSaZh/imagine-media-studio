@@ -1,10 +1,16 @@
-import { useEffect, useRef, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type RefObject } from 'react';
 import * as Popover from '@radix-ui/react-popover';
-import { Bookmark, Check, FolderPlus, MoreHorizontal, Play, RotateCcw, X } from 'lucide-react';
+import { Bookmark, Check, Circle, FolderPlus, MoreHorizontal, Play, RotateCcw, X } from 'lucide-react';
 
 import { IconButton } from '../../../components/icon-button';
-import { useUiStore } from '../../../stores/ui-store';
+import { useUiStore } from '../../../stores/ui-store.js';
 import { useGalleryActions } from '../api/gallery-query';
+import {
+  createSelectionGestureState,
+  LONG_PRESS_DURATION_MS,
+  reduceSelectionGesture,
+} from '../model/selection-gesture';
+import { mediaStatusDescription } from '../model/status-description';
 import type { FixtureFolder, FixtureGalleryItem, FixtureJobStatus } from '../model/types';
 
 const TERMINAL_ERROR_STATUSES = new Set<FixtureJobStatus>(['expired', 'failed', 'rejected']);
@@ -23,15 +29,26 @@ function formatDuration(durationSeconds: number): string {
   return `${minutes}:${seconds}`;
 }
 
+function isExcludedGestureTarget(target: EventTarget | null): boolean {
+  const candidate = target as { closest?: (selectors: string) => unknown } | null;
+  if (candidate === null || typeof candidate.closest !== 'function') return false;
+  return candidate.closest(
+    'button:not(.media-card-open), a, input, select, textarea, [role="menuitem"]',
+  ) !== null;
+}
+
 interface MediaCardProps {
   folders: readonly FixtureFolder[];
   item: FixtureGalleryItem;
+  scrollElementRef?: RefObject<HTMLDivElement | null>;
 }
 
-export function MediaCard({ folders, item }: MediaCardProps) {
+export function MediaCard({ folders, item, scrollElementRef }: MediaCardProps) {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressConsumed = useRef(false);
-  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const suppressClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressNextClick = useRef(false);
+  const gestureState = useRef(createSelectionGestureState());
+  const [longPressPending, setLongPressPending] = useState(false);
   const openViewer = useUiStore((state) => state.openViewer);
   const selectedAssetIds = useUiStore((state) => state.selectedAssetIds);
   const toggleAssetSelection = useUiStore((state) => state.toggleAssetSelection);
@@ -40,36 +57,124 @@ export function MediaCard({ folders, item }: MediaCardProps) {
   const selected = selectedAssetIds.has(item.id);
   const isActive = ACTIVE_STATUSES.has(item.status);
   const isError = TERMINAL_ERROR_STATUSES.has(item.status);
+  const statusDescription = mediaStatusDescription(item);
+  const statusDescriptionId = `media-card-status-${item.id}`;
 
-  const clearLongPress = () => {
+  const clearLongPressTimer = () => {
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
     }
   };
 
+  const clearSuppressClick = () => {
+    if (suppressClickTimer.current) {
+      clearTimeout(suppressClickTimer.current);
+      suppressClickTimer.current = null;
+    }
+    suppressNextClick.current = false;
+  };
+
+  const suppressClick = () => {
+    suppressNextClick.current = true;
+    if (suppressClickTimer.current) clearTimeout(suppressClickTimer.current);
+    suppressClickTimer.current = setTimeout(() => {
+      suppressNextClick.current = false;
+      suppressClickTimer.current = null;
+    }, LONG_PRESS_DURATION_MS);
+  };
+
+  const resetGesture = () => {
+    clearLongPressTimer();
+    gestureState.current = reduceSelectionGesture(gestureState.current, { type: 'reset' });
+    setLongPressPending(false);
+  };
+
   useEffect(() => () => {
-    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    clearLongPressTimer();
+    if (suppressClickTimer.current) clearTimeout(suppressClickTimer.current);
   }, []);
 
+  useEffect(() => {
+    if (!longPressPending || scrollElementRef?.current === null || scrollElementRef === undefined) return;
+    const scrollElement = scrollElementRef.current;
+    scrollElement.addEventListener('scroll', resetGesture, { passive: true });
+    return () => scrollElement.removeEventListener('scroll', resetGesture);
+  }, [longPressPending, scrollElementRef]);
+
   const handlePointerDown = (event: PointerEvent<HTMLElement>) => {
-    if (event.pointerType !== 'mouse') {
-      longPressConsumed.current = false;
-      pointerStart.current = { x: event.clientX, y: event.clientY };
+    if (event.isPrimary === false) return;
+    clearLongPressTimer();
+    clearSuppressClick();
+    const next = reduceSelectionGesture(gestureState.current, {
+      type: 'pointerdown',
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      interactiveTarget: isExcludedGestureTarget(event.target),
+    });
+    gestureState.current = next;
+    setLongPressPending(next.phase === 'pending');
+    if (next.phase === 'pending') {
       longPressTimer.current = setTimeout(() => {
-        longPressConsumed.current = true;
+        const triggered = reduceSelectionGesture(gestureState.current, {
+          type: 'long-press',
+          pointerId: event.pointerId,
+        });
+        if (triggered.phase !== 'triggered') return;
+        gestureState.current = triggered;
+        clearLongPressTimer();
+        setLongPressPending(false);
+        suppressClick();
         toggleAssetSelection(item.id);
-        longPressTimer.current = null;
-      }, 520);
+      }, LONG_PRESS_DURATION_MS);
     }
   };
 
+  const handlePointerMove = (event: PointerEvent<HTMLElement>) => {
+    const previous = gestureState.current;
+    const next = reduceSelectionGesture(previous, {
+      type: 'pointermove',
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+    gestureState.current = next;
+    if (previous.phase === 'pending' && next.phase === 'idle') resetGesture();
+  };
+
+  const handlePointerEnd = (
+    event: PointerEvent<HTMLElement>,
+    type: 'pointerup' | 'pointercancel' | 'pointerleave',
+  ) => {
+    const previous = gestureState.current;
+    if (previous.phase === 'triggered' && previous.pointerId === event.pointerId) {
+      event.preventDefault();
+      suppressClick();
+    }
+    clearLongPressTimer();
+    gestureState.current = reduceSelectionGesture(previous, {
+      type,
+      pointerId: event.pointerId,
+    });
+    setLongPressPending(false);
+  };
+
+  const handleContextMenu = (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    gestureState.current = reduceSelectionGesture(gestureState.current, { type: 'contextmenu' });
+    setLongPressPending(gestureState.current.phase === 'pending');
+  };
+
   const handleOpen = () => {
-    clearLongPress();
-    if (longPressConsumed.current) {
-      longPressConsumed.current = false;
+    clearLongPressTimer();
+    if (suppressNextClick.current) {
+      clearSuppressClick();
+      resetGesture();
       return;
     }
+    resetGesture();
     if (selectionActive) {
       toggleAssetSelection(item.id);
     } else {
@@ -79,33 +184,25 @@ export function MediaCard({ folders, item }: MediaCardProps) {
 
   return (
     <article
-      className={`media-card status-${item.status} ${selected ? 'is-selected' : ''}`}
+      aria-describedby={statusDescriptionId}
+      aria-label={item.alt}
+      className={`media-card status-${item.status} ${selected ? 'is-selected' : ''} ${longPressPending ? 'is-long-pressing' : ''}`}
       data-item-id={item.id}
       data-kind={item.kind}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        const originatedFromTouch = pointerStart.current !== null;
-        clearLongPress();
-        pointerStart.current = null;
-        if (longPressConsumed.current) return;
-        toggleAssetSelection(item.id);
-        longPressConsumed.current = originatedFromTouch;
-      }}
-      onPointerCancel={clearLongPress}
+      data-long-press={longPressPending ? 'pending' : 'idle'}
+      data-status={item.status}
+      onContextMenu={handleContextMenu}
+      onPointerCancel={(event) => handlePointerEnd(event, 'pointercancel')}
       onPointerDown={handlePointerDown}
-      onPointerLeave={clearLongPress}
-      onPointerMove={(event) => {
-        const start = pointerStart.current;
-        if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) {
-          clearLongPress();
-          pointerStart.current = null;
-        }
-      }}
-      onPointerUp={clearLongPress}
+      onPointerLeave={(event) => handlePointerEnd(event, 'pointerleave')}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(event) => handlePointerEnd(event, 'pointerup')}
+      onScrollCapture={resetGesture}
       role="listitem"
     >
       <button
         aria-label={`Open ${item.alt}`}
+        aria-describedby={statusDescriptionId}
         className="media-card-open"
         onClick={handleOpen}
         type="button"
@@ -119,34 +216,45 @@ export function MediaCard({ folders, item }: MediaCardProps) {
           src={item.previewPath}
           width={item.width}
         />
-        <span className="media-card-scrim" aria-hidden="true" />
+        <span aria-hidden="true" className="media-card-scrim" />
+        <span aria-hidden="true" className="long-press-feedback" />
         {item.kind === 'video' && (
-          <span className="video-badge">
+          <span aria-hidden="true" className="video-badge">
             <Play aria-hidden="true" fill="currentColor" size={12} />
             {formatDuration(item.durationSeconds)}
           </span>
         )}
         {isActive && (
-          <span className="job-state job-state--active">
+          <span aria-hidden="true" className="job-state job-state--active">
             <span className="job-state-spinner" aria-hidden="true" />
             <strong>{item.stage}</strong>
             {item.progress !== null && <span>{item.progress}%</span>}
           </span>
         )}
         {isError && (
-          <span className="job-state job-state--error">
+          <span aria-hidden="true" className="job-state job-state--error">
             <X aria-hidden="true" size={17} />
             <strong>{item.stage}</strong>
             <span>{item.error?.retryable ? 'Retry available' : 'Needs revision'}</span>
           </span>
         )}
         {item.status === 'cancelled' && (
-          <span className="job-state job-state--cancelled">
+          <span aria-hidden="true" className="job-state job-state--cancelled">
             <X aria-hidden="true" size={17} />
             <strong>Cancelled</strong>
           </span>
         )}
       </button>
+
+      <span
+        aria-atomic="true"
+        aria-live="polite"
+        className="sr-only media-card-status"
+        id={statusDescriptionId}
+        role="status"
+      >
+        {statusDescription}
+      </span>
 
       <div className="media-card-actions">
         <IconButton
@@ -216,6 +324,15 @@ export function MediaCard({ folders, item }: MediaCardProps) {
           </Popover.Trigger>
           <Popover.Portal>
             <Popover.Content align="end" className="card-actions-popover" sideOffset={8}>
+              <button
+                aria-describedby={statusDescriptionId}
+                aria-pressed={selected}
+                onClick={() => toggleAssetSelection(item.id)}
+                type="button"
+              >
+                {selected ? <Check size={16} strokeWidth={3} /> : <Circle size={16} />}
+                <span>{selected ? `Unselect ${item.alt}` : `Select ${item.alt}`}</span>
+              </button>
               <button onClick={() => actions.toggleSaved(item.id)} type="button">
                 <Bookmark fill={item.saved ? 'currentColor' : 'none'} size={16} />
                 <span>{item.saved ? 'Remove from Saved' : 'Save'}</span>
@@ -252,17 +369,16 @@ export function MediaCard({ folders, item }: MediaCardProps) {
         </Popover.Root>
       </div>
 
-      {selectionActive && (
-        <button
-          aria-label={selected ? `Deselect ${item.alt}` : `Select ${item.alt}`}
-          aria-pressed={selected}
-          className="selection-toggle"
-          onClick={() => toggleAssetSelection(item.id)}
-          type="button"
-        >
-          {selected && <Check size={15} strokeWidth={3} />}
-        </button>
-      )}
+      <button
+        aria-describedby={statusDescriptionId}
+        aria-label={selected ? `Unselect ${item.alt}` : `Select ${item.alt}`}
+        aria-pressed={selected}
+        className="selection-toggle"
+        onClick={() => toggleAssetSelection(item.id)}
+        type="button"
+      >
+        {selected && <Check size={15} strokeWidth={3} />}
+      </button>
     </article>
   );
 }

@@ -93,7 +93,7 @@ export function VirtualGallery({ emptyLabel, items, scrollElementRef }: VirtualG
               width: columnWidth,
             }}
           >
-            <MediaCard folders={folders} item={item} />
+            <MediaCard folders={folders} item={item} scrollElementRef={scrollElementRef} />
           </div>
         );
       })}

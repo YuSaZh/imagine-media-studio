@@ -1,22 +1,24 @@
 # PR7 visual diff report
 
-These screenshots capture the approved PR7 viewports with animations disabled. The viewport captures use the fixed PR1 Mock fixture to keep the responsive workspace deterministic. This report records functional and layout evidence only. No baseline image comparison or pixel diff was run; pixel-level parity is unassessed.
+Screenshots are captured at the approved PR7 viewports with animations disabled. The responsive gallery state uses the fixed PR1 Mock fixture; the production cold-offline and unknown-marker checks run at every PR7 viewport. No pixel comparison was run locally.
 
-## Viewport captures
+Keyboard screenshots named `*-keyboard-mock.png` use an injected visualViewport and CSS safe-area mock for geometry coverage. They are not real iOS or Android keyboard/device evidence.
 
-| Viewport | Screenshot | State | Pixel diff |
-| --- | --- | --- | --- |
-| desktop-1920x1080 | [PNG](./desktop-1920x1080.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| desktop-1440x900 | [PNG](./desktop-1440x900.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| desktop-1280x800 | [PNG](./desktop-1280x800.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| tablet-1024x1366 | [PNG](./tablet-1024x1366.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| tablet-834x1194 | [PNG](./tablet-834x1194.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| mobile-430x932 | [PNG](./mobile-430x932.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| mobile-390x844 | [PNG](./mobile-390x844.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-| mobile-360x800 | [PNG](./mobile-360x800.png) | Responsive workspace/gallery, fixed PR1 Mock fixture | Not run |
-
-## Production representative flow
-
-The production representative flow runs against the built application and persistent in-process server with the deterministic Mock Provider. The cold-offline gallery flow and unknown-marker fail-closed check run on all eight PR7 viewport projects. Install, Settings, and responsive visual checks also run on all eight projects.
-
-The flow verifies that an authenticated gallery can create and display a local Mock asset, that the production Service Worker controls the page, and that the Composer draft, gallery snapshot, and derived thumbnail survive an offline reload. While offline, generation remains disabled with no job POST, browser state contains no serialized credentials, and reconnecting triggers the expected auth and jobs refresh. It also verifies the fail-closed state for an unknown offline marker with no gallery snapshot.
+| Viewport | State | Baseline / diff |
+| --- | --- | --- |
+| desktop-1920x1080 | gallery | CI artifact only |
+| desktop-1440x900 | gallery | CI artifact only |
+| desktop-1280x800 | gallery | CI artifact only |
+| tablet-1024x1366 | gallery | CI artifact only |
+| tablet-834x1194 | gallery | CI artifact only |
+| mobile-430x932 | gallery | CI artifact only |
+| mobile-390x844 | gallery | CI artifact only |
+| mobile-360x800 | gallery | CI artifact only |
+| mobile-430x932 | keyboard + safe-area mock | CI artifact only |
+| mobile-390x844 | keyboard + safe-area mock | CI artifact only |
+| mobile-430x932 | mobile selection | CI artifact only |
+| mobile-390x844 | mobile selection | CI artifact only |
+| tablet-1024x1366 | tablet menu / selection | CI artifact only |
+| tablet-834x1194 | tablet menu / selection | CI artifact only |
+| mobile-430x932 | mobile image viewer / video viewer | CI artifact only |
+| mobile-390x844 | mobile image viewer / video viewer | CI artifact only |
