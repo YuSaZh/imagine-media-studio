@@ -210,6 +210,60 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  pr8-visual:
+    name: 'PR8 project visual baseline: ${{ matrix.project }}'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        project:
+          - pr8-visual-desktop-1440x900
+          - pr8-visual-desktop-1920x1080
+          - pr8-visual-mobile-390x844
+          - pr8-visual-mobile-430x932
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.23.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Prepare isolated visual baseline data directory
+        run: |
+          data_dir=$(mktemp -d "/tmp/imagine-media-studio-e2e-pr8-visual-${{ matrix.project }}-XXXXXX")
+          chmod 0700 "$data_dir"
+          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
+      - name: Run PR8 visual baseline comparison
+        run: pnpm test:e2e --project=${{ matrix.project }} --update-snapshots=none
+      - name: Upload PR8 visual baseline and diff report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr8-visual-${{ matrix.project }}
+          path: |
+            e2e/visual-baselines/pr8/${{ matrix.project }}
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Clean isolated visual baseline data directory
+        if: always()
+        run: |
+          case "${IMAGINE_E2E_DATA_DIR:-}" in
+            /tmp/imagine-media-studio-e2e-pr8-visual-*) rm -rf -- "$IMAGINE_E2E_DATA_DIR" ;;
+            '') ;;
+            *) echo "Refusing to remove unexpected visual baseline data directory." >&2; exit 1 ;;
+          esac
+
   docker-smoke:
     name: Single-container PR 3, PR 5 and PR 6 API, video, adapter and persistence smoke
     runs-on: ubuntu-24.04

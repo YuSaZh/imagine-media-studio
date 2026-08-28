@@ -14,7 +14,8 @@ const port = E2E_PORT;
 const baseURL = E2E_BASE_URL;
 const pr6TestMatch = /pr6\.spec\.ts/;
 const pr7TestMatch = /pr7(?:-a11y-perf)?\.spec\.ts/;
-const pr6AndPr7TestMatch = /pr[67](?:-a11y-perf)?\.spec\.ts/;
+const pr8VisualTestMatch = /pr8-visual\.spec\.ts/;
+const pr6Pr7AndPr8VisualTestMatch = /pr[67](?:-a11y-perf)?\.spec\.ts|pr8-visual\.spec\.ts/;
 const localChromium = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const localLaunchOptions = localChromium
   ? { launchOptions: { executablePath: localChromium } }
@@ -36,6 +37,11 @@ export default defineConfig({
     storageState: E2E_STORAGE_STATE,
     trace: 'on-first-retry',
   },
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: '{testDir}/visual-baselines/pr8/{projectName}/{arg}{ext}',
+    },
+  },
   projects: [
     {
       name: 'pr1-desktop-1920x1080',
@@ -44,7 +50,7 @@ export default defineConfig({
         deviceScaleFactor: 1,
         viewport: { width: 1920, height: 1080 },
       },
-      testIgnore: pr6AndPr7TestMatch,
+      testIgnore: pr6Pr7AndPr8VisualTestMatch,
     },
     {
       name: 'pr1-desktop-1440x900',
@@ -53,7 +59,7 @@ export default defineConfig({
         deviceScaleFactor: 1,
         viewport: { width: 1440, height: 900 },
       },
-      testIgnore: pr6AndPr7TestMatch,
+      testIgnore: pr6Pr7AndPr8VisualTestMatch,
     },
     {
       name: 'pr1-mobile-430x932',
@@ -64,7 +70,7 @@ export default defineConfig({
         isMobile: true,
         viewport: { width: 430, height: 932 },
       },
-      testIgnore: pr6AndPr7TestMatch,
+      testIgnore: pr6Pr7AndPr8VisualTestMatch,
     },
     {
       name: 'pr1-mobile-390x844',
@@ -75,7 +81,7 @@ export default defineConfig({
         isMobile: true,
         viewport: { width: 390, height: 844 },
       },
-      testIgnore: pr6AndPr7TestMatch,
+      testIgnore: pr6Pr7AndPr8VisualTestMatch,
     },
     {
       name: 'pr6-desktop-1440x900',
@@ -239,6 +245,58 @@ export default defineConfig({
         hasTouch: true,
         isMobile: true,
         viewport: { width: 360, height: 800 },
+      },
+    },
+    {
+      name: 'pr8-visual-desktop-1440x900',
+      testMatch: pr8VisualTestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        colorScheme: 'light',
+        deviceScaleFactor: 1,
+        locale: 'en-US',
+        timezoneId: 'UTC',
+        viewport: { width: 1440, height: 900 },
+      },
+    },
+    {
+      name: 'pr8-visual-desktop-1920x1080',
+      testMatch: pr8VisualTestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        colorScheme: 'light',
+        deviceScaleFactor: 1,
+        locale: 'en-US',
+        timezoneId: 'UTC',
+        viewport: { width: 1920, height: 1080 },
+      },
+    },
+    {
+      name: 'pr8-visual-mobile-390x844',
+      testMatch: pr8VisualTestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        colorScheme: 'light',
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        locale: 'en-US',
+        timezoneId: 'UTC',
+        viewport: { width: 390, height: 844 },
+      },
+    },
+    {
+      name: 'pr8-visual-mobile-430x932',
+      testMatch: pr8VisualTestMatch,
+      use: {
+        ...devices['Desktop Chrome'],
+        colorScheme: 'light',
+        deviceScaleFactor: 1,
+        hasTouch: true,
+        isMobile: true,
+        locale: 'en-US',
+        timezoneId: 'UTC',
+        viewport: { width: 430, height: 932 },
       },
     },
   ],
