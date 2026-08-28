@@ -1,6 +1,6 @@
 # PR 8 Project Visual Baseline
 
-Status: **Local baseline generation and pixel comparison passed; remote CI pending.**
+Status: **Local and GitHub Actions pixel comparison passed.**
 
 This is a repository-owned implementation baseline for the stable Imagine
 workspace. It uses the explicit PR 1 Mock fixture and does not represent the
@@ -69,6 +69,17 @@ The local generation and comparison used `E2E_PORT=4317` and omitted
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`, so both runs used the installed
 Playwright bundled browser. CI makes the comparison-only behavior explicit
 with `--update-snapshots=none`.
+
+## Remote verification
+
+Commit `4dc4432` passed all four independent PR 8 visual jobs in
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872):
+`pr8-visual-desktop-1440x900`, `pr8-visual-desktop-1920x1080`,
+`pr8-visual-mobile-390x844`, and `pr8-visual-mobile-430x932`. Each job performed
+comparison-only `toHaveScreenshot` acceptance against the committed PNG for its
+project and uploaded the baseline/report artifact. The same run's quality,
+single-container, base E2E, PR 7 viewport, and accessibility/performance jobs
+also passed.
 
 ## CI boundary
 

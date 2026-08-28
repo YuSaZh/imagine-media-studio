@@ -14,7 +14,7 @@ This file records non-blocking work that cannot currently be proven or completed
 
 - **Affects:** PR 7 cross-platform acceptance and PR 8 release evidence.
 - **Status:** Ubuntu Chromium automation proves manifest/installability inputs, Service Worker control, install/update event handling, standalone layout semantics, offline recovery, and deterministic `visualViewport`/safe-area geometry. The available environment cannot prove completed installation on Windows Chromium, macOS Chromium, Android, or iOS Add to Home Screen, nor a real iOS/Android keyboard and device safe area.
-- **Current handling:** Treat PR 7 implementation and automated acceptance as complete without claiming real-platform installation or device geometry. Capture OS-native installation, standalone relaunch, keyboard, and safe-area evidence on the named platforms before the v0.1.0 release claim.
+- **Current handling:** Treat PR 7 implementation and automated acceptance as complete without claiming real-platform installation or device geometry. The v0.1.0 release records this as a known limitation and does not claim those platforms passed; capture OS-native installation, standalone relaunch, keyboard, and safe-area evidence before making any future platform-complete claim.
 
 ### Live external Provider acceptance
 
@@ -38,7 +38,7 @@ This file records non-blocking work that cannot currently be proven or completed
 
 - **Affects:** PR 8 maintenance settings.
 - **Status:** PR 7 connected the update-notification preference to durable settings and the Service Worker update lifecycle. The Storage page's original-media and temporary-file retention controls remain presentational.
-- **Current handling:** Connect retention and maintenance behavior with the PR 8 backup/media consistency work.
+- **Current handling:** Keep these controls explicitly presentational in v0.1.0 and implement retention policy and maintenance behavior only in a separately scoped future milestone.
 
 ### PR 8 offline restore same-UID replacement window
 

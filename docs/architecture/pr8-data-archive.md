@@ -1,5 +1,7 @@
 # PR8 Data Archive Core
 
+Status: **Offline archive, target-only restore, restored-server startup, and GitHub Actions acceptance passed.**
+
 This milestone defines an offline, versioned data bundle and target-only
 restore flow for Imagine Media Studio. It is a directory bundle that can be
 copied as a unit; it is not a compressed tar archive.
@@ -39,8 +41,9 @@ backups or its own staging data. `media/temp`, `adapters/.staging`, `logs`,
 transient or operational data. The lease lock is listed explicitly in the
 manifest exclusion set but is never copied into a bundle.
 Provider-result temporary manifests are therefore not promised to survive as
-archive payloads; a later restore/reconciliation milestone must normalize
-non-terminal jobs and requeue them where necessary.
+archive payloads. Durable Job state remains in SQLite and uses the existing
+startup recovery path after restore; startup reconciliation handles only the
+strictly safe terminal provisional-output cases and preserves ambiguous data.
 
 Every included source path is checked beneath the canonical 0700 data roots.
 Symlinks, non-regular files, and hardlink aliases are rejected. Payload files
@@ -59,7 +62,7 @@ post-check detects the replacement and fails closed rather than following it.
 Installed adapters are revalidated with the existing bounded manifest parser,
 source policy, export policy, and declared SHA-256 digest before they are
 archived. They are executable trusted code and remain subject to the existing
-administrator controls after a future restore.
+administrator controls after restore.
 
 During verify, every database asset reference must also agree with its media
 role: `output` content is under `media/originals`, `mask` content under
@@ -160,3 +163,14 @@ As with archive creation, Node's promise filesystem API does not provide
 implementation records and rechecks canonical parent device/inode identities
 and fails closed on detected replacement; a same-UID replacement in the
 small interval between checks remains outside the atomicity boundary.
+
+## Remote acceptance
+
+Commit `4dc4432` passed all 17 jobs in
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872).
+The isolated single-container job created and verified a full archive, restored
+it to an absent task-owned root, checked standard directory/file modes and
+database/media/adapter integrity, started the server against the restored root,
+applied the current immutable migration chain, retrieved legacy and current
+Assets, and verified persistence after restart. The job used one Compose
+service and cleaned only its unique project and temporary data roots.

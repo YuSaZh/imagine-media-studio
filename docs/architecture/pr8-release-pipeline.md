@@ -1,5 +1,7 @@
 # PR8 Release Pipeline
 
+Status: **v0.1.0 release pipeline and post-release verification passed.**
+
 This milestone adds a release-only GitHub Actions workflow at
 `.github/workflows/release.yml`. It is separate from the normal CI workflow and
 does not change the application runtime, database, media, archive, or migration
@@ -16,10 +18,10 @@ that version exactly. Pre-release tags, leading-zero versions, branch refs,
 cross-manifest drift, app-info drift, and mismatched tags fail before registry
 login or image build.
 
-The root, server-app, and web-app versions are now `0.1.0`; private internal
-library workspaces retain their independent `0.0.0` placeholders. This checkout
-therefore accepts only `v0.1.0` at the release gate. Source preparation did not
-create that tag, a GitHub Release, a GHCR image, or a remote release run.
+The root, server-app, web-app, and app-info versions are `0.1.0`; private
+internal library workspaces retain their independent `0.0.0` placeholders. Tag
+`v0.1.0` passed this gate and resolves to commit `967b350`. The resulting GitHub
+Release and GHCR image are published.
 
 ## Candidate publish job
 
@@ -109,17 +111,35 @@ Docker Compose configuration parsing, and Dockerfile/build metadata checks.
 The generated release Compose can be checked without a daemon or image pull
 with
 `RELEASE_SMOKE_DRY_RUN=true RELEASE_IMAGE=ghcr.io/yusazh/imagine-media-studio@sha256:<64-hex> RELEASE_DIGEST=sha256:<64-hex> bash .github/scripts/release-smoke.sh`;
-the dry-run flag is never enabled by the release workflow. The digest smoke is
-designed for the remote release job but was not run here because no tag was
-created and no image was pushed. The structured test also proves that consumer
-tags and GitHub Release creation occur only in jobs downstream of successful
-digest smoke, checks all four release-facing version sources, and covers first
-creation, identical-release recovery, mismatches, failed reads, notes cleanup,
-and per-platform SPDX/SLSA validation.
+the dry-run flag is never enabled by the release workflow. The structured test
+also proves that consumer tags and GitHub Release creation occur only in jobs
+downstream of successful digest smoke, checks all four release-facing version
+sources, and covers first creation, identical-release recovery, mismatches,
+failed reads, notes cleanup, and per-platform SPDX/SLSA validation.
+
+## Remote release evidence
+
+[Release run 33215005527](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33215005527)
+passed all four jobs for tag commit `967b350`: multi-platform candidate publish,
+exact-digest amd64 smoke, stable-tag promotion, and GitHub Release publication.
+Tags `0.1.0`, `0.1`, `latest`, and
+`sha-967b350ff76f15b54e4de0db91d092b778dceac8` resolve to
+`sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018`.
+The index contains `linux/amd64` and `linux/arm64` images plus their BuildKit
+attestation manifests, and the GitHub artifact attestation verifies against the
+repository.
+
+The [v0.1.0 GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.0)
+is the non-draft, non-prerelease Latest release. Its corrected verifier asset is
+3,681 bytes with SHA-256
+`526c6799d3b4bb1e9098e9068bd66521d8bdba06d8df01381dd6dc10c371ee67`
+and matches commit `4dc4432`. [Fix CI run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872)
+passed all 17 jobs, and the corrected helper validates the published digest's
+real amd64/arm64 SPDX and SLSA v1 output.
 
 This pipeline does not close the external-platform PWA or private Grok visual
-reference items recorded in `Hold.md`. Those remain release evidence gates and
-must not be represented as completed by this workflow design.
+reference items recorded in `Hold.md`. The v0.1.0 Release presents them as known
+limitations and does not represent them as completed.
 
 Official action and attestation references:
 

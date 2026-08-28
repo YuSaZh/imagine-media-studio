@@ -1,9 +1,10 @@
 # Imagine Media Studio v0.1.0 Release Guide
 
-The source tree is prepared for `v0.1.0`, but the release does not exist until
-the matching tag completes `.github/workflows/release.yml`. Do not substitute
-an unverified mutable tag for the digest shown by that workflow and the GitHub
-Release.
+Imagine Media Studio `v0.1.0` is published from tag commit `967b350`. The
+release workflow passed candidate publication, exact-digest smoke, stable-tag
+promotion, and GitHub Release publication. Use the immutable digest recorded in
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.0),
+not a mutable tag, for deployment and verification.
 
 ## Deployment boundary
 
@@ -41,11 +42,11 @@ remains an administrator trust boundary.
 
 ## Install the released image
 
-After the tag workflow succeeds, take the exact digest from the GitHub Release
-or workflow summary:
+For `v0.1.0`, take the exact digest from the GitHub Release or release workflow
+summary:
 
 ```bash
-IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:<64-hex-digest>'
+IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018'
 docker pull "$IMAGE"
 docker run --detach \
   --name imagine-media \
@@ -169,7 +170,7 @@ keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.
 
 ```bash
-IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:<64-hex-digest>'
+IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018'
 
 gh auth status
 docker buildx imagetools inspect "$IMAGE"
@@ -206,16 +207,17 @@ SLSA v1 output. This helper-only false negative does not affect the published
 image, its immutable digest, the digest smoke result, or the registry-backed
 attestations.
 
-The maintainer will attach the corrected `verify-release-attestations.mjs` as a
-GitHub Release asset. The fixed download URL will be:
+The corrected `verify-release-attestations.mjs` is attached to the GitHub
+Release at this fixed download URL:
 
 ```text
 https://github.com/YuSaZh/imagine-media-studio/releases/download/v0.1.0/verify-release-attestations.mjs
 ```
 
-This text does not claim that the asset has already been uploaded. Once that URL
-resolves successfully, `v0.1.0` users should download it and replace the final
-helper invocation above with:
+The uploaded asset is 3,681 bytes with SHA-256
+`526c6799d3b4bb1e9098e9068bd66521d8bdba06d8df01381dd6dc10c371ee67`
+and matches the verifier in commit `4dc4432`. `v0.1.0` users should download it
+and replace the final helper invocation above with:
 
 ```bash
 curl --fail --location --proto '=https' --tlsv1.2 \
@@ -236,17 +238,29 @@ conservative, some retention controls are presentational, large live model
 catalogs are limited to one bounded page, and the documented same-UID restore
 and lock-cleanup race windows remain outside the atomicity guarantee.
 
-## Maintainer release procedure
+## v0.1.0 completion record
+
+- Annotated tag `v0.1.0` resolves to commit `967b350`.
+- [Release run 33215005527](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33215005527)
+  passed all four jobs and published digest
+  `sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018`.
+- `0.1.0`, `0.1`, `latest`, and the full commit-SHA tag resolve to that digest;
+  its index contains both `linux/amd64` and `linux/arm64` images.
+- [Fix CI run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872)
+  passed all 17 jobs at commit `4dc4432`. The corrected verifier asset matches
+  that commit and validates the registry's real SPDX/SLSA output for both
+  platforms.
+
+## Future release procedure
 
 1. Require the release-preparation commit and normal CI on `main` to pass.
-2. Confirm `package.json` is `0.1.0`, `CHANGELOG.md` has one non-empty `0.1.0`
-   section, and the working tree is clean.
-3. Create and push the stable `v0.1.0` tag. Do not manually create the GitHub
-   Release or pre-push stable GHCR tags.
-4. The tag workflow validates the version, publishes a unique candidate,
-   attests its digest, smokes that exact digest, then and only then promotes
-   `0.1.0`, `0.1`, `latest`, and the full commit-SHA tag.
-5. After promotion, the workflow creates the GitHub Release from the matching
-   `CHANGELOG.md` section and records the tested digest. Verify the Release,
-   GHCR tags, attestation, SBOM, provenance, and amd64/arm64 manifests before
-   announcing availability.
+2. Confirm the root, server, web, and app-info versions match the intended
+   stable tag; ensure `CHANGELOG.md` has one non-empty matching version section
+   and the working tree is clean.
+3. Create and push only the matching stable tag. Do not manually create the
+   GitHub Release or pre-push stable GHCR tags.
+4. Require the tag workflow to validate the version, publish and attest a
+   unique candidate, smoke the exact digest, and only then promote the stable,
+   minor, `latest`, and full commit-SHA tags.
+5. Verify the Release, GHCR tags, digest attestation, SBOM, provenance, and all
+   required platform manifests before announcing availability.

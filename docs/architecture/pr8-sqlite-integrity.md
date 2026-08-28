@@ -1,6 +1,6 @@
 # PR 8 SQLite Integrity and Migration Trust
 
-Status: **Local acceptance passed; remote acceptance pending.**
+Status: **Local and GitHub Actions acceptance passed.**
 
 These PR 8 milestones establish immutable migration history, a bounded SQLite
 integrity-checking core, and the database-only maintenance boundary. They do
@@ -99,8 +99,13 @@ No download or restore endpoint is exposed in this milestone.
 ## Remote evidence
 
 The SQLite milestone commit `c0fa70f` passed the recorded GitHub Actions run
-`33183142103`. The maintenance API and online backup changes are locally
-verified and await their remote acceptance run.
+`33183142103`. Final commit `4dc4432` passed all 17 jobs in
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872).
+Its quality job reran the complete unit/type/build gate, and its isolated
+single-container smoke exercised the released migration chain through `0007`,
+legacy upgrade, authenticated integrity/backup endpoints, backup permissions and
+hashes, full archive verification, target-only restore, restored-server startup,
+and post-restart SQLite/media persistence.
 
 ## Local evidence
 

@@ -1855,87 +1855,87 @@ PWA 从 PR 0 已存在，本 PR 是完整化而不是临时补装。
 
 ### 20.1 UI
 
-- [ ] Grok Imagine 是唯一 UI/UX 基准。
-- [ ] 主界面达到 L3，高频核心状态接近 L4。
-- [ ] 桌面端不是旧项目换肤。
-- [ ] 手机端是独立响应式设计，不是桌面缩放。
-- [ ] Composer、画廊、Viewer、菜单和任务状态符合交互图。
-- [ ] 图片和视频统一进入画廊。
-- [ ] 所有状态有明确视觉反馈。
-- [ ] UI PR 有固定视口截图和差异报告。
-- [ ] 不复制 Grok Logo、商标和原始资产。
+- [x] Grok Imagine 是唯一 UI/UX 基准。
+- [ ] 主界面达到 L3，高频核心状态接近 L4（authenticated reference 仍缺失，见 [Hold.md](./Hold.md)）。
+- [x] 桌面端不是旧项目换肤。
+- [x] 手机端是独立响应式设计，不是桌面缩放。
+- [x] Composer、画廊、Viewer、菜单和任务状态符合交互图。
+- [x] 图片和视频统一进入画廊。
+- [x] 所有状态有明确视觉反馈。
+- [x] UI PR 有固定视口截图和差异报告。
+- [x] 不复制 Grok Logo、商标和原始资产。
 
 ### 20.2 部署
 
-- [ ] `docker compose up -d` 只启动一个业务容器。
-- [ ] 不需要 PostgreSQL、Redis、MinIO 或 Nginx。
-- [ ] 所有数据在 `/data`。
-- [ ] 删除并重建容器后历史仍存在。
-- [ ] 容器重启后继续处理可恢复任务。
+- [x] `docker compose up -d` 只启动一个业务容器。
+- [x] 不需要 PostgreSQL、Redis、MinIO 或 Nginx。
+- [x] 所有数据在 `/data`。
+- [x] 删除并重建容器后历史仍存在。
+- [x] 容器重启后继续处理可恢复任务。
 
 ### 20.3 Provider
 
-- [ ] 可添加 OpenAI-compatible Provider。
-- [ ] 可添加 Gemini Native Provider。
-- [ ] 可添加 xAI Provider。
-- [ ] 可手工增加模型。
-- [ ] 参数由 Capability 驱动。
-- [ ] 可测试连接。
-- [ ] API Key 不出现在浏览器和日志。
+- [x] 可添加 OpenAI-compatible Provider。
+- [x] 可添加 Gemini Native Provider。
+- [x] 可添加 xAI Provider。
+- [x] 可手工增加模型。
+- [x] 参数由 Capability 驱动。
+- [x] 可测试连接。
+- [x] API Key 不出现在浏览器和日志。
 
 ### 20.4 图片
 
-- [ ] 文生图。
-- [ ] 图片编辑。
-- [ ] 多参考图。
-- [ ] Mask。
-- [ ] 多图生成。
-- [ ] 生成结果本地保存。
-- [ ] 可从结果继续编辑或作为参考。
-- [ ] 可从图片发起图生视频。
+- [x] 文生图。
+- [x] 图片编辑。
+- [x] 多参考图。
+- [x] Mask。
+- [x] 多图生成。
+- [x] 生成结果本地保存。
+- [x] 可从结果继续编辑或作为参考。
+- [x] 可从图片发起图生视频。
 
 ### 20.5 视频
 
-- [ ] 文生视频。
-- [ ] 图生视频。
-- [ ] 异步轮询。
-- [ ] 进行中状态。
-- [ ] 容器重启恢复。
-- [ ] 下载到本地。
-- [ ] Poster。
-- [ ] Range 播放。
-- [ ] Provider 支持时可取消。
+- [x] 文生视频。
+- [x] 图生视频。
+- [x] 异步轮询。
+- [x] 进行中状态。
+- [x] 容器重启恢复。
+- [x] 下载到本地。
+- [x] Poster。
+- [x] Range 播放。
+- [x] Provider 支持时可取消。
 
 ### 20.6 自定义请求
 
-- [ ] 声明式 Adapter。
-- [ ] 同步返回。
-- [ ] 异步返回。
-- [ ] JSON、Form、Multipart。
-- [ ] 自定义 Header。
-- [ ] Path 提取。
-- [ ] Dry Run。
-- [ ] 导入导出。
-- [ ] 管理员 JavaScript Adapter。
+- [x] 声明式 Adapter。
+- [x] 同步返回。
+- [x] 异步返回。
+- [x] JSON、Form、Multipart。
+- [x] 自定义 Header。
+- [x] Path 提取。
+- [x] Dry Run。
+- [x] 导入导出。
+- [x] 管理员 JavaScript Adapter。
 
 ### 20.7 PWA
 
-- [ ] Windows Chromium 可安装。
-- [ ] macOS Chromium 可安装。
-- [ ] Android 可安装。
-- [ ] iOS 可添加到主屏幕。
-- [ ] standalone 布局正确。
-- [ ] 离线可打开 App Shell。
-- [ ] 不缓存 Secret 和生成 POST。
-- [ ] PWA 关闭后容器继续任务。
-- [ ] 重开后恢复任务。
+- [ ] Windows Chromium 可安装（真实平台证据待补，见 [Hold.md](./Hold.md)）。
+- [ ] macOS Chromium 可安装（真实平台证据待补，见 [Hold.md](./Hold.md)）。
+- [ ] Android 可安装（真实设备证据待补，见 [Hold.md](./Hold.md)）。
+- [ ] iOS 可添加到主屏幕（真实设备证据待补，见 [Hold.md](./Hold.md)）。
+- [x] standalone 布局正确。
+- [x] 离线可打开 App Shell。
+- [x] 不缓存 Secret 和生成 POST。
+- [x] PWA 关闭后容器继续任务。
+- [x] 重开后恢复任务。
 
 ### 20.8 资源
 
-- [ ] 空闲时只有一个 Node 主进程和 SQLite。
-- [ ] 无常驻外部数据库和消息队列。
-- [ ] 瀑布流大量历史下仍保持可用。
-- [ ] 视频不会被 Service Worker 全量缓存。
+- [x] 空闲时只有一个 Node 主进程和 SQLite。
+- [x] 无常驻外部数据库和消息队列。
+- [x] 瀑布流大量历史下仍保持可用。
+- [x] 视频不会被 Service Worker 全量缓存。
 
 ---
 

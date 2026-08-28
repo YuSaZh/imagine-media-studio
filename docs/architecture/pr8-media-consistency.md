@@ -1,6 +1,6 @@
 # PR 8 Media Consistency
 
-Status: **Bounded media audit, repair queue, and one-shot derived repair implemented; full PR 8 acceptance remains pending.**
+Status: **Bounded media audit, repair queue, one-shot derived repair, and automated acceptance passed.**
 
 This milestone provides a bounded media consistency audit, an authenticated
 administrator report, startup cleanup for deterministic Provider provisional
@@ -168,3 +168,13 @@ the processor opens the source. Coordinator, route, server, and client tests
 verify truncated propagation, active-lease retention, strict request
 boundaries, administrator/CSRF protection, restart persistence, no-store/CSP
 headers, safe DTO projection, and bounded repair outcome invariants.
+
+Commit `4dc4432` passed all 17 jobs in
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872).
+The quality job reran the complete media audit, queue, startup reconciliation,
+worker, route, and server regression suite. The isolated single-container smoke
+verified migration `0007`, authenticated bounded media reporting, queue
+reconciliation, safe derived repair, persistence across restart, archive/restore,
+and restored-server media access. This closes the automated PR 8 media boundary;
+conservative provider-output cleanup, primary/orphan handling, and retention
+controls remain explicit non-blocking limitations in `Hold.md`.
