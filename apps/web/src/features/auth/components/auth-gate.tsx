@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus } from '@imagine/shared';
 import { AlertCircle, Aperture, LoaderCircle, LockKeyhole, LogIn, RotateCcw } from 'lucide-react';
 
@@ -20,6 +20,28 @@ const FIXTURE_AUTH_STATUS = { authenticated: true, required: false } as const sa
 const OFFLINE_AUTH_STATUS = { authenticated: true, required: true } as const satisfies AuthStatus;
 const OFFLINE_PUBLIC_STATUS = { authenticated: false, required: false } as const satisfies AuthStatus;
 let initialStatusRequest: Promise<AuthStatus> | undefined;
+let initialStatusRequestPending = false;
+
+function getInitialStatusRequest(): Promise<AuthStatus> {
+  if (initialStatusRequest !== undefined) return initialStatusRequest;
+  let request: Promise<AuthStatus>;
+  try {
+    request = Promise.resolve(internalClient.getAuthStatus());
+  } catch (error) {
+    request = Promise.reject(error);
+  }
+  initialStatusRequest = request;
+  initialStatusRequestPending = true;
+  void request.then(
+    () => {
+      if (initialStatusRequest === request) initialStatusRequestPending = false;
+    },
+    () => {
+      if (initialStatusRequest === request) initialStatusRequestPending = false;
+    },
+  );
+  return request;
+}
 
 export interface InitialAuthResolution {
   readonly status: AuthStatus;
@@ -40,7 +62,7 @@ export async function resolveInitialAuthStatus(fixtureMode: boolean): Promise<In
       offlineBootstrap: true,
     };
   }
-  initialStatusRequest ??= internalClient.getAuthStatus();
+  initialStatusRequest ??= getInitialStatusRequest();
   try {
     const status = await initialStatusRequest;
     markNetworkAvailable();
@@ -64,6 +86,7 @@ export async function loadInitialAuthStatus(fixtureMode: boolean): Promise<AuthS
 }
 
 export function resetInitialStatusRequest(): void {
+  if (initialStatusRequestPending) return;
   initialStatusRequest = undefined;
 }
 
@@ -164,25 +187,126 @@ export function AuthGate({
   const [status, setStatus] = useState<AuthStatus | null>(() =>
     fixtureMode ? FIXTURE_AUTH_STATUS : null,
   );
-  const [, setOfflineBootstrap] = useState(false);
+  const [offlineBootstrap, setOfflineBootstrap] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const mountedRef = useRef(false);
+  const authEpochRef = useRef(0);
+  const loginEpochRef = useRef(0);
+  const revalidationEpochRef = useRef(0);
+  const backgroundStatusRequestRef = useRef<Promise<AuthStatus> | null>(null);
+  const authStateRef = useRef({ status, offlineBootstrap, statusError });
+  authStateRef.current = { status, offlineBootstrap, statusError };
+
+  const updateAuthState = (nextStatus: AuthStatus | null, nextOfflineBootstrap: boolean) => {
+    authStateRef.current = {
+      status: nextStatus,
+      offlineBootstrap: nextOfflineBootstrap,
+      statusError: authStateRef.current.statusError,
+    };
+    setStatus(nextStatus);
+    setOfflineBootstrap(nextOfflineBootstrap);
+  };
+  const updateStatusError = (nextStatusError: boolean) => {
+    authStateRef.current = {
+      ...authStateRef.current,
+      statusError: nextStatusError,
+    };
+    setStatusError(nextStatusError);
+  };
+  const invalidateAuthRequests = () => {
+    authEpochRef.current += 1;
+    loginEpochRef.current += 1;
+    revalidationEpochRef.current += 1;
+  };
+  const enterAuthGate = () => {
+    invalidateAuthRequests();
+    resetInitialStatusRequest();
+    markOfflineBootstrapActive(false);
+    updateAuthState({ authenticated: false, required: true }, false);
+    updateStatusError(false);
+    setLoginError(null);
+    setLoginPending(false);
+    setPassword('');
+  };
+  const revalidateAuth = () => {
+    if (backgroundStatusRequestRef.current !== null) return;
+    resetInitialStatusRequest();
+    const request = getInitialStatusRequest();
+    backgroundStatusRequestRef.current = request;
+    const revalidationEpoch = ++revalidationEpochRef.current;
+    const authEpoch = ++authEpochRef.current;
+    const finish = () => {
+      if (backgroundStatusRequestRef.current !== request) return;
+      backgroundStatusRequestRef.current = null;
+      resetInitialStatusRequest();
+    };
+    void request.then(
+      (nextStatus) => {
+        if (
+          !mountedRef.current ||
+          revalidationEpoch !== revalidationEpochRef.current ||
+          authEpoch !== authEpochRef.current
+        ) return;
+        if (nextStatus.required && !nextStatus.authenticated) {
+          enterAuthGate();
+          return;
+        }
+        updateAuthState(nextStatus, false);
+        updateStatusError(false);
+      },
+      (error) => {
+        if (
+          !mountedRef.current ||
+          revalidationEpoch !== revalidationEpochRef.current ||
+          authEpoch !== authEpochRef.current
+        ) return;
+        if (error instanceof InternalApiError && error.status === 401) {
+          enterAuthGate();
+          return;
+        }
+        if (isNetworkFailure(error)) {
+          markNetworkFailure();
+          return;
+        }
+        updateAuthState(null, false);
+        updateStatusError(true);
+      },
+    ).then(finish, finish);
+  };
+  const retryStatus = () => {
+    invalidateAuthRequests();
+    resetInitialStatusRequest();
+    updateAuthState(null, false);
+    updateStatusError(false);
+    setAttempt((current) => current + 1);
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      invalidateAuthRequests();
+    };
+  }, []);
+
   useEffect(() => {
     if (fixtureMode) return;
     let active = true;
-    setStatusError(false);
+    const authEpoch = authEpochRef.current;
+    updateStatusError(false);
     void resolveInitialAuthStatus(false).then(
       (resolution) => {
-        if (active) {
-          setStatus(resolution.status);
-          setOfflineBootstrap(resolution.offlineBootstrap);
+        if (active && authEpoch === authEpochRef.current) {
+          updateAuthState(resolution.status, resolution.offlineBootstrap);
+          updateStatusError(false);
         }
       },
       () => {
-        if (active) setStatusError(true);
+        if (active && authEpoch === authEpochRef.current) updateStatusError(true);
       },
     );
     return () => {
@@ -193,58 +317,63 @@ export function AuthGate({
   useEffect(() => {
     if (fixtureMode || typeof window === 'undefined') return;
     return subscribeToOnlineAuthRetry(() => {
-      resetInitialStatusRequest();
-      setOfflineBootstrap(false);
-      setStatusError(false);
-      setStatus(null);
-      setAttempt((current) => current + 1);
+      const current = authStateRef.current;
+      if (
+        current.status !== null &&
+        (current.status.authenticated || current.status.required === false) &&
+        !current.offlineBootstrap &&
+        !current.statusError
+      ) {
+        revalidateAuth();
+        return;
+      }
+      retryStatus();
     });
   }, [fixtureMode]);
 
   useEffect(() => {
     if (fixtureMode) return;
     return subscribeToAuthRequired((reason) => {
+      invalidateAuthRequests();
       resetInitialStatusRequest();
       markOfflineBootstrapActive(false);
-      setOfflineBootstrap(false);
+      updateAuthState(reason === 'login' ? null : { authenticated: false, required: true }, false);
+      updateStatusError(false);
       if (reason === 'login') {
-        setStatus(null);
-        setStatusError(false);
         setLoginError(null);
         setLoginPending(false);
         setPassword('');
         setAttempt((current) => current + 1);
         return;
       }
-      setStatus({ authenticated: false, required: true });
-      setStatusError(false);
       setLoginError(null);
       setLoginPending(false);
       setPassword('');
     });
   }, [fixtureMode]);
 
-  const retryStatus = () => {
-    resetInitialStatusRequest();
-    setStatus(null);
-    setAttempt((current) => current + 1);
-  };
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!mountedRef.current) return;
+    const loginEpoch = ++loginEpochRef.current;
+    const loginIsCurrent = () => mountedRef.current && loginEpoch === loginEpochRef.current;
     setLoginError(null);
     setLoginPending(true);
     try {
       const response = await internalClient.login(password);
+      if (!loginIsCurrent()) return;
+      initialStatusRequestPending = false;
       initialStatusRequest = Promise.resolve(response);
       markOfflineBootstrapActive(false);
-      setOfflineBootstrap(false);
-      setStatus(response);
+      updateAuthState(response, false);
+      updateStatusError(false);
       setPassword('');
     } catch (error) {
+      if (!loginIsCurrent()) return;
       setPassword('');
       setLoginError(authErrorMessage(error));
     } finally {
-      setLoginPending(false);
+      if (loginIsCurrent()) setLoginPending(false);
     }
   };
 

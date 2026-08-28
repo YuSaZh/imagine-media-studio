@@ -1794,8 +1794,8 @@ video.viewer-media {
   overflow-wrap: anywhere;
 }
 
-.toast-actions {
-  pointer-events: auto;
+.toast-notice--passive {
+  pointer-events: none;
 }
 
 .toast-copy {
@@ -1822,6 +1822,14 @@ video.viewer-media {
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
+}
+
+.toast-notice--passive .toast-actions {
+  pointer-events: none;
+}
+
+.toast-notice--interactive .toast-actions {
+  pointer-events: auto;
 }
 
 .toast-command {
@@ -3568,10 +3576,16 @@ video.viewer-media {
     flex-wrap: wrap;
     top: auto;
     right: 10px;
+    /* Keep actions above the selection bar and Composer, while staying below the header. */
     bottom: calc(
-      var(--composer-height) + 18px + env(safe-area-inset-bottom) + var(--keyboard-offset)
+      var(--composer-height) + 84px + env(safe-area-inset-bottom) + var(--keyboard-offset)
     );
     width: calc(100vw - 20px);
+    max-height: calc(
+      100dvh - var(--composer-height) - 138px - env(safe-area-inset-top) -
+        env(safe-area-inset-bottom) - var(--keyboard-offset)
+    );
+    overflow-y: auto;
   }
 
   .toast-copy {

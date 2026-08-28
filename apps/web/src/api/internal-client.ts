@@ -670,7 +670,6 @@ export const internalClient = {
     if (!status.required) rememberPublicOfflineBootstrap();
     broadcastOfflineSessionChange('login');
     publishAuthSessionChanged('login');
-    publishAuthBoundary('login');
     return status;
   },
   logout: async () => {

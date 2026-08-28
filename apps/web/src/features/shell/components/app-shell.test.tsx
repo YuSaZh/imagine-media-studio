@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import * as Tooltip from '@radix-ui/react-tooltip';
 
 const registerSwMock = vi.hoisted(() => vi.fn());
 
 vi.mock('virtual:pwa-register', () => ({ registerSW: registerSwMock }));
 
-import { getPwaNoticeKind, getPwaNoticeTitle } from './app-shell.js';
+import {
+  getPwaNoticeKind,
+  getPwaNoticeTitle,
+  isPwaNoticeInteractive,
+  OFFLINE_READY_NOTICE_DURATION_MS,
+  PwaNotice,
+} from './app-shell.js';
 
 describe('app shell PWA notices', () => {
   it('keeps registration errors visible while honoring update notification settings', () => {
@@ -37,5 +45,47 @@ describe('app shell PWA notices', () => {
     expect(getPwaNoticeTitle('registration-error')).toBe('Offline access unavailable');
     expect(getPwaNoticeTitle('install-error')).toBe('Installation unavailable');
     expect(getPwaNoticeTitle('update-error')).toBe('Update unavailable');
+  });
+
+  it('renders offline readiness as a short-lived passive live notice without actions', () => {
+    const markup = renderToStaticMarkup(
+      <PwaNotice
+        kind="offline-ready"
+        error={null}
+        updating={false}
+        onActivate={vi.fn()}
+        onDefer={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(OFFLINE_READY_NOTICE_DURATION_MS).toBeGreaterThanOrEqual(3000);
+    expect(isPwaNoticeInteractive('offline-ready')).toBe(false);
+    expect(markup).toContain('toast-notice--passive');
+    expect(markup).toContain('aria-live="polite"');
+    expect(markup).not.toContain('toast-actions');
+    expect(markup).not.toContain('<button');
+  });
+
+  it('keeps update notices interactive with explicit update and dismiss actions', () => {
+    const markup = renderToStaticMarkup(
+      <Tooltip.Provider>
+        <PwaNotice
+          kind="update-error"
+          error="The update could not be applied."
+          updating={false}
+          onActivate={vi.fn()}
+          onDefer={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      </Tooltip.Provider>,
+    );
+
+    expect(isPwaNoticeInteractive('update-error')).toBe(true);
+    expect(markup).toContain('toast-notice--interactive');
+    expect(markup).toContain('toast-actions');
+    expect(markup).toContain('Retry update');
+    expect(markup).toContain('Later');
+    expect(markup).toContain('aria-label="Dismiss"');
   });
 });

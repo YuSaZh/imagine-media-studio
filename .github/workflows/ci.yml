@@ -32,7 +32,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: Playwright PR 1, PR 3, PR 4 settings, PR 5 video/PWA, PR 6 adapters and PR 7 PWA/mobile
+    name: 'Playwright base: PR 1/3/4/5 + PR 6 (12 projects)'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -53,7 +53,26 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      - name: Prepare isolated E2E data directory
+        run: |
+          data_dir=$(mktemp -d /tmp/imagine-media-studio-e2e-base-XXXXXX)
+          chmod 0700 "$data_dir"
+          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
+      - name: Run base Playwright projects
+        run: |
+          pnpm test:e2e -- \
+            --project=pr1-desktop-1920x1080 \
+            --project=pr1-desktop-1440x900 \
+            --project=pr1-mobile-430x932 \
+            --project=pr1-mobile-390x844 \
+            --project=pr6-desktop-1440x900 \
+            --project=pr6-desktop-1920x1080 \
+            --project=pr6-desktop-1280x800 \
+            --project=pr6-tablet-834x1112 \
+            --project=pr6-tablet-1024x1366 \
+            --project=pr6-mobile-430x932 \
+            --project=pr6-mobile-390x844 \
+            --project=pr6-mobile-360x800
       - if: success() && hashFiles('artifacts/visual/pr1/*.png') != ''
         uses: actions/upload-artifact@v6
         with:
@@ -78,17 +97,69 @@ jobs:
           name: pr6-adapter-screenshots-and-report
           path: artifacts/visual/pr6
           retention-days: 7
-      - if: always() && hashFiles('artifacts/visual/pr7/**') != ''
+      - if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: pr7-pwa-mobile-screenshots-and-report
-          path: artifacts/visual/pr7
+          name: playwright-base-report-and-traces
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
           retention-days: 7
-      - if: failure() && hashFiles('playwright-report/**') != ''
+
+  pr7-e2e:
+    name: 'Playwright PR 7: ${{ matrix.project }}'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        project:
+          - pr7-desktop-1920x1080
+          - pr7-desktop-1440x900
+          - pr7-desktop-1280x800
+          - pr7-tablet-1024x1366
+          - pr7-tablet-834x1194
+          - pr7-mobile-430x932
+          - pr7-mobile-390x844
+          - pr7-mobile-360x800
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.23.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Prepare isolated E2E data directory
+        run: |
+          data_dir=$(mktemp -d "/tmp/imagine-media-studio-e2e-${{ matrix.project }}-XXXXXX")
+          chmod 0700 "$data_dir"
+          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
+      - name: Run PR7 project
+        run: pnpm test:e2e -- --project=${{ matrix.project }}
+      - name: Upload PR7 screenshots and visual report
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-report
-          path: playwright-report
+          name: pr7-${{ matrix.project }}-visual
+          path: artifacts/visual/pr7
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload PR7 failure report and traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pr7-${{ matrix.project }}-failure-report
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
           retention-days: 7
 
   docker-smoke:

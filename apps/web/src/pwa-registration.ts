@@ -76,6 +76,13 @@ export function dismissPwaNotice(): void {
   });
 }
 
+export function dismissOfflineReadyNotice(): void {
+  publish({
+    ...state,
+    offlineReadyNoticeDismissed: true,
+  });
+}
+
 export function deferPwaUpdate(): void {
   publish({
     ...state,

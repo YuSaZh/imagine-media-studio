@@ -7,6 +7,7 @@ vi.mock('virtual:pwa-register', () => ({ registerSW: registerSwMock }));
 import {
   activatePwaUpdate,
   deferPwaUpdate,
+  dismissOfflineReadyNotice,
   dismissPwaNotice,
   getPwaState,
   promptPwaInstall,
@@ -51,10 +52,11 @@ describe('PWA registration state', () => {
 
     callbacks.onOfflineReady?.();
     expect(getPwaState()).toMatchObject({ offlineReady: true });
-    dismissPwaNotice();
+    dismissOfflineReadyNotice();
     expect(getPwaState()).toMatchObject({
       offlineReady: true,
       offlineReadyNoticeDismissed: true,
+      updateNoticeDismissed: false,
     });
     callbacks.onOfflineReady?.();
     expect(getPwaState()).toMatchObject({ offlineReady: true, offlineReadyNoticeDismissed: false });

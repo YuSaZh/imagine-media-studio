@@ -22,6 +22,7 @@ import { readPwaSettings, useSettingsQuery } from '../../settings/api/settings-q
 import {
   activatePwaUpdate,
   deferPwaUpdate,
+  dismissOfflineReadyNotice,
   dismissPwaNotice,
   getPwaState,
   subscribeToPwaState,
@@ -49,6 +50,8 @@ export type PwaNoticeKind =
   | 'install-error'
   | 'update'
   | 'update-error';
+
+export const OFFLINE_READY_NOTICE_DURATION_MS = 4200;
 
 type PwaNoticeState = Pick<PwaRegistrationState, 'error' | 'offlineReady' | 'updateAvailable'> &
   Partial<
@@ -89,6 +92,84 @@ export function getPwaNoticeTitle(kind: PwaNoticeKind): string {
   }
 }
 
+export function isPwaNoticeInteractive(kind: PwaNoticeKind): boolean {
+  return kind !== 'offline-ready';
+}
+
+interface PwaNoticeProps {
+  readonly kind: PwaNoticeKind;
+  readonly error: string | null;
+  readonly updating: boolean;
+  readonly onActivate: () => void;
+  readonly onDefer: () => void;
+  readonly onDismiss: () => void;
+}
+
+export function PwaNotice({
+  kind,
+  error,
+  updating,
+  onActivate,
+  onDefer,
+  onDismiss,
+}: PwaNoticeProps) {
+  const interactive = isPwaNoticeInteractive(kind);
+  const updateNoticeVisible = kind === 'update' || kind === 'update-error';
+
+  return (
+    <aside
+      aria-labelledby="pwa-notice-title"
+      aria-live="polite"
+      className={`toast-notice ${interactive ? 'toast-notice--interactive' : 'toast-notice--passive'}`}
+      data-pwa-notice-kind={kind}
+      role="status"
+    >
+      <div className="toast-copy">
+        <strong id="pwa-notice-title">{getPwaNoticeTitle(kind)}</strong>
+        <span>
+          {error ??
+            (updateNoticeVisible
+              ? 'Reload when you are ready.'
+              : kind === 'install-error'
+                ? 'Try again from App settings.'
+                : 'The workspace can open without a connection.')}
+        </span>
+      </div>
+      {interactive && (
+        <div className="toast-actions">
+          {updateNoticeVisible && (
+            <>
+              <button
+                className="toast-command toast-command--primary"
+                disabled={updating}
+                onClick={onActivate}
+                type="button"
+              >
+                <RefreshCw aria-hidden="true" size={16} />
+                <span>{kind === 'update-error' ? 'Retry update' : updating ? 'Updating' : 'Update'}</span>
+              </button>
+              <button
+                className="toast-command"
+                disabled={updating}
+                onClick={onDefer}
+                type="button"
+              >
+                <Clock3 aria-hidden="true" size={16} />
+                <span>Later</span>
+              </button>
+            </>
+          )}
+          <IconButton
+            icon={<X size={17} />}
+            label="Dismiss"
+            onClick={onDismiss}
+          />
+        </div>
+      )}
+    </aside>
+  );
+}
+
 function ShellLink({ icon, label, to }: NavigationItem) {
   return (
     <Tooltip.Root>
@@ -121,14 +202,13 @@ export function AppShell() {
   const updateNotifications = readPwaSettings(settingsQuery.data?.settings).updateNotifications;
   const pwaState = useSyncExternalStore(subscribeToPwaState, getPwaState, getPwaState);
   const pwaNoticeKind = getPwaNoticeKind(pwaState, updateNotifications);
-  const updateNoticeVisible = pwaNoticeKind === 'update' || pwaNoticeKind === 'update-error';
-  const showPwaNotice = pwaNoticeKind !== null;
   const previousOnline = useRef(isOnline);
   const [networkNotice, setNetworkNotice] = useState<'restored' | null>(null);
   const clearAssetSelection = useUiStore((state) => state.clearAssetSelection);
   const closeViewer = useUiStore((state) => state.closeViewer);
   const setComposerParamsOpen = useUiStore((state) => state.setComposerParamsOpen);
   const composerParamsOpen = useUiStore((state) => state.composerParamsOpen);
+  const passivePwaNoticeVisible = pwaNoticeKind === 'offline-ready';
   const pwaAnnouncement = !isOnline
     ? 'Offline. Cached workspace remains available and generation is paused.'
     : networkNotice === 'restored'
@@ -165,6 +245,15 @@ export function AppShell() {
     previousOnline.current = true;
     return undefined;
   }, [isOnline, queryClient]);
+
+  useEffect(() => {
+    if (!passivePwaNoticeVisible) return;
+    const timeout = window.setTimeout(
+      dismissOfflineReadyNotice,
+      OFFLINE_READY_NOTICE_DURATION_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [passivePwaNoticeVisible]);
 
   return (
     <div className="app-shell">
@@ -227,51 +316,15 @@ export function AppShell() {
         <Outlet context={{ isOnline, isStandalone }} />
       </main>
 
-      {showPwaNotice && !composerParamsOpen && (
-        <aside className="toast-notice" aria-labelledby="pwa-notice-title" role="status" aria-live="polite">
-          <div className="toast-copy">
-            <strong id="pwa-notice-title">
-              {pwaNoticeKind ? getPwaNoticeTitle(pwaNoticeKind) : ''}
-            </strong>
-            <span>
-              {pwaState.error ??
-                (updateNoticeVisible
-                  ? 'Reload when you are ready.'
-                  : pwaNoticeKind === 'install-error'
-                    ? 'Try again from App settings.'
-                    : 'The workspace can open without a connection.')}
-            </span>
-          </div>
-          <div className="toast-actions">
-            {updateNoticeVisible && (
-              <>
-                <button
-                  className="toast-command toast-command--primary"
-                  disabled={pwaState.updating}
-                  onClick={() => void activatePwaUpdate()}
-                  type="button"
-                >
-                  <RefreshCw aria-hidden="true" size={16} />
-                  <span>{pwaState.updating ? 'Updating' : 'Update'}</span>
-                </button>
-                <button
-                  className="toast-command"
-                  disabled={pwaState.updating}
-                  onClick={deferPwaUpdate}
-                  type="button"
-                >
-                  <Clock3 aria-hidden="true" size={16} />
-                  <span>Later</span>
-                </button>
-              </>
-            )}
-            <IconButton
-              icon={<X size={17} />}
-              label="Dismiss"
-              onClick={dismissPwaNotice}
-            />
-          </div>
-        </aside>
+      {pwaNoticeKind !== null && !composerParamsOpen && (
+        <PwaNotice
+          kind={pwaNoticeKind}
+          error={pwaState.error}
+          updating={pwaState.updating}
+          onActivate={() => void activatePwaUpdate()}
+          onDefer={deferPwaUpdate}
+          onDismiss={dismissPwaNotice}
+        />
       )}
     </div>
   );
