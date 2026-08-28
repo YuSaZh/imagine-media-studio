@@ -476,7 +476,6 @@ const videoAsset = database
     'SELECT type, mime_type AS mimeType, file_path AS filePath, poster_path AS posterPath, file_size AS fileSize FROM assets WHERE id = ?',
   )
   .get(process.env.VIDEO_ASSET_ID);
-database.close();
 
 if (!migrations.includes('0000_pr0.sql') || !migrations.includes('0001_pr2_core.sql')) {
   throw new Error(`Expected both PR 0 and PR 2 migrations, received ${migrations.join(', ')}`);
@@ -509,6 +508,7 @@ for (const index of [
 ]) {
   if (!queueIndexes.has(index)) throw new Error(`Expected media repair queue index ${index}.`);
 }
+database.close();
 if (
   migrationChecksums.length === 0 ||
   migrationChecksums.some((row) => typeof row.checksum !== 'string' || !/^[a-f0-9]{64}$/.test(row.checksum))
