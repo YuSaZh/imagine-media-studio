@@ -332,6 +332,7 @@ test('keeps touch selection, cancel, and retry transitions deterministic', async
   await selectionTarget.dispatchEvent('pointerdown', {
     clientX: 40,
     clientY: 160,
+    isPrimary: true,
     pointerId: 7,
     pointerType: 'touch',
   });
@@ -341,6 +342,7 @@ test('keeps touch selection, cancel, and retry transitions deterministic', async
   await selectionTarget.dispatchEvent('pointerup', {
     clientX: 40,
     clientY: 160,
+    isPrimary: true,
     pointerId: 7,
     pointerType: 'touch',
   });

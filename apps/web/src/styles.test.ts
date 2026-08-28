@@ -64,7 +64,15 @@ describe('Viewer touch affordances', () => {
     expect(stylesheet).toMatch(
       /@media \(max-width: 720px\)[\s\S]*?\.viewer-nav\s*\{[\s\S]*?display:\s*grid;/u,
     );
-    expect(stylesheet).toMatch(/\.viewer-nav\s*\{[\s\S]*?width:\s*var\(--control-touch\);/u);
+    expect(stylesheet).toMatch(
+      /\.viewer-nav\s*\{[^}]*width:\s*45px;[^}]*min-width:\s*45px;[^}]*height:\s*45px;[^}]*min-height:\s*45px;[^}]*flex:\s*0 0 45px;/u,
+    );
+    expect(stylesheet).toMatch(
+      /\.viewer-nav:active\s*\{[^}]*transform:\s*translateY\(-50%\);/u,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*?\.viewer-content \.viewer-nav\s*\{[^}]*flex-basis:\s*45px;/u,
+    );
   });
 });
 

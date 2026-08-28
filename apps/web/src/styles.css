@@ -1445,13 +1445,16 @@ video.viewer-media {
   position: absolute;
   z-index: 4;
   top: 50%;
-  width: var(--control-touch);
-  height: var(--control-touch);
+  width: 45px;
+  min-width: 45px;
+  height: 45px;
+  min-height: 45px;
+  flex: 0 0 45px;
   transform: translateY(-50%);
 }
 
 .viewer-nav:active {
-  transform: translateY(-50%) scale(0.96);
+  transform: translateY(-50%);
 }
 
 .viewer-nav--previous {
@@ -3629,6 +3632,14 @@ video.viewer-media {
   .viewer-nav {
     display: grid;
     top: 30%;
+  }
+
+  .viewer-content .viewer-nav {
+    width: 45px;
+    min-width: 45px;
+    height: 45px;
+    min-height: 45px;
+    flex-basis: 45px;
   }
 
   .viewer-nav--previous {
