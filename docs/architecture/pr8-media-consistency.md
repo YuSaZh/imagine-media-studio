@@ -1,12 +1,13 @@
 # PR 8 Media Consistency
 
-Status: **First milestone implemented; full PR 8 acceptance remains pending.**
+Status: **Media audit and repair queue core implemented; full PR 8 acceptance remains pending.**
 
 This milestone provides a bounded media consistency audit, an authenticated
-administrator report, and startup cleanup for deterministic Provider
-provisional output. It does not add a durable repair queue or migration `0007`,
-and it never automatically deletes an orphan or an Asset-referenced managed
-media file.
+administrator report, startup cleanup for deterministic Provider provisional
+output, and the independent durable repair queue core from migration `0007`.
+It does not connect the queue to a repair worker or administrator repair
+action, and it never automatically deletes an orphan or an Asset-referenced
+managed media file.
 
 ## Audit boundary
 
@@ -65,11 +66,43 @@ temporary files, scan unmanaged roots, or repair managed-tree orphans. Durable
 repair, operator-selected actions, and additional retention controls remain
 future work.
 
+## Durable repair queue core
+
+Migration `0007_pr8_media_repair_queue.sql` adds a bounded queue keyed by a
+stable SHA-256 of the normalized issue kind, Asset/Job identifiers, and stored
+path. The queue keeps only safe relative paths or the explicit
+`<unsafe-path>`/`<path-too-long>` sentinels; it never stores an absolute path,
+raw filesystem error, stack trace, or response body. `asset_id` and `job_id`
+use foreign keys with `SET NULL`, so queue history survives deletion of the
+source row without creating a dangling reference.
+
+`MediaRepairQueueRepository.upsertScan()` sorts and de-duplicates a bounded
+issue set. Only a complete, non-truncated scan can mark absent `open` rows as
+`resolved`; an expired `running` lease is first reclaimed to `open`, while a
+still-valid lease is never bulk-resolved. A truncated scan never bulk-resolves
+old work. Reappearing resolved issues reopen deterministically and clear stale
+error codes, while manual rows remain manual until an explicit retry or state
+transition.
+
+Claims are transactional compare-and-set updates. A claim increments
+`attempts` and sets a bounded lease; an expired running lease returns to
+`open`. Resolve, manual, and retry transitions can require the claimed
+attempt/lease pair, preventing an old worker from completing a newer claim.
+Retry scheduling uses deterministic exponential backoff with a hard maximum,
+and only a bounded error code token is retained.
+
+This milestone supplies the durable database core and tests only. Media scan
+invocation, administrator repair actions, and media-service repair execution
+remain separate integration work; no automatic orphan deletion is introduced.
+
 ## Acceptance evidence
 
 Targeted unit coverage verifies bounded scans, size/hash/missing/orphan/unsafe
 findings, hash-budget truncation, active-output reservation, terminal cleanup,
 referenced completed output preservation, unknown-directory preservation, and
-incomplete-reference fail-closed behavior. Route and server tests verify the
-strict request boundary, administrator protection, no-store response, CSP, and
-safe DTO projection.
+incomplete-reference fail-closed behavior. Queue tests verify new/old database
+migration, manifest drift, schema checks, foreign-key nulling, deterministic
+idempotent upsert, concurrent claims, lease expiry/restart, bounded retry,
+manual/resolve transitions, and truncated-scan behavior. Route and server
+tests verify the strict request boundary, administrator protection, no-store
+response, CSP, and safe DTO projection.

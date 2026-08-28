@@ -299,3 +299,37 @@ export const changeEvents = sqliteTable(
     index('change_events_created_at_idx').on(table.createdAt, table.id),
   ],
 );
+
+export const mediaRepairQueue = sqliteTable(
+  'media_repair_queue',
+  {
+    issueKey: text('issue_key').notNull(),
+    assetId: text('asset_id').references(() => assets.id, { onDelete: 'set null' }),
+    jobId: text('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    kind: text('kind').notNull(),
+    storedPath: text('stored_path').notNull(),
+    state: text('state').notNull().default('open'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at', { mode: 'timestamp_ms' }).notNull(),
+    leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
+    lastErrorCode: text('last_error_code'),
+    firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [
+    uniqueIndex('media_repair_queue_issue_key_idx').on(table.issueKey),
+    index('media_repair_queue_due_idx').on(
+      table.state,
+      table.nextAttemptAt,
+      table.firstSeenAt,
+      table.issueKey,
+    ).where(sql`${table.state} = 'open'`),
+    index('media_repair_queue_lease_idx')
+      .on(table.state, table.leaseUntil, table.issueKey)
+      .where(sql`${table.state} = 'running'`),
+    index('media_repair_queue_asset_idx').on(table.assetId, table.state, table.issueKey),
+    index('media_repair_queue_job_idx').on(table.jobId, table.state, table.issueKey),
+    index('media_repair_queue_seen_idx').on(table.lastSeenAt, table.issueKey),
+  ],
+);

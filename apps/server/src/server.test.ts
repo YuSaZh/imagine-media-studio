@@ -1162,7 +1162,7 @@ describe('Imagine server PR 0 skeleton', () => {
       snapshot.pragma('foreign_keys = ON');
       expect(snapshot.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(snapshot.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-      expect(snapshot.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 7 });
+      expect(snapshot.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 8 });
     } finally {
       snapshot.close();
     }

@@ -80,7 +80,7 @@ async function waitForJob(jobId) {
     const status = detail.job?.status;
     if (status === 'completed') return detail;
     if (['failed', 'cancelled', 'rejected', 'expired'].includes(status)) {
-      throw new Error(`Mock Job reached terminal status ${status}: ${detail.job?.errorMessage ?? ''}`);
+      throw new Error(`Mock Job reached terminal status ${status}.`);
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
@@ -483,6 +483,31 @@ if (!migrations.includes('0000_pr0.sql') || !migrations.includes('0001_pr2_core.
 }
 if (!migrations.includes('0006_pr8_migration_checksums.sql')) {
   throw new Error('Expected the PR 8 migration checksum migration.');
+}
+if (!migrations.includes('0007_pr8_media_repair_queue.sql')) {
+  throw new Error('Expected the PR 8 media repair queue migration.');
+}
+const queueTable = database
+  .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'media_repair_queue'")
+  .get();
+if (typeof queueTable?.sql !== 'string' || !queueTable.sql.includes('media_repair_queue')) {
+  throw new Error('Expected the PR 8 media repair queue table.');
+}
+const queueIndexes = new Set(
+  database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'media_repair_queue'")
+    .all()
+    .map((row) => row.name),
+);
+for (const index of [
+  'media_repair_queue_issue_key_idx',
+  'media_repair_queue_due_idx',
+  'media_repair_queue_lease_idx',
+  'media_repair_queue_asset_idx',
+  'media_repair_queue_job_idx',
+  'media_repair_queue_seen_idx',
+]) {
+  if (!queueIndexes.has(index)) throw new Error(`Expected media repair queue index ${index}.`);
 }
 if (
   migrationChecksums.length === 0 ||
