@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && cp -R migrations dist/migrations",
+    "data-archive": "node dist/maintenance/data-archive-cli.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",

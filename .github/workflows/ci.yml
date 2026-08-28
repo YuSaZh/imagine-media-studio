@@ -265,7 +265,7 @@ jobs:
           esac
 
   docker-smoke:
-    name: Single-container PR 3, PR 5 and PR 6 API, video, adapter and persistence smoke
+    name: Single-container PR 3, PR 5, PR 6 and PR 8 API, video, adapter, archive and persistence smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

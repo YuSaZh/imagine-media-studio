@@ -55,6 +55,13 @@ mkdir -p data
 PUID=$(id -u) PGID=$(id -g) docker compose up -d
 ```
 
+Offline archive operations are available through `pnpm data-archive` after a
+production build. `create` requires the application to be stopped; `verify` is
+read-only and may run while it is online; `restore` creates an absent target
+directory and never replaces the active `/data` mount. The complete host and
+Docker operator sequence is documented in
+[`docs/architecture/pr8-data-archive.md`](./docs/architecture/pr8-data-archive.md).
+
 ## Custom Provider usage
 
 Open Settings -> Providers -> Manage adapter for a `Custom HTTP Adapter` or

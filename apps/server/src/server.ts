@@ -26,6 +26,7 @@ import { JobRunner } from './jobs/job-runner.js';
 import { GenerationInputResolver } from './jobs/generation-input-resolver.js';
 import { createSqliteRunnerOptions } from './jobs/sqlite-adapters.js';
 import { DatabaseBackup } from './maintenance/database-backup.js';
+import { acquireServerRuntimeLease, type ServerRuntimeLease } from './maintenance/runtime-lock.js';
 import { MediaRepairQueueRepository } from './database/media-repair.js';
 import { AssetMediaRepositoryAdapter } from './media/asset-media-repository-adapter.js';
 import { AssetMediaService } from './media/asset-media-service.js';
@@ -179,11 +180,13 @@ async function closeInOrder(
 interface ResourceLedger {
   database?: DatabaseClient;
   databaseBackup?: DatabaseBackup;
+  runtimeLease?: ServerRuntimeLease;
   adapterStore?: AdapterStore;
   adapterWorkerHost?: AdapterWorkerHost;
   trustedAdapterService?: TrustedAdapterService;
   runner?: JobRunner;
   databaseClosed: boolean;
+  dataUsersClosed: boolean;
   closePromise?: Promise<void>;
 }
 
@@ -209,7 +212,14 @@ function closeCreatedResources(ledger: ResourceLedger): Promise<void> {
       }
     });
   }
-  ledger.closePromise = closeInOrder(steps);
+  ledger.closePromise = (async () => {
+    // closeInOrder deliberately attempts every data user so one failure does
+    // not strand another resource. The gate is released only after all of
+    // those close operations report success.
+    await closeInOrder(steps);
+    ledger.dataUsersClosed = true;
+    if (ledger.runtimeLease !== undefined) await ledger.runtimeLease.release();
+  })();
   return ledger.closePromise;
 }
 
@@ -274,11 +284,14 @@ function isSameOriginWrite(request: FastifyRequest, origin: string): boolean {
 
 export async function createServer(options: CreateServerOptions): Promise<ImagineServer> {
   const storage = getStoragePaths(options.config.dataDir);
-  const ledger: ResourceLedger = { databaseClosed: false };
+  const ledger: ResourceLedger = { databaseClosed: false, dataUsersClosed: false };
   let app: FastifyInstance | undefined;
 
   try {
+    const runtimeLease = await acquireServerRuntimeLease(storage.root);
+    ledger.runtimeLease = runtimeLease;
     await ensureStorage(storage);
+    await runtimeLease.verify();
 
     const database = createDatabase(storage.database, options.migrationsDirectory);
     ledger.database = database;

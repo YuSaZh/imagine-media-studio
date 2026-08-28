@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockGenerationRequest } from '@imagine/testkit';
@@ -21,6 +21,7 @@ import { MOCK_PROVIDER_ID } from './providers/provider-registry.js';
 import type { ProviderHttpExecutor } from './providers/provider-http-client.js';
 import { canonicalDeclarativeSpec, parseDeclarativeJson } from './providers/custom-http/index.js';
 import { createServer, type ImagineServer } from './server.js';
+import { acquireOfflineMaintenanceLease, OfflineMaintenanceLeaseError } from './maintenance/runtime-lock.js';
 
 const temporaryDirectories: string[] = [];
 const servers: ImagineServer[] = [];
@@ -154,6 +155,7 @@ async function createTestServer(
   appPassword: string | null = null,
   providerHttpExecutor?: ProviderHttpExecutor,
   adapterWorkerFactory?: AdapterWorkerFactory,
+  migrationsDirectoryOverride = migrationsDirectory,
 ): Promise<ImagineServer> {
   const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-server-test-'));
   temporaryDirectories.push(dataDir);
@@ -185,7 +187,7 @@ async function createTestServer(
   const server = await createServer({
     config,
     logger: false,
-    migrationsDirectory,
+    migrationsDirectory: migrationsDirectoryOverride,
     startRunner,
     ...(providerHttpExecutor === undefined ? {} : { providerHttpExecutor }),
     ...(adapterWorkerFactory === undefined ? {} : { adapterWorkerFactory }),
@@ -230,6 +232,74 @@ describe('Imagine server PR 0 skeleton', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: 'ok', database: 'ok' });
+  });
+
+  it('holds the shared runtime gate until the server closes its SQLite resources', async () => {
+    const server = await createTestServer(false, false);
+    const dataDir = temporaryDirectories.at(-1)!;
+    const lockPath = join(dataDir, '.offline-maintenance.lock');
+    expect(await readFile(lockPath, 'utf8')).toContain('server-runtime-lease-v1');
+    await expect(acquireOfflineMaintenanceLease({
+      assertServerStopped: () => true,
+      dataRoot: dataDir,
+    })).rejects.toThrow(OfflineMaintenanceLeaseError);
+
+    await server.app.close();
+    servers.splice(servers.indexOf(server), 1);
+    await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not initialize an offline-held root before the server gate is acquired', async () => {
+    const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-server-offline-held-'));
+    temporaryDirectories.push(dataDir);
+    const offlineLease = await acquireOfflineMaintenanceLease({
+      assertServerStopped: () => true,
+      dataRoot: dataDir,
+    });
+    try {
+      await expect(createServer({
+        config: {
+          allowHttpMediaDownloads: false,
+          allowInsecureProviderHttp: false,
+          allowPrivateNetworkAccess: false,
+          appPort: 3030,
+          appPassword: null,
+          appSecret: 'test-app-secret-with-at-least-32-characters',
+          dataDir,
+          logLevel: 'silent',
+          maxImageUploadBytes: 32 * 1024 * 1024,
+          maxRemoteImageBytes: 64 * 1024 * 1024,
+          maxRemoteVideoBytes: 1024 * 1024 * 1024,
+          maxVideoUploadBytes: 512 * 1024 * 1024,
+          providerInputMaxBytesPerFile: 64 * 1024 * 1024,
+          providerInputMaxTotalBytes: 256 * 1024 * 1024,
+          mediaProcessTimeoutMs: 30_000,
+          mockProviderEnabled: false,
+          nodeEnvironment: 'test',
+          webDistDir: resolve(dataDir, 'missing-web-dist'),
+        },
+        logger: false,
+        migrationsDirectory,
+        startRunner: false,
+      })).rejects.toThrow();
+      expect(await readdir(dataDir)).toEqual(['.offline-maintenance.lock']);
+    } finally {
+      await offlineLease.release();
+    }
+  });
+
+  it('releases the runtime gate when database initialization fails', async () => {
+    await expect(createTestServer(
+      false,
+      false,
+      false,
+      null,
+      undefined,
+      undefined,
+      resolve(tmpdir(), `imagine-server-missing-migrations-${Date.now()}`),
+    )).rejects.toThrow();
+    const dataDir = temporaryDirectories.at(-1)!;
+    await expect(lstat(join(dataDir, '.offline-maintenance.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('persists a Mock Job and its generated media', async () => {
@@ -1680,6 +1750,7 @@ describe('Imagine server PR 0 skeleton', () => {
 
   it('continues resource cleanup when an earlier close step fails', async () => {
     const server = await createTestServer(false, false);
+    const dataDir = temporaryDirectories.at(-1)!;
     const phases: string[] = [];
     vi.spyOn(server.runner, 'stop').mockRejectedValue(new Error('runner close failed'));
     vi.spyOn(server.adapterWorkerHost, 'close').mockImplementation(async () => {
@@ -1692,6 +1763,7 @@ describe('Imagine server PR 0 skeleton', () => {
     await expect(server.app.close()).rejects.toBeInstanceOf(AggregateError);
     expect(phases).toEqual(['worker', 'store']);
     expect(() => server.adapterDefinitions.getCurrent('missing')).toThrow();
+    expect(await readFile(join(dataDir, '.offline-maintenance.lock'), 'utf8')).toContain('server-runtime-lease-v1');
     servers.splice(servers.indexOf(server), 1);
   });
 });

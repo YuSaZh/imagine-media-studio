@@ -1,12 +1,19 @@
 import { pathToFileURL } from 'node:url';
 
+import Database from 'better-sqlite3';
+
 import {
   DataArchiveError,
+  DataArchive,
   verifyDataArchive,
   type DataArchiveResult,
 } from './data-archive.js';
 import { DataRestoreError, restoreDataArchive, type DataRestoreResult } from './data-restore.js';
-import { OfflineMaintenanceLeaseError } from './runtime-lock.js';
+import {
+  acquireOfflineMaintenanceLease,
+  OfflineMaintenanceLeaseError,
+} from './runtime-lock.js';
+import { getStoragePaths } from '../storage/paths.js';
 
 export type DataArchiveCliCommand =
   | { readonly command: 'create'; readonly dataDir: string }
@@ -18,7 +25,6 @@ export class DataArchiveCliUsageError extends Error {
 }
 
 export interface DataArchiveCliDependencies {
-  /** Deliberately absent from the production entry point until server lease integration. */
   readonly create?: (dataDir: string) => Promise<DataArchiveResult>;
   readonly verify?: (bundlePath: string) => Promise<{
     readonly bytes: number;
@@ -27,6 +33,47 @@ export interface DataArchiveCliDependencies {
   }>;
   readonly restore?: (bundlePath: string, targetPath: string) => Promise<DataRestoreResult>;
   readonly write?: (chunk: string) => void;
+}
+
+async function createOfflineDataArchive(dataDir: string): Promise<DataArchiveResult> {
+  const paths = getStoragePaths(dataDir);
+  // The atomic gate is the authoritative server/CLI exclusion mechanism. The
+  // legacy callback remains true because a successful O_EXCL acquisition is
+  // the stopped-server proof; a concurrent server loses the same race.
+  const lease = await acquireOfflineMaintenanceLease({
+    assertServerStopped: () => true,
+    dataRoot: paths.root,
+  });
+  let sqlite: Database.Database | undefined;
+  let archive: DataArchive | undefined;
+  let operationError: unknown;
+  let result: DataArchiveResult | undefined;
+  try {
+    sqlite = new Database(paths.database, { fileMustExist: true, readonly: true });
+    archive = new DataArchive({ lease, paths, sqlite });
+    result = await archive.create();
+  } catch (error) {
+    operationError = error;
+  }
+
+  const cleanupFailures: unknown[] = [];
+  if (archive !== undefined) {
+    try { await archive.close(); } catch (error) { cleanupFailures.push(error); }
+  }
+  if (sqlite !== undefined) {
+    try { sqlite.close(); } catch (error) { cleanupFailures.push(error); }
+  }
+  try { await lease.release(); } catch (error) { cleanupFailures.push(error); }
+
+  if (operationError !== undefined) {
+    if (cleanupFailures.length > 0) {
+      throw new DataArchiveError('Data archive cleanup failed.');
+    }
+    throw operationError;
+  }
+  if (cleanupFailures.length > 0) throw new DataArchiveError('Data archive cleanup failed.');
+  if (result === undefined) throw new DataArchiveError('Data archive did not produce a result.');
+  return result;
 }
 
 function usage(): string {
@@ -111,12 +158,7 @@ export async function runDataArchiveCli(
     );
     return 0;
   }
-  if (dependencies.create === undefined) {
-    throw new OfflineMaintenanceLeaseError(
-      'Offline archive creation is unavailable until the caller supplies a verified maintenance lease.',
-    );
-  }
-  const result = await dependencies.create(command.dataDir);
+  const result = await (dependencies.create ?? createOfflineDataArchive)(command.dataDir);
   (dependencies.write ?? ((chunk) => process.stdout.write(chunk)))(
     `created id=${result.id} entries=${String(result.entries)} bytes=${String(result.bytes)} createdAt=${result.createdAt.toISOString()}\n`,
   );

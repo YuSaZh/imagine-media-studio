@@ -70,16 +70,57 @@ paths cannot satisfy those constraints.
 ## Lease and CLI boundary
 
 Archive creation requires an `OfflineMaintenanceLease`. The lease proof binds
-to the canonical data root, uses an exclusive 0600 lock, and requires the
-caller to prove that the application is stopped. It is held for the whole
-operation and can be verified again before copying begins. The current server
-does not yet issue this lease. Consequently the standalone CLI `create`
-command fails closed until a server/operator integration supplies one. Server
-mutual-exclusion integration is intentionally not implemented in this
-milestone;
-ordinary CLI invocation cannot be mistaken for an offline window. The
-standalone `verify --bundle PATH` command does not access live storage and may
-verify an already-published bundle.
+to the canonical data root, uses the exclusive 0600 `.offline-maintenance.lock`
+gate, and is held for the whole operation. The application server acquires a
+different runtime-lease kind on that same gate before initializing storage or
+opening SQLite. On first boot it may create only the absent root as a canonical
+0700 directory owned by the current user; existing roots are never recreated or
+chmod-ed before the gate is held. Therefore
+an offline CLI and a running server compete atomically: a running server makes
+CLI `create` fail closed, and a held offline lease makes a new server fail
+closed. No process is stopped or killed by either code path.
+
+The server releases its gate only after its JobRunner, adapter workers, backup
+service, and SQLite connection have closed. A process terminated without the
+normal close path can leave an unknown stale gate. Stale or malformed gates are
+intentionally not removed automatically; an operator must establish that the
+original process is gone and perform the separately controlled recovery before
+retrying. This avoids allowing a second process to open the same data root
+after an ambiguous failure.
+
+The production CLI opens the source SQLite database read-only, acquires the
+offline gate, creates the archive, closes SQLite, and then releases the gate.
+It never reads `APP_SECRET` or `APP_PASSWORD`, and its result line contains
+only the archive id and bounded metadata. The standalone `verify --bundle PATH`
+command does not access live storage and may verify an already-published bundle
+while the server is running.
+
+## Operator commands
+
+After building the server, the host command is:
+
+```text
+pnpm data-archive create --data-dir /var/lib/imagine-media-studio/data
+pnpm data-archive verify --bundle /var/lib/imagine-media-studio/data/backups/<id>.bundle
+pnpm data-archive restore --bundle /var/lib/imagine-media-studio/data/backups/<id>.bundle --target /var/lib/imagine-media-studio/restored-v1
+```
+
+For the single-container deployment, stop only the task's own Compose project
+before creating an archive or switching to a restored root. The one-shot CLI
+container does not publish the application port or start service dependencies:
+
+```text
+docker compose stop imagine-media
+docker compose run --rm --no-deps --entrypoint node imagine-media dist/maintenance/data-archive-cli.js create --data-dir /data
+docker compose run --rm --no-deps --entrypoint node imagine-media dist/maintenance/data-archive-cli.js verify --bundle /data/backups/<id>.bundle
+docker compose run --rm --no-deps --entrypoint node imagine-media dist/maintenance/data-archive-cli.js restore --bundle /data/backups/<id>.bundle --target /data/restore-target
+docker compose start imagine-media
+```
+
+The restore target must be absent and its parent must be a canonical 0700
+directory. Restore is target-only: it never replaces the active bind-mounted
+`/data` directory. After inspecting the target, stop the deployment and change
+the host bind mount to the restored data root before starting the application.
 
 Neither `APP_SECRET` nor `APP_PASSWORD` is read from the environment or
 written to the bundle. Provider credential ciphertext may remain inside the

@@ -46,6 +46,12 @@ This file records non-blocking work that cannot currently be proven or completed
 - **Status:** The restore records and rechecks canonical parent and reservation device/inode identities, and preserves a replacement detected at a check point. Node's promise filesystem API does not provide an atomic `renameat2`-style no-replace directory operation.
 - **Current handling:** Restore requires an absent target and uses an empty 0700 reservation before renaming. A same-UID process can still replace that reservation between the final identity check and `rename`; this narrow TOCTOU window is outside the current atomicity guarantee and must not be described as fully race-proof.
 
+### PR 8 runtime gate same-UID replacement window
+
+- **Affects:** PR 8 server/offline archive mutual exclusion and gate cleanup.
+- **Status:** The server and offline CLI use one exclusive 0600 gate, and acquisition, verification, and release recheck the canonical root owner/device/inode and lock inode. Node's promise filesystem API does not provide an atomic `unlinkat`-style operation conditional on both identities.
+- **Current handling:** Replacement locks are preserved when detected and unknown stale gates are never removed automatically. A same-UID process can still replace a validated path in the narrow interval before `unlink`; this remains outside the atomicity guarantee and must not be described as fully race-proof.
+
 ## Resolved
 
 ### PR 7 production bundle advisory

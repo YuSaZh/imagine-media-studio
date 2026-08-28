@@ -43,6 +43,24 @@ NODE
 
 compose up --detach --wait --wait-timeout 120
 
+running_bundle_count=$(find "$DATA_HOST_DIR/backups" -mindepth 1 -maxdepth 1 -type d -name '*.bundle' -print | wc -l | tr -d ' ')
+running_archive_output="$smoke_tmp_dir/archive-create-while-running.txt"
+if compose run --rm --no-deps --entrypoint node imagine-media \
+  dist/maintenance/data-archive-cli.js create --data-dir /data >"$running_archive_output" 2>&1; then
+  echo 'Archive creation unexpectedly succeeded while the server was running.' >&2
+  exit 1
+fi
+RUNNING_ARCHIVE_OUTPUT="$running_archive_output" APP_SECRET="$APP_SECRET" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const output = await readFile(process.env.RUNNING_ARCHIVE_OUTPUT, 'utf8');
+assert.equal(output.includes(process.env.APP_SECRET ?? ''), false);
+assert.match(output, /Offline maintenance|runtime lease|Runtime maintenance/u);
+NODE
+running_bundle_count_after=$(find "$DATA_HOST_DIR/backups" -mindepth 1 -maxdepth 1 -type d -name '*.bundle' -print | wc -l | tr -d ' ')
+test "$running_bundle_count_after" = "$running_bundle_count"
+
 IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id edit_asset_id backup_id backup_sha256 < <(
   BASE_URL="$base_url" node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
@@ -1329,7 +1347,110 @@ TRUSTED_VERSION="$trusted_version" TRUSTED_DIGEST="$trusted_digest" \
 
 test ! -e "$DATA_HOST_DIR/adapters/$trusted_adapter_id"
 
-compose restart imagine-media
+compose stop imagine-media
+test ! -e "$DATA_HOST_DIR/.offline-maintenance.lock"
+
+archive_create_output="$smoke_tmp_dir/archive-create.txt"
+archive_id_file="$smoke_tmp_dir/archive-id.txt"
+if ! compose run --rm --no-deps --entrypoint node imagine-media \
+  dist/maintenance/data-archive-cli.js create --data-dir /data >"$archive_create_output" 2>&1; then
+  cat -- "$archive_create_output" >&2
+  exit 1
+fi
+ARCHIVE_CREATE_OUTPUT="$archive_create_output" ARCHIVE_ID_FILE="$archive_id_file" APP_SECRET="$APP_SECRET" \
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+
+const output = await readFile(process.env.ARCHIVE_CREATE_OUTPUT, 'utf8');
+assert.equal(output.includes(process.env.APP_SECRET ?? ''), false);
+const matches = output.match(/^created id=([^ ]+) entries=(\d+) bytes=(\d+) createdAt=(\S+)$/gmu) ?? [];
+assert.equal(matches.length, 1, `Unexpected archive create output: ${output}`);
+const match = /^created id=([^ ]+) entries=(\d+) bytes=(\d+) createdAt=(\S+)$/u.exec(matches[0]);
+assert.ok(match);
+assert.match(match[1], /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u);
+assert.ok(Number(match[2]) > 0);
+assert.ok(Number(match[3]) > 0);
+assert.match(match[4], /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
+await writeFile(process.env.ARCHIVE_ID_FILE, match[1], { mode: 0o600 });
+NODE
+archive_id=$(cat -- "$archive_id_file")
+archive_bundle="/data/backups/${archive_id}.bundle"
+
+archive_verify_output="$smoke_tmp_dir/archive-verify.txt"
+if ! compose run --rm --no-deps --entrypoint node imagine-media \
+  dist/maintenance/data-archive-cli.js verify --bundle "$archive_bundle" >"$archive_verify_output" 2>&1; then
+  cat -- "$archive_verify_output" >&2
+  exit 1
+fi
+ARCHIVE_VERIFY_OUTPUT="$archive_verify_output" APP_SECRET="$APP_SECRET" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const output = await readFile(process.env.ARCHIVE_VERIFY_OUTPUT, 'utf8');
+assert.equal(output.includes(process.env.APP_SECRET ?? ''), false);
+assert.match(output, /^verified entries=\d+ bytes=\d+ createdAt=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/mu);
+assert.equal(output.includes('/data'), false);
+NODE
+
+restore_output="$smoke_tmp_dir/archive-restore.txt"
+if ! compose run --rm --no-deps --entrypoint node imagine-media \
+  dist/maintenance/data-archive-cli.js restore --bundle "$archive_bundle" --target /data/restore-target >"$restore_output" 2>&1; then
+  cat -- "$restore_output" >&2
+  exit 1
+fi
+RESTORE_OUTPUT="$restore_output" APP_SECRET="$APP_SECRET" node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const output = await readFile(process.env.RESTORE_OUTPUT, 'utf8');
+assert.equal(output.includes(process.env.APP_SECRET ?? ''), false);
+assert.match(output, /^restored entries=\d+ bytes=\d+ createdAt=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/mu);
+assert.equal(output.includes('/data'), false);
+NODE
+
+compose run --rm --no-deps --entrypoint node imagine-media --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readdir, stat } from 'node:fs/promises';
+
+import Database from 'better-sqlite3';
+
+const root = '/data/restore-target';
+const database = new Database(`${root}/app.db`, { fileMustExist: true, readonly: true });
+try {
+  assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok');
+  assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.ok(database.prepare("SELECT 1 FROM schema_migrations WHERE version = '0007_pr8_media_repair_queue.sql'").get());
+  assert.ok(database.prepare('SELECT COUNT(*) AS count FROM assets').get()?.count > 0);
+} finally {
+  database.close();
+}
+for (const directory of [
+  root,
+  `${root}/media`,
+  `${root}/media/originals`,
+  `${root}/media/thumbnails`,
+  `${root}/media/posters`,
+  `${root}/media/uploads`,
+  `${root}/media/masks`,
+  `${root}/media/temp`,
+  `${root}/adapters`,
+  `${root}/adapters/.staging`,
+  `${root}/backups`,
+  `${root}/logs`,
+]) {
+  const details = await stat(directory);
+  assert.equal(details.isDirectory(), true);
+  assert.equal(details.mode & 0o777, 0o700);
+}
+assert.deepEqual(await readdir(`${root}/backups`), []);
+assert.deepEqual(await readdir(`${root}/logs`), []);
+assert.deepEqual(await readdir(`${root}/adapters/.staging`), []);
+assert.equal((await readdir(`${root}/media/originals`)).length > 0, true);
+assert.equal((await readdir(`${root}/media/thumbnails`)).length > 0, true);
+NODE
+
+compose start imagine-media
 compose up --detach --wait --wait-timeout 120
 
 CUSTOM_PROVIDER_ID="$custom_provider_id" CUSTOM_JOB_ID="$custom_job_id" \
