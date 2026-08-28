@@ -77,6 +77,7 @@ export const IsoTimestampSchema = z.string().datetime({ offset: true });
 export const AuthStatusSchema = z.object({
   authenticated: z.boolean(),
   required: z.boolean(),
+  publicAccessWarning: z.boolean().default(false),
 }).strict();
 
 export const AuthLoginSchema = z.object({

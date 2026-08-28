@@ -977,7 +977,11 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(health.statusCode).toBe(200);
     expect(denied.statusCode).toBe(401);
     expect(denied.headers['www-authenticate']).toContain('Basic');
-    expect(status.json()).toEqual({ required: true, authenticated: false });
+    expect(status.json()).toEqual({
+      required: true,
+      authenticated: false,
+      publicAccessWarning: false,
+    });
     expect(wrong.statusCode).toBe(401);
     expect(login.statusCode).toBe(200);
     expect(cookie).toContain('HttpOnly');

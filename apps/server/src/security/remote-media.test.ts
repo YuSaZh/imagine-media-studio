@@ -103,8 +103,51 @@ describe('NetworkPolicy', () => {
       resolver: () => Promise.resolve([{ address: '169.254.169.254', family: 4 }]),
     });
     await expect(metadataPolicy.validate('http://metadata-target.example/media')).rejects.toThrow(
-      'not allowed',
+      UnsafeRemoteUrlError,
     );
+  });
+
+  it('keeps known cloud metadata addresses blocked when private access is enabled', async () => {
+    const privatePolicy = new NetworkPolicy({
+      allowInsecureHttp: true,
+      allowLoopback: true,
+      allowPrivateNetwork: true,
+      resolver: async () => [{ address: '192.168.1.10', family: 4 }],
+    });
+    for (const url of [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://[::ffff:169.254.169.254]/latest/meta-data/',
+      'http://[fd00:ec2::254]/latest/meta-data/',
+      'http://[fd20:ce::254]/computeMetadata/v1',
+    ]) {
+      let caught: unknown;
+      try {
+        await privatePolicy.validate(url);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({
+        code: 'unsafe_remote_url',
+        name: 'UnsafeRemoteUrlError',
+      });
+      expect(caught).toBeInstanceOf(UnsafeRemoteUrlError);
+      expect(String(caught)).not.toContain(url);
+    }
+  });
+
+  it('rejects a metadata address returned alongside a public DNS address', async () => {
+    const policy = new NetworkPolicy({
+      allowPrivateNetwork: true,
+      resolver: async () => [
+        { address: '8.8.8.8', family: 4 },
+        { address: 'fd00:ec2::254', family: 6 },
+      ],
+    });
+
+    await expect(policy.validate('https://mixed-metadata.example/file')).rejects.toMatchObject({
+      code: 'unsafe_remote_url',
+      message: 'Remote address is reserved for cloud metadata.',
+    });
   });
 
   it('matches effective default ports and enforces an explicit port allowlist before DNS', async () => {
@@ -316,6 +359,29 @@ describe('SafeHttpTransport', () => {
     });
     await expect(transport.fetch('https://public.example/start')).rejects.toThrow('not allowed');
     expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates the metadata denylist on every redirect hop', async () => {
+    const redirect = rawResponse(302, { location: 'https://metadata-redirect.example/latest/meta-data/' });
+    const executor = vi.fn<PinnedRequestExecutor>().mockResolvedValue(redirect);
+    const transport = new SafeHttpTransport({
+      executor,
+      policy: new NetworkPolicy({
+        allowPrivateNetwork: true,
+        resolver: (hostname) => Promise.resolve([
+          hostname === 'metadata-redirect.example'
+            ? { address: 'fd20:ce::254', family: 6 }
+            : { address: '8.8.4.4', family: 4 },
+        ]),
+      }),
+    });
+
+    await expect(transport.fetch('https://public.example/start')).rejects.toMatchObject({
+      name: 'UnsafeRemoteUrlError',
+      message: 'Remote address is reserved for cloud metadata.',
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(redirect.disposed()).toBe(true);
   });
 
   it('classifies redirect-limit failures without retaining the target URL', async () => {

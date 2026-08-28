@@ -47,6 +47,17 @@ describe('PWA toast styles', () => {
   });
 });
 
+describe('public access warning styles', () => {
+  it('keeps the security interstitial readable and its continuation visibly secondary', () => {
+    expect(stylesheet).toMatch(
+      /\.auth-gate-security-warning\s*\{[\s\S]*?grid-template-columns:\s*auto minmax\(0, 1fr\);[\s\S]*?border-color:\s*var\(--color-warning\);[\s\S]*?background:\s*var\(--color-surface-subtle\);/u,
+    );
+    expect(stylesheet).toMatch(
+      /\.auth-gate-security-warning button\s*\{[\s\S]*?border-color:\s*var\(--color-warning\);[\s\S]*?background:\s*var\(--color-surface\);[\s\S]*?color:\s*var\(--color-warning\);/u,
+    );
+  });
+});
+
 describe('Viewer touch affordances', () => {
   it('reserves custom gesture handling for the media stage and preserves native video controls', () => {
     expect(stylesheet).toMatch(/\.viewer-stage\s*\{[\s\S]*?touch-action:\s*none;/u);

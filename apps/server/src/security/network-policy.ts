@@ -69,6 +69,16 @@ const METADATA_HOSTS = new Set([
   'metadata.azure.internal',
 ]);
 
+// These cloud metadata endpoints remain forbidden even when a deployment
+// explicitly opts into private or loopback network access. ipaddr.js
+// canonicalizes IPv4-mapped IPv6 values to their IPv4 form, so the shared
+// IPv4 endpoint is covered in both literal representations.
+const METADATA_ADDRESSES = new Set([
+  '169.254.169.254',
+  'fd00:ec2::254',
+  'fd20:ce::254',
+]);
+
 // Keep this matcher deliberately boundary based. For example, `tokenizer`,
 // `authenticity`, and `keynote` are ordinary names, while token/key segments
 // separated by any URL-safe punctuation remain credential-like.
@@ -202,9 +212,18 @@ async function boundedLookup(
   }
 }
 
-function classifyAddress(address: string): string {
+interface AddressClassification {
+  canonical: string;
+  range: string;
+}
+
+function classifyAddress(address: string): AddressClassification {
   try {
-    return ipaddr.process(stripIpv6Brackets(address)).range();
+    const parsed = ipaddr.process(stripIpv6Brackets(address));
+    return {
+      canonical: parsed.toString().toLowerCase(),
+      range: parsed.range(),
+    };
   } catch {
     throw new UnsafeRemoteUrlError('Remote hostname resolved to an invalid IP address.');
   }
@@ -297,7 +316,11 @@ export class NetworkPolicy {
     }
 
     for (const address of addresses) {
-      const range = classifyAddress(address.address);
+      const classification = classifyAddress(address.address);
+      if (METADATA_ADDRESSES.has(classification.canonical)) {
+        throw new UnsafeRemoteUrlError('Remote address is reserved for cloud metadata.');
+      }
+      const range = classification.range;
       if (range === 'unicast') continue;
       if (range === 'loopback' && this.allowLoopback) continue;
       if ((range === 'private' || range === 'uniqueLocal') && this.allowPrivateNetwork) continue;

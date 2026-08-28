@@ -230,6 +230,47 @@ img {
   margin-top: 4px;
 }
 
+.auth-gate-security-warning {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  align-content: start;
+  min-height: 0;
+  gap: 12px;
+  border-color: var(--color-warning);
+  background: var(--color-surface-subtle);
+  padding: 18px 16px;
+  text-align: left;
+}
+
+.auth-gate-security-warning > svg {
+  margin-top: 1px;
+  color: var(--color-warning);
+}
+
+.auth-gate-security-warning strong {
+  color: var(--color-text-primary);
+  font-size: 0.82rem;
+}
+
+.auth-gate-security-warning p {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.auth-gate-security-warning button {
+  margin-top: 14px;
+  border-color: var(--color-warning);
+  background: var(--color-surface);
+  color: var(--color-warning);
+}
+
+.auth-gate-security-warning button:hover {
+  background: var(--color-warning);
+  color: var(--color-text-inverse);
+}
+
 .app-shell {
   display: grid;
   width: 100%;

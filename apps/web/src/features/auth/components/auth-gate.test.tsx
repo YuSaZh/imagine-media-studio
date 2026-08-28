@@ -121,6 +121,16 @@ class TestNode extends EventTarget {
     return child;
   }
 
+  public override dispatchEvent(event: Event): boolean {
+    const target = event.target ?? this;
+    const result = super.dispatchEvent(event);
+    if (event.bubbles && !event.cancelBubble && this.parentNode !== null) {
+      Object.defineProperty(event, 'target', { configurable: true, value: target });
+      this.parentNode.dispatchEvent(event);
+    }
+    return result;
+  }
+
   public setAttribute(name: string, value: unknown): void {
     this.attributes.set(name, String(value));
   }
@@ -232,7 +242,11 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   return { promise, resolve };
 }
 
-function authResponse(status: { authenticated: boolean; required: boolean }): Response {
+function authResponse(status: {
+  authenticated: boolean;
+  publicAccessWarning?: boolean;
+  required: boolean;
+}): Response {
   return new Response(JSON.stringify(status), {
     headers: { 'Content-Type': 'application/json' },
     status: 200,
@@ -263,6 +277,7 @@ describe('AuthGate', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     await expect(loadInitialAuthStatus(true)).resolves.toEqual({
       authenticated: true,
+      publicAccessWarning: false,
       required: false,
     });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -283,7 +298,7 @@ describe('AuthGate', () => {
 
     await expect(resolveInitialAuthStatus(false)).resolves.toEqual({
       offlineBootstrap: true,
-      status: { authenticated: true, required: true },
+      status: { authenticated: true, publicAccessWarning: false, required: true },
     });
     expect(getAuthStatus).not.toHaveBeenCalled();
   });
@@ -306,14 +321,14 @@ describe('AuthGate', () => {
 
     await expect(resolveInitialAuthStatus(false)).resolves.toEqual({
       offlineBootstrap: false,
-      status: { authenticated: false, required: false },
+      status: { authenticated: false, publicAccessWarning: false, required: false },
     });
     expect(storage.has(OFFLINE_PUBLIC_BOOTSTRAP_KEY)).toBe(true);
 
     vi.stubGlobal('navigator', { onLine: false });
     await expect(resolveInitialAuthStatus(false)).resolves.toEqual({
       offlineBootstrap: true,
-      status: { authenticated: false, required: false },
+      status: { authenticated: false, publicAccessWarning: false, required: false },
     });
   });
 
@@ -379,6 +394,100 @@ describe('AuthGate', () => {
     expect(markup).toContain('aria-invalid="true"');
     expect(markup).toContain('Password is incorrect.');
     expect(markup).not.toContain('marketing');
+  });
+
+  it('renders a public access interstitial and only continues for the current mount', async () => {
+    const { rootElement } = createTestDom();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(authResponse({
+      authenticated: false,
+      publicAccessWarning: true,
+      required: false,
+    }));
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const root = createRoot(rootElement as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <AuthGate fixtureMode={false}>
+            <DialogLikeChild />
+          </AuthGate>,
+        );
+        await settleReact();
+      });
+
+      const alert = findByAttribute(rootElement, 'role', 'alert');
+      expect(alert).not.toBeNull();
+      expect(alert?.textContent).toContain('Set an application password');
+      expect(alert?.textContent).toContain('APP_PASSWORD');
+      expect(alert?.textContent).toContain('restart the server');
+      expect(alert?.textContent).not.toContain('example.com');
+      expect(findByTestId(rootElement, 'dialog-like')).toBeNull();
+
+      const continueButton = findByAttribute(rootElement, 'type', 'button');
+      expect(continueButton?.textContent).toContain('Continue without password');
+      continueButton?.dispatchEvent(new Event('click', { bubbles: true }));
+      await act(async () => { await settleReact(); });
+
+      expect(findByAttribute(rootElement, 'role', 'alert')).toBeNull();
+      expect(findByTestId(rootElement, 'dialog-like')).not.toBeNull();
+    } finally {
+      await act(async () => { root.unmount(); });
+    }
+  });
+
+  it('does not render the public warning for a local status', async () => {
+    const { rootElement } = createTestDom();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(authResponse({
+      authenticated: false,
+      publicAccessWarning: false,
+      required: false,
+    }));
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const root = createRoot(rootElement as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <AuthGate fixtureMode={false}>
+            <DialogLikeChild />
+          </AuthGate>,
+        );
+        await settleReact();
+      });
+
+      expect(findByAttribute(rootElement, 'role', 'alert')).toBeNull();
+      expect(findByTestId(rootElement, 'dialog-like')).not.toBeNull();
+    } finally {
+      await act(async () => { root.unmount(); });
+    }
+  });
+
+  it('does not render the public warning when authentication is required', async () => {
+    const { rootElement } = createTestDom();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(authResponse({
+      authenticated: false,
+      publicAccessWarning: true,
+      required: true,
+    }));
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    const root = createRoot(rootElement as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <AuthGate fixtureMode={false}>
+            <DialogLikeChild />
+          </AuthGate>,
+        );
+        await settleReact();
+      });
+
+      expect(findByAttribute(rootElement, 'role', 'alert')).toBeNull();
+      expect(rootElement.textContent).toContain('Unlock workspace');
+    } finally {
+      await act(async () => { root.unmount(); });
+    }
   });
 
   it('disables the login command while a request is pending', () => {

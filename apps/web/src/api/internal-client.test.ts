@@ -64,10 +64,12 @@ describe('internalClient', () => {
 
     await expect(internalClient.getAuthStatus()).resolves.toEqual({
       authenticated: false,
+      publicAccessWarning: false,
       required: true,
     });
     await expect(internalClient.login('local-password')).resolves.toEqual({
       authenticated: true,
+      publicAccessWarning: false,
       required: true,
     });
     await expect(internalClient.logout()).resolves.toBeUndefined();
@@ -177,6 +179,7 @@ describe('internalClient', () => {
 
     await expect(internalClient.getAuthStatus()).resolves.toEqual({
       authenticated: true,
+      publicAccessWarning: false,
       required: true,
     });
     expect(deleteCache).not.toHaveBeenCalled();

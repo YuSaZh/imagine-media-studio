@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus } from '@imagine/shared';
-import { AlertCircle, Aperture, LoaderCircle, LockKeyhole, LogIn, RotateCcw } from 'lucide-react';
+import {
+  AlertCircle,
+  Aperture,
+  ArrowRight,
+  LoaderCircle,
+  LockKeyhole,
+  LogIn,
+  RotateCcw,
+  ShieldAlert,
+} from 'lucide-react';
 
 import {
   internalClient,
@@ -16,9 +25,9 @@ import {
   offlineBootstrapMode,
 } from '../../../pwa-offline-snapshot.js';
 
-const FIXTURE_AUTH_STATUS = { authenticated: true, required: false } as const satisfies AuthStatus;
-const OFFLINE_AUTH_STATUS = { authenticated: true, required: true } as const satisfies AuthStatus;
-const OFFLINE_PUBLIC_STATUS = { authenticated: false, required: false } as const satisfies AuthStatus;
+const FIXTURE_AUTH_STATUS = { authenticated: true, publicAccessWarning: false, required: false } as const satisfies AuthStatus;
+const OFFLINE_AUTH_STATUS = { authenticated: true, publicAccessWarning: false, required: true } as const satisfies AuthStatus;
+const OFFLINE_PUBLIC_STATUS = { authenticated: false, publicAccessWarning: false, required: false } as const satisfies AuthStatus;
 let initialStatusRequest: Promise<AuthStatus> | undefined;
 let initialStatusRequestPending = false;
 
@@ -192,6 +201,7 @@ export function AuthGate({
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
+  const [publicAccessAcknowledged, setPublicAccessAcknowledged] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const mountedRef = useRef(false);
   const authEpochRef = useRef(0);
@@ -226,7 +236,8 @@ export function AuthGate({
     invalidateAuthRequests();
     resetInitialStatusRequest();
     markOfflineBootstrapActive(false);
-    updateAuthState({ authenticated: false, required: true }, false);
+    setPublicAccessAcknowledged(false);
+    updateAuthState({ authenticated: false, publicAccessWarning: false, required: true }, false);
     updateStatusError(false);
     setLoginError(null);
     setLoginPending(false);
@@ -337,7 +348,13 @@ export function AuthGate({
       invalidateAuthRequests();
       resetInitialStatusRequest();
       markOfflineBootstrapActive(false);
-      updateAuthState(reason === 'login' ? null : { authenticated: false, required: true }, false);
+      setPublicAccessAcknowledged(false);
+      updateAuthState(
+        reason === 'login'
+          ? null
+          : { authenticated: false, publicAccessWarning: false, required: true },
+        false,
+      );
       updateStatusError(false);
       if (reason === 'login') {
         setLoginError(null);
@@ -377,6 +394,23 @@ export function AuthGate({
     }
   };
 
+  if (status?.required === false && status.publicAccessWarning && !publicAccessAcknowledged) {
+    return (
+      <AuthFrame>
+        <div className="auth-gate-status auth-gate-security-warning" role="alert">
+          <ShieldAlert aria-hidden="true" size={22} />
+          <div>
+            <strong>Set an application password</strong>
+            <p>Set APP_PASSWORD and restart the server before continuing.</p>
+            <button onClick={() => setPublicAccessAcknowledged(true)} type="button">
+              <ArrowRight aria-hidden="true" size={15} />
+              Continue without password
+            </button>
+          </div>
+        </div>
+      </AuthFrame>
+    );
+  }
   if (status?.authenticated || status?.required === false) return children;
   if (statusError) {
     return (

@@ -78,6 +78,7 @@ describe('internal authentication bootstrap lifecycle', () => {
 
     await expect(internalClient.login('local-password')).resolves.toEqual({
       authenticated: true,
+      publicAccessWarning: false,
       required: true,
     });
     const marker = parseOfflineAuthMarker(storage.getItem(OFFLINE_AUTH_MARKER_KEY));

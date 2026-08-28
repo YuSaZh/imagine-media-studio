@@ -79,7 +79,17 @@ describe('internal API schemas', () => {
   it('keeps authentication status and login payloads strict', () => {
     expect(AuthStatusSchema.parse({ authenticated: false, required: true })).toEqual({
       authenticated: false,
+      publicAccessWarning: false,
       required: true,
+    });
+    expect(AuthStatusSchema.parse({
+      authenticated: false,
+      publicAccessWarning: true,
+      required: false,
+    })).toEqual({
+      authenticated: false,
+      publicAccessWarning: true,
+      required: false,
     });
     expect(
       AuthStatusSchema.safeParse({ authenticated: true, required: true, token: 'forbidden' }).success,

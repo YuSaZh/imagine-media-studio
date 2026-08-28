@@ -24,7 +24,7 @@ All real Provider HTTP calls use the application-owned injected `ProviderHttpCli
 
 - Requests are limited to the adapter transport's `GET` and `POST` port.
 - Base URLs are validated without credentials, query, or fragment where the profile constructs an endpoint.
-- `NetworkPolicy` resolves DNS before the request, rejects metadata and unsafe address ranges by default, pins the selected address, and disallows redirects.
+- `NetworkPolicy` resolves DNS before the request, rejects metadata and unsafe address ranges by default, pins the selected address, and disallows redirects. The cloud metadata denylist covers AWS `169.254.169.254`/`fd00:ec2::254` and GCP `fd20:ce::254` (including IPv4-mapped IPv6); private-network opt-in does not override it.
 - Provider HTTP has bounded request/response bodies, header/connect/body timeouts, reason-free abort errors, and response disposal on success and failure.
 - Insecure Provider HTTP is controlled by the independent `ALLOW_INSECURE_PROVIDER_HTTP` switch; media-download HTTP has separate semantics. Private-network access remains a separate policy switch.
 - API keys and custom headers are encrypted at rest, redacted from Provider errors, rejected from browser-facing DTOs and logs, and protected against CRLF and protocol-header override.
