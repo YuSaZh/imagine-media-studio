@@ -742,6 +742,8 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
       method: 'GET',
       url: endpoint(baseUrlFor(this.options, context), '/models'),
       headers: { ...headers, Accept: 'application/json' },
+      headersTimeoutMs: 15_000,
+      bodyTimeoutMs: 30_000,
       ...(context.signal === undefined ? {} : { signal: context.signal }),
     };
     context.signal?.throwIfAborted();

@@ -235,6 +235,8 @@ describe('OpenAI provider profiles', () => {
       method: 'GET',
       url: 'https://proxy.example.test/openai/v1/models',
       headers: { Authorization: 'Bearer sk-test-only' },
+      headersTimeoutMs: 15_000,
+      bodyTimeoutMs: 30_000,
     });
     expect(transport.requests[0]).not.toHaveProperty('body');
     expect(fetchSpy).not.toHaveBeenCalled();

@@ -427,10 +427,16 @@ function visualModels(): readonly GalleryModel[] {
 
 export async function loadModelsData(): Promise<readonly GalleryModel[]> {
   if (isVisualFixtureMode()) return visualModels();
-  const models = await collectPages((cursor) =>
-    internalClient.listModels({ ...withCursor(cursor), enabled: true }),
+  const [providers, models] = await Promise.all([
+    collectPages((cursor) => internalClient.listProviders({ ...withCursor(cursor), enabled: true })),
+    collectPages((cursor) => internalClient.listModels({ ...withCursor(cursor), enabled: true })),
+  ]);
+  const enabledProviderIds = new Set(
+    providers.filter((provider) => provider.enabled).map((provider) => provider.id),
   );
-  return models.map(mapInternalModel);
+  return models
+    .filter((model) => enabledProviderIds.has(model.providerId))
+    .map(mapInternalModel);
 }
 
 function mapInternalProvider(

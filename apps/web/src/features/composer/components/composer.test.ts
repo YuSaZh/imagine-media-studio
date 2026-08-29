@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { PR1_MOCK_PROVIDER } from '../../gallery/model/fixtures.js';
 import {
+  modelForMode,
   promptAfterSuccessfulSubmit,
   promptAfterSuccessfulSubmitSnapshot,
   supportedVideoInputModes,
@@ -45,5 +46,14 @@ describe('Composer video input capabilities', () => {
     expect(promptAfterSuccessfulSubmitSnapshot('A', 'A', false)).toBe('A');
     expect(promptAfterSuccessfulSubmitSnapshot('B', 'A', true)).toBe('B');
     expect(promptAfterSuccessfulSubmitSnapshot('B', 'A', false)).toBe('B');
+  });
+
+  it('keeps the selected model while it matches the active mode', () => {
+    const imageModel = PR1_MOCK_PROVIDER.models.find((candidate) => candidate.mediaKind === 'image')!;
+    const alternateImageModel = { ...imageModel, id: 'alternate-image-v1' };
+    const models = [imageModel, alternateImageModel];
+
+    expect(modelForMode(models, 'image', alternateImageModel.id)).toBe(alternateImageModel);
+    expect(modelForMode(models, 'image', 'missing-model')).toBe(imageModel);
   });
 });

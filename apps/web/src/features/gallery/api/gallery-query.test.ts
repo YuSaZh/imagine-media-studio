@@ -25,6 +25,7 @@ import {
   loadGalleryPage,
   loadGalleryData,
   loadInputAssetInventoryData,
+  loadModelsData,
   loadProviderData,
   mapInternalModel,
   reduceGalleryItems,
@@ -624,6 +625,18 @@ describe('PR 2 gallery API integration', () => {
         hasCustomHeaders: false,
         createdAt: '2026-08-25T00:00:00.000Z',
         updatedAt: '2026-08-25T00:00:00.000Z',
+      }, {
+        id: 'provider-disabled',
+        name: 'Disabled Provider',
+        type: 'mock',
+        baseUrl: null,
+        config: {},
+        enabled: false,
+        isDefault: false,
+        hasApiKey: false,
+        hasCustomHeaders: false,
+        createdAt: '2026-08-25T00:00:00.000Z',
+        updatedAt: '2026-08-25T00:00:00.000Z',
       }],
       nextCursor: null,
     });
@@ -646,6 +659,20 @@ describe('PR 2 gallery API integration', () => {
           },
           supportsBatchCount: true,
           maxBatchCount: 3,
+        },
+        capabilitySource: 'mock',
+        enabled: true,
+        createdAt: '2026-08-25T00:00:00.000Z',
+        updatedAt: '2026-08-25T00:00:00.000Z',
+      }, {
+        id: 'model-row-disabled',
+        providerId: 'provider-disabled',
+        modelId: 'disabled-image-v1',
+        displayName: 'Disabled Image',
+        capabilities: {
+          operations: ['image.generate'],
+          aspectRatios: ['1:1'],
+          maxReferenceImages: 0,
         },
         capabilitySource: 'mock',
         enabled: true,
@@ -674,6 +701,9 @@ describe('PR 2 gallery API integration', () => {
         })],
       }),
     );
+    await expect(loadModelsData()).resolves.toEqual([
+      expect.objectContaining({ id: 'image-api-v1', providerId: 'provider-api' }),
+    ]);
   });
 
   it('preserves provider duration ranges, aspect ratios, and zero reference limits', () => {

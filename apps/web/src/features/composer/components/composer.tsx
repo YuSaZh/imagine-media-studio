@@ -91,6 +91,15 @@ export function promptAfterSuccessfulSubmitSnapshot(
     : currentPrompt;
 }
 
+export function modelForMode<T extends FixtureModel>(
+  models: readonly T[],
+  mode: 'image' | 'video',
+  currentModelId: string,
+): T | undefined {
+  return models.find((model) => model.id === currentModelId && model.mediaKind === mode) ??
+    models.find((model) => model.mediaKind === mode);
+}
+
 export function Composer({ isOnline }: ComposerProps) {
   const visualFixtures = isVisualFixtureMode();
   const initialPromptRef = useRef<string | undefined>(undefined);
@@ -130,9 +139,7 @@ export function Composer({ isOnline }: ComposerProps) {
   const settingsQuery = useSettingsQuery(visualFixtures);
   const generalSettings = readGeneralSettings(settingsQuery.data?.settings);
   const submission = useGallerySubmission();
-  const selectedModel =
-    models.find((model) => model.id === modelId && model.mediaKind === composerMode) ??
-    models.find((model) => model.mediaKind === composerMode);
+  const selectedModel = modelForMode(models, composerMode, modelId);
   const videoInputModes = supportedVideoInputModes(selectedModel);
   const uploadRole = uploadRoleForMode(composerMode, videoInputMode);
   const selectedInputPolicy =
@@ -365,7 +372,7 @@ export function Composer({ isOnline }: ComposerProps) {
   }, [models]);
 
   useEffect(() => {
-    const modeModel = models.find((model) => model.mediaKind === composerMode);
+    const modeModel = modelForMode(models, composerMode, modelId);
     if (modeModel && modeModel.id !== modelId) selectModel(modeModel.id);
   }, [composerMode, modelId, models, selectModel]);
 

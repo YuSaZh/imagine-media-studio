@@ -23,6 +23,8 @@ export interface OpenAiHttpRequest {
   readonly body?: OpenAiHttpBody;
   /** Binary multipart bytes for transports that do not want a latin-1 body string. */
   readonly bodyBytes?: Uint8Array;
+  readonly headersTimeoutMs?: number;
+  readonly bodyTimeoutMs?: number;
   readonly signal?: AbortSignal;
 }
 

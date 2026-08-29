@@ -38,9 +38,9 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 export const PROVIDER_HTTP_DEFAULTS = Object.freeze({
-  bodyTimeoutMs: 30_000,
+  bodyTimeoutMs: 300_000,
   connectTimeoutMs: 10_000,
-  headersTimeoutMs: 15_000,
+  headersTimeoutMs: 300_000,
   maxRequestBodyBytes: 64 * 1024 * 1024,
   maxResponseBodyBytes: 96 * 1024 * 1024,
 });
