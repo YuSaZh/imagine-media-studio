@@ -6,6 +6,7 @@ import {
   type OpenAiImageResultOptions,
 } from './protocol.js';
 import type { OpenAiImagePartial, OpenAiStreamResult } from './types.js';
+import { OpenAiResponseError } from './types.js';
 
 export interface ServerSentEvent {
   readonly event: string | null;
@@ -128,6 +129,9 @@ export function parseOpenAiImageStream(
   const events = typeof input === 'string' ? parseSseEvents(input) : input;
   const partials: OpenAiImagePartial[] = [];
   const assets: SubmittedAsset[] = [];
+  const append = (asset: SubmittedAsset) => {
+    if (!assets.some(existing => existing.resultId === asset.resultId && existing.source === asset.source && (existing.source === 'base64' && asset.source === 'base64' ? existing.base64 === asset.base64 : existing.source === 'url' && asset.source === 'url' ? existing.url === asset.url : false))) assets.push(asset);
+  };
   let done = false;
 
   for (const event of events) {
@@ -144,6 +148,17 @@ export function parseOpenAiImageStream(
     const record = asRecord(payload);
     if (!record) continue;
     const eventType = stringValue(record.type) ?? event.event;
+    if (eventType === 'error' || eventType === 'response.failed' || eventType === 'image_generation.failed') throw new OpenAiResponseError('invalid_response', 'Image generation stream reported a failure.');
+    if (Array.isArray(record.data) && record.data.length) {
+      for (const asset of normalizeImageResponse({ data: record.data }, options)) append(asset);
+      done = true;
+      continue;
+    }
+    if (eventType?.endsWith('.partial_image') && typeof record.url === 'string') {
+      const asset = extractAsset(record, options);
+      if (asset?.source === 'base64') partials.push({ index: integerValue(record.partial_image_index) ?? partials.length, base64: asset.base64, mimeType: asset.mimeType });
+      continue;
+    }
     const b64 = stringValue(record.b64_json) ?? stringValue(record.partial_image_b64);
     if (
       b64 !== null &&
@@ -162,13 +177,13 @@ export function parseOpenAiImageStream(
     const outputItem = record.item ?? record.output_item;
     const outputAsset = extractAsset(outputItem, options);
     if (outputAsset) {
-      assets.push(outputAsset);
+      append(outputAsset);
       done = done || eventType === 'response.output_item.done';
       continue;
     }
     const directAsset = extractAsset(record, options);
     if (directAsset) {
-      assets.push(directAsset);
+      append(directAsset);
       done = done || eventType === 'response.image_generation_call.completed' || eventType === 'image_generation.completed';
       continue;
     }
@@ -181,7 +196,7 @@ export function parseOpenAiImageStream(
       ];
       for (const item of outputCandidates) {
         const asset = extractAsset(item, options);
-        if (asset) assets.push(asset);
+        if (asset) append(asset);
       }
     }
   }

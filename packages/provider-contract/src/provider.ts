@@ -87,6 +87,8 @@ export interface ProviderCapabilities {
 }
 
 export interface ProviderInput {
+  /** Short-lived URL minted by the server after verifying the stored image. */
+  publicUrl?: string;
   assetId: string;
   role: AssetInput['role'];
   filename?: string;

@@ -27,7 +27,8 @@ export const ModelParameterSchema = z.object({
 export type ModelParameter = z.infer<typeof ModelParameterSchema>;
 export const ModelParametersSchema = z.array(ModelParameterSchema).max(50).refine(rules => new Set(rules.map(rule => rule.path)).size === rules.length, '参数路径不能重复');
 
-function validateParameter(rule: Pick<ModelParameter, 'type' | 'label' | 'options' | 'allowCustom' | 'min' | 'max' | 'step'>, value: unknown) {
+function validateParameter(rule: Pick<ModelParameter, 'path' | 'type' | 'label' | 'options' | 'allowCustom' | 'min' | 'max' | 'step'>, value: unknown) {
+  if (value === 'auto' && ['aspectRatio', 'resolution'].includes(rule.path)) return;
   if (!scalar.safeParse(value).success) throw new Error(`${rule.label}必须是文本、数值或开关`);
   if ((rule.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) || (rule.type === 'boolean' && typeof value !== 'boolean') || (rule.type === 'text' && typeof value !== 'string')) throw new Error(`${rule.label}类型无效`);
   if (rule.type === 'select' && !rule.allowCustom && !rule.options?.includes(value as string | number | boolean)) throw new Error(`${rule.label}不在可选范围内`);

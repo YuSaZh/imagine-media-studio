@@ -126,6 +126,7 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
     dispatch({ acquired: result.accepted, previewUrls, role, type: 'add' });
     dispatch({ rejections, type: 'reject' });
     controllerRef.current?.enqueue(result.accepted);
+    return result.accepted.map(input => input.clientId);
   }, []);
 
   const remove = useCallback((clientId: string) => {

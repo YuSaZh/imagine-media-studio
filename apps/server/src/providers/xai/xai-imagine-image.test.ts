@@ -59,6 +59,20 @@ function fixture(path: string): string {
 }
 
 describe('XaiImagineImageProvider', () => {
+  it('uses the edit endpoint and server-issued URL for a reference image', async () => {
+    const client = new FixtureClient(jsonResponse({ data: [{ b64_json: 'AQID' }] }));
+    const publicUrl = `http://studio.example/media-inputs/source/1999999999/${'a'.repeat(43)}`;
+    await new XaiImagineImageProvider({ http: client }).submit(request({ operation: 'image.edit', inputs: [{ assetId: 'source', role: 'source' }] }), { ...context, inputs: [{ assetId: 'source', role: 'source', mimeType: 'image/png', bytes: new Uint8Array([1, 2, 3]), publicUrl }] });
+    expect(client.requests[0]?.url).toContain('/images/edits');
+    expect(client.requests[0]?.body).toContain(publicUrl);
+    expect(client.requests[0]?.body).not.toContain('data:image');
+  });
+  it('accepts relay data URLs in url fields without applying network URL limits', () => {
+    const base64 = Buffer.alloc(4096, 1).toString('base64');
+    expect(parseXaiImagineImageResponse({ data: [{ url: `data:image/jpeg;base64,${base64}` }] })[0]).toMatchObject({ source: 'base64', mimeType: 'image/jpeg', base64 });
+    expect(() => parseXaiImagineImageResponse({ data: [{ url: 'data:text/html;base64,AQID' }] })).toThrow();
+    expect(parseXaiImagineImageResponse(`event: image_generation.completed\ndata: {"url":"data:image/jpeg;base64,${base64}"}\n\ndata: [DONE]\n\n`)[0]).toMatchObject({ source: 'base64', mimeType: 'image/jpeg', base64 });
+  });
   it('records synchronous poll as not applicable in the contract fixture', () => {
     expect(JSON.parse(fixture('poll-na.json'))).toEqual({
       status: 'not_applicable',

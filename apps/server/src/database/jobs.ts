@@ -38,6 +38,8 @@ import {
 } from './pagination.js';
 import {
   assets,
+  collections,
+  collectionAssets,
   changeEvents,
   jobInputs,
   jobOutputs,
@@ -1523,6 +1525,10 @@ export class JobRepository {
           );
         }
         assetIds.push(assetId);
+        if (request.collectionId && transaction.select({ id: collections.id }).from(collections).where(eq(collections.id, request.collectionId)).get()) {
+          transaction.insert(collectionAssets).values({ collectionId: request.collectionId, assetId, createdAt: now }).onConflictDoNothing().run();
+          transaction.update(collections).set({ updatedAt: now }).where(eq(collections.id, request.collectionId)).run();
+        }
       }
 
       const manifest = assetIds.map((assetId, slot) => ({ slot, assetId }));

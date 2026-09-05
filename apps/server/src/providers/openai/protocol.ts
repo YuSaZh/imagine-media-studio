@@ -1,4 +1,5 @@
 import type { GenerationRequest } from '@imagine/shared';
+import { publicInputUrl } from '../public-input-url.js';
 import type { SubmittedAsset } from '@imagine/provider-contract';
 
 import type {
@@ -707,6 +708,7 @@ function assetFromValue(
   }
   const imageUrl = recordValue(record.image_url);
   const url = stringValue(record.url) ?? stringValue(record.image_url) ?? stringValue(imageUrl?.url);
+  if (url?.startsWith('data:')) return dataUrlAsset(url, id, options, metadata);
   if (url !== null && /^https?:\/\//i.test(url)) {
     return outputUrlAsset(url, id, claimedMimeType, options, metadata);
   }
@@ -753,6 +755,8 @@ export function normalizeImageResponse(
 export const normalizeOpenAiImageResponse = normalizeImageResponse;
 
 export function dataUrlForAsset(asset: OpenAiInputAsset): string {
+  const publicUrl = publicInputUrl(asset);
+  if (publicUrl) return publicUrl;
   return `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`;
 }
 

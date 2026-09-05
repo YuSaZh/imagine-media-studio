@@ -292,3 +292,74 @@ test('shared connection model management saves rules and renders them in the com
     expect(payload).not.toHaveProperty('aspectRatio');
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });
+
+test('project selection scopes resources, references and generated outputs with inline loading', async ({ page, request }) => {
+  const first = await upload(request, 'coast');
+  await upload(request, 'mountain');
+  const project = (await (await request.post('/internal/collections', { data: { name: `项目 ${randomUUID()}` } })).json()).collection;
+  expect((await request.post(`/internal/collections/${project.id}/assets`, { data: { assetIds: [first.id] } })).ok()).toBeTruthy();
+  await open(page);
+  await page.getByRole('button', { name: '选择项目', exact: true }).click();
+  await page.getByRole('button', { name: project.name, exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}`));
+  await expect(page.getByRole('button', { name: '选择项目', exact: true })).toContainText(project.name);
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '添加参考图', exact: true }).click();
+  await page.getByRole('button', { name: '从资源库选择', exact: true }).click();
+  await expect(page.locator('.reference-option')).toHaveCount(1);
+  await page.locator('.reference-option').click();
+  await page.getByRole('button', { name: '添加 1 张图片', exact: true }).click();
+  await expect(page.locator('.reference-tray .reference')).toHaveCount(1);
+  await page.getByRole('button', { name: '生成设置', exact: true }).click();
+  await page.getByLabel('画幅', { exact: true }).selectOption('auto');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  const prompt = `project generation ${randomUUID()}`;
+  await page.getByLabel('创作描述', { exact: true }).fill(prompt);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/internal/jobs', async route => { if (route.request().method() === 'POST') await held; await route.continue(); });
+  try {
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    await expect(page.locator('.study-grid .pending-study')).toHaveCount(1);
+    await expect(page.locator('.pending-jobs')).toHaveCount(0);
+    await expect(page.locator('.pending-study')).toHaveAttribute('aria-busy', 'true');
+    expect(await page.locator('.pending-study-art').evaluate(element => getComputedStyle(element).backgroundImage)).toContain('linear-gradient');
+    await page.screenshot({ path: `/tmp/imagine-pending-${page.viewportSize()!.width}.png`, fullPage: true });
+  } finally { release(); }
+  await expect.poll(async () => {
+    const jobs = (await (await request.get('/internal/jobs?limit=100')).json()).items;
+    return jobs.find((job: { prompt: string }) => job.prompt === prompt)?.status;
+  }, { timeout: 20000 }).toBe('completed');
+  const jobs = (await (await request.get('/internal/jobs?limit=100')).json()).items;
+  const job = jobs.find((job: { prompt: string }) => job.prompt === prompt);
+  expect(job.request).toMatchObject({ collectionId: project.id, operation: 'image.edit', inputs: [{ assetId: first.id, role: 'source' }] });
+  expect(job.request).not.toHaveProperty('aspectRatio');
+  await expect(page.locator('.study-grid .pending-study')).toHaveCount(0);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  await page.reload();
+  await expect(page.getByRole('button', { name: '选择项目', exact: true })).toContainText(project.name);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+});
+
+test('xAI reference upload automatically chooses image edit and auto ratio', async ({ page, request }) => {
+  const created = await request.post('/internal/providers', { data: { name: `xAI edits ${randomUUID()}`, type: 'xai', baseUrl: 'https://api.example.com/v1', enabled: true, isDefault: true } });
+  const { provider } = await created.json();
+  try {
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'grok-imagine-image-2.0', displayName: 'xAI reference model', enabled: true, capabilities: { operations: ['image.generate', 'image.edit'], aspectRatios: ['1:1', '16:9'], maxReferenceImages: 3 } } })).status()).toBe(201);
+    await open(page);
+    await page.getByRole('button', { name: '添加参考图', exact: true }).click();
+    await expect(page.getByRole('button', { name: '上传新图片', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.getByLabel('上传参考图', { exact: true }).setInputFiles(resolve('e2e/media/coast.webp'));
+    await expect(page.locator('.reference.upload-ready')).toBeVisible();
+    await page.getByLabel('创作描述', { exact: true }).fill('change the lighting');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured' } }) : route.continue());
+    const sent = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    const payload = (await sent).postDataJSON();
+    expect(payload.operation).toBe('image.edit');
+    expect(payload.inputs[0].role).toBe('source');
+    expect(payload).not.toHaveProperty('aspectRatio');
+  } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
+});

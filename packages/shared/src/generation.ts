@@ -28,6 +28,7 @@ export const GenerationRequestSchema = z.object({
   providerId: z.string().trim().min(1),
   modelId: z.string().trim().min(1),
   profile: NativeProviderProfileSchema.optional(),
+  collectionId: z.string().trim().min(1).max(255).optional(),
   prompt: z.string().trim().min(1),
   negativePrompt: z.string().optional(),
   inputs: z.array(AssetInputSchema).default([]),
@@ -46,6 +47,19 @@ export const GenerationRequestSchema = z.object({
 }).strict();
 
 export type GenerationRequest = z.infer<typeof GenerationRequestSchema>;
+
+export function normalizeAutomaticParameters(request: GenerationRequest): GenerationRequest {
+  const normalized = { ...request };
+  if (normalized.aspectRatio === 'auto') delete normalized.aspectRatio;
+  if (normalized.resolution === 'auto') delete normalized.resolution;
+  return normalized;
+}
+
+export function providerGenerationRequest(request: GenerationRequest): GenerationRequest {
+  const result = normalizeAutomaticParameters(request);
+  delete result.collectionId;
+  return result;
+}
 
 export const JobStatusSchema = z.enum([
   'queued',

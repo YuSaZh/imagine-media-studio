@@ -1,4 +1,5 @@
 import type { GenerationRequest } from '@imagine/shared';
+import { publicInputUrl } from '../public-input-url.js';
 import type {
   ModelCapabilities,
   ProviderAdapter,
@@ -225,6 +226,8 @@ function imageDataUri(input: XaiImagineVideoInput): string {
     );
   }
   if (input.bytes instanceof Uint8Array) {
+    const publicUrl = publicInputUrl(input);
+    if (publicUrl) return publicUrl;
     if (input.bytes.byteLength === 0 || input.bytes.byteLength > MAX_INPUT_BYTES) {
       throw new XaiImagineVideoValidationError('xai_input_size_invalid', 'xAI video input bytes are outside the allowed size range.');
     }
@@ -746,9 +749,7 @@ function parseVideoStatus(
 ): ParsedVideoStatus {
   if (!isRecord(value)) throw new XaiImagineVideoResponseError('xAI video response must be an object.');
   const responseId = value.request_id ?? value.id;
-  if (expectedId !== undefined && responseId === undefined) {
-    throw new XaiImagineVideoResponseError('xAI video response is missing the requested id.');
-  }
+  // The official GET response can omit the id; the requested endpoint binds it.
   if (responseId !== undefined) {
     const id = assertRemoteId(responseId);
     if (expectedId !== undefined && id !== expectedId) {

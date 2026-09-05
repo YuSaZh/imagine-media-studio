@@ -14,6 +14,8 @@ import {
   ModelCapabilitiesSchema,
   applyModelParameters,
   resolveModelProfile,
+  normalizeAutomaticParameters,
+  providerGenerationRequest,
 } from '@imagine/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -235,6 +237,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
   app.post('/internal/jobs', async (request, reply) => {
     let input = parseOrReply(GenerationRequestSchema, request.body, reply);
     if (!input) return;
+    if (input.collectionId && !options.collections.get(input.collectionId)) return errorResponse(reply, 400, 'collection_not_found', '项目不存在或已删除');
     let registration;
     try {
       registration = await options.providers.resolve(input.providerId);
@@ -250,7 +253,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       const capabilities = ModelCapabilitiesSchema.parse(resolved.model.capabilities);
       // Protocol and parameter policy come from the persisted model, never the client.
       delete input.profile;
-      input = applyModelParameters(input, capabilities.parameters);
+      input = normalizeAutomaticParameters(applyModelParameters(normalizeAutomaticParameters(input), capabilities.parameters));
       if (['openai', 'gemini', 'xai'].includes(registration.adapter.type)) {
         const profile = resolveModelProfile(registration.adapter.type, input.operation, input.modelId, capabilities.profile);
         if (profile) input.profile = profile;
@@ -272,7 +275,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       return errorResponse(reply, 400, 'provider_input_invalid');
     }
     try {
-      await registration.adapter.validate(input, {
+      await registration.adapter.validate(providerGenerationRequest(input), {
         providerId: input.providerId,
         ...(registration.baseUrl ? { baseUrl: registration.baseUrl } : {}),
         config: registration.config ?? {},

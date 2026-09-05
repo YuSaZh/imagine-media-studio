@@ -522,23 +522,6 @@ function concat(chunks: readonly Uint8Array[]): Uint8Array {
   return result;
 }
 
-async function streamPayload(response: OpenAiHttpResponse): Promise<string> {
-  if (response.body === undefined) {
-    const payload = await responsePayload(response);
-    return typeof payload === 'string' ? payload : JSON.stringify(payload ?? {});
-  }
-  if (typeof response.body === 'string') return response.body;
-  if (response.body instanceof Uint8Array) return new TextDecoder().decode(response.body);
-  if (response.body === null || typeof (response.body as AsyncIterable<unknown>)[Symbol.asyncIterator] !== 'function') {
-    return JSON.stringify(response.body ?? {});
-  }
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of response.body as AsyncIterable<Uint8Array | string>) {
-    chunks.push(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk);
-  }
-  return new TextDecoder().decode(concat(chunks));
-}
-
 function errorMessage(payload: unknown): string {
   const record = asRecord(payload);
   const error = asRecord(record?.error);
@@ -852,7 +835,6 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
       if (statusCode === undefined) {
         throw new OpenAiTransportError('OpenAI HTTP transport returned no status code.');
       }
-      const streamRequested = options.stream === true;
       const maxAssets = outputCountLimit(this.options.profile, request);
       if (statusCode < 200 || statusCode >= 300) {
         const payload = await responsePayload(response);
@@ -864,8 +846,9 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
           runtime.secrets,
         );
       }
-      if (streamRequested || headerValue(response.headers, 'content-type')?.toLowerCase().includes('text/event-stream')) {
-        const raw = await streamPayload(response);
+      const payload = await responsePayload(response);
+      if (typeof payload === 'string' && /(?:^|\n)(?:data|event):/.test(payload)) {
+        const raw = payload;
         const outputFormat = options.outputFormat === 'jpeg' || options.outputFormat === 'webp' || options.outputFormat === 'png'
           ? options.outputFormat
           : undefined;
@@ -890,7 +873,6 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
         }
         throw new OpenAiValidationError('invalid_response', 'OpenAI stream completed without an image.');
       }
-      const payload = await responsePayload(response);
       const outputFormat = options.outputFormat === 'jpeg' || options.outputFormat === 'webp' || options.outputFormat === 'png'
         ? options.outputFormat
         : undefined;

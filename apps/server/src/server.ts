@@ -66,6 +66,8 @@ import { RemoteMediaDownloader } from './security/remote-download.js';
 import { SafeHttpTransport } from './security/safe-http-transport.js';
 import { SecretVault } from './security/secret-vault.js';
 import { PasswordAuth } from './security/password-auth.js';
+import { PublicInputLinks } from './security/public-input-links.js';
+import { registerPublicInputRoutes } from './routes/public-inputs.js';
 import { CustomAdapterService } from './services/custom-adapter-service.js';
 import { TrustedAdapterService } from './services/trusted-adapter-service.js';
 import { ensureStorage, getStoragePaths } from './storage/paths.js';
@@ -303,7 +305,9 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const providerRepository = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
   const inputResolver = new GenerationInputResolver(assets, models);
+  const publicLinks = options.config.publicBaseUrl ? new PublicInputLinks(options.config.appSecret, options.config.publicBaseUrl) : undefined;
   const inputLoader = new ProviderInputLoader({
+    ...(publicLinks ? { publicLinks } : {}),
     assets,
     dataRoot: storage.root,
     maxBytesPerFile: options.config.providerInputMaxBytesPerFile,
@@ -524,7 +528,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     });
     app.addHook('onSend', async (request, reply, payload) => {
       reply.header('x-content-type-options', 'nosniff');
-      reply.header('referrer-policy', 'same-origin');
+      reply.header('referrer-policy', request.url.startsWith('/media-inputs/') ? 'no-referrer' : 'same-origin');
       reply.header('x-frame-options', 'DENY');
       reply.header(
         'content-security-policy',
@@ -555,6 +559,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     }
     outbox.flush();
     await registerAuthRoutes(app, passwordAuth);
+    if (publicLinks) await registerPublicInputRoutes(app, { links: publicLinks, assets, dataRoot: storage.root });
     await registerMaintenanceRoutes(app, {
       authorization: {
         adminEnabled: passwordAuth.required,

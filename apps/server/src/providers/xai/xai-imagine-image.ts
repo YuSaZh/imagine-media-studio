@@ -1,4 +1,6 @@
 import type { GenerationRequest } from '@imagine/shared';
+import { publicInputUrl } from '../public-input-url.js';
+import { parseOpenAiImageStream } from '../openai/stream.js';
 import type {
   ModelCapabilities,
   ProviderAdapter,
@@ -340,6 +342,8 @@ function resolveInputSource(input: XaiImagineImageInput): { mimeType: string; ur
   }
   if (input.bytes !== undefined) {
     const mimeType = normalizeImageMimeType(input.mimeType?.toLowerCase() ?? 'image/png');
+    const publicUrl = publicInputUrl(input);
+    if (publicUrl) return { mimeType, url: publicUrl };
     return { mimeType, url: imageDataUri(mimeType, input.bytes) };
   }
   throw new XaiImagineValidationError(
@@ -677,6 +681,11 @@ function submittedUrlAsset(item: JsonRecord, rawUrl: string, resultIndex: number
 }
 
 export function parseXaiImagineImageResponse(value: unknown): readonly SubmittedAsset[] {
+  if (typeof value === 'string' && /(?:^|\n)(?:data|event):/.test(value)) {
+    const result = parseOpenAiImageStream(value);
+    if (result.assets.length > 0 && result.assets.length <= MAX_OUTPUT_IMAGES) return result.assets;
+    throw new XaiImagineResponseError('xAI Imagine stream returned no final image data.');
+  }
   if (!isRecord(value) || !Array.isArray(value.data) || value.data.length === 0) {
     throw new XaiImagineResponseError('xAI Imagine returned no image data.');
   }
@@ -689,12 +698,14 @@ export function parseXaiImagineImageResponse(value: unknown): readonly Submitted
     }
     const base64 = optionalString(rawItem, 'b64_json') ?? optionalString(rawItem, 'base64');
     if (base64 !== undefined) return submittedBase64Asset(rawItem, base64, resultIndex);
+    if (typeof rawItem.url === 'string' && rawItem.url.startsWith('data:')) return submittedBase64Asset(rawItem, rawItem.url, resultIndex);
     const rawUrl = boundedOptionalString(rawItem, 'url', MAX_OUTPUT_URL_CHARS);
     if (rawUrl !== undefined) return submittedUrlAsset(rawItem, rawUrl, resultIndex);
     const image = rawItem.image;
     if (isRecord(image)) {
       const nestedBase64 = optionalString(image, 'b64_json') ?? optionalString(image, 'base64');
       if (nestedBase64 !== undefined) return submittedBase64Asset(rawItem, nestedBase64, resultIndex);
+      if (typeof image.url === 'string' && image.url.startsWith('data:')) return submittedBase64Asset(rawItem, image.url, resultIndex);
       const nestedUrl = boundedOptionalString(image, 'url', MAX_OUTPUT_URL_CHARS);
       if (nestedUrl !== undefined) return submittedUrlAsset(rawItem, nestedUrl, resultIndex);
     }

@@ -31,6 +31,25 @@ import {
 const IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 const context: OpenAiProviderContext = { providerId: 'openai', secrets: { apiKey: 'sk-test-only' } };
 
+describe('CPA and sub2api response compatibility', () => {
+  it('accepts base64 carried in a url field and retains its encoding', () => {
+    expect(normalizeImageResponse({ data: [{ url: `data:image/png;base64,${IMAGE_BASE64}` }] })[0]).toMatchObject({ source: 'base64', base64: IMAGE_BASE64, mimeType: 'image/png' });
+  });
+  it('uses the actual JSON response even when streaming was requested', async () => {
+    const transport = new FixtureTransport(jsonResponse({ data: [{ b64_json: IMAGE_BASE64 }] }));
+    await expect(new OpenAiImagesProvider({ http: transport }).submit(request({ extra: { stream: true } }), context)).resolves.toMatchObject({ state: 'completed' });
+  });
+  it('recognizes SSE with a generic content type and deduplicates final events', async () => {
+    const event = { type: 'image_generation.completed', id: 'image-1', url: `data:image/png;base64,${IMAGE_BASE64}` };
+    const text = `data: ${JSON.stringify(event)}\n\ndata: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`;
+    const transport = new FixtureTransport({ statusCode: 200, headers: { 'content-type': 'application/json' }, text });
+    const result = await new OpenAiImagesProvider({ http: transport }).submit(request(), context);
+    expect(result).toMatchObject({ state: 'completed' });
+    if (result.state === 'completed') expect(result.assets).toHaveLength(1);
+    expect(() => parseOpenAiImageStream('event: error\ndata: {"type":"error","message":"failure"}\n\n')).toThrow();
+  });
+});
+
 function request(overrides: Partial<GenerationRequest> = {}): GenerationRequest {
   return {
     operation: 'image.generate',

@@ -1,5 +1,5 @@
 import type { AssetDto, AssetInput, GenerationRequest, JobDto, ModelDto, ProviderDto, JsonObject } from '@imagine/shared';
-import { GenerationRequestSchema, applyModelParameters } from '@imagine/shared';
+import { GenerationRequestSchema, applyModelParameters, normalizeAutomaticParameters } from '@imagine/shared';
 import { managedParameters } from './managed-parameters';
 import { internalClient } from '../../api/internal-client';
 import { mapInternalModel } from './model-capabilities';
@@ -129,7 +129,7 @@ export function mapModels(models: readonly ModelDto[], providers: readonly Provi
 }
 
 export function operationFor(mode: MediaKind, videoMode: 'text' | 'first_frame' | 'references', inputs: readonly ReferenceInput[]): 'image.generate' | 'image.edit' | 'video.generate' | 'video.image_to_video' | 'video.reference_to_video' {
-  if (mode === 'image') return inputs.some(input => input.role === 'source') ? 'image.edit' : 'image.generate';
+  if (mode === 'image') return inputs.some(input => input.role === 'source' || input.role === 'reference') ? 'image.edit' : 'image.generate';
   return videoMode === 'first_frame' ? 'video.image_to_video' : videoMode === 'references' ? 'video.reference_to_video' : 'video.generate';
 }
 
@@ -150,6 +150,11 @@ export interface Creation {
 }
 
 export function generationRequest(input: Creation): GenerationRequest {
+  if (input.ratio === 'auto' || input.resolution === 'auto') input = { ...input, ratio: input.ratio === 'auto' ? '' : input.ratio, resolution: input.resolution === 'auto' ? '' : input.resolution };
+  if (input.operation === 'image.edit' && !input.inputs.some(item => item.role === 'source')) {
+    const first = input.inputs.findIndex(item => item.role === 'reference');
+    input = { ...input, inputs: input.inputs.map((item, index) => index === first ? { ...item, role: 'source' as const } : item) };
+  }
   const { model } = input;
   const video = input.operation.startsWith('video.');
   if (!model.capabilities.operations.includes(input.operation)) throw new Error('当前模型不支持这项操作');
@@ -164,7 +169,7 @@ export function generationRequest(input: Creation): GenerationRequest {
       else request[rule.path] = value;
     }
     if (Object.keys(extra).length) request.extra = extra;
-    return applyModelParameters(GenerationRequestSchema.parse(request), rules);
+    return normalizeAutomaticParameters(applyModelParameters(GenerationRequestSchema.parse(request), rules));
   }
   const customSize = !video && allowsCustomSize(model);
   const customRatio = !input.resolution && input.ratio && !model.capabilities.aspectRatios.includes(input.ratio);

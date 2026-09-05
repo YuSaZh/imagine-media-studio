@@ -54,6 +54,7 @@ export type OpenAiHttpRequestExecutor = (
 ) => Promise<OpenAiHttpResponse>;
 
 export interface OpenAiInputAsset {
+  readonly publicUrl?: string;
   readonly assetId: string;
   readonly role: 'source' | 'reference' | 'mask' | 'first_frame';
   readonly mimeType: string;

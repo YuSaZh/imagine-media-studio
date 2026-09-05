@@ -49,6 +49,19 @@ their independent placeholder versions.
 
 ## Custom Provider usage
 
+Set `PUBLIC_BASE_URL` to this application's externally reachable URL to send
+reference images as signed, 15-minute links on xAI image/video and OpenAI
+Responses APIs. The links serve only the selected image, expire automatically,
+stop working when the asset is deleted, and are excluded from browser/PWA caches.
+Without this setting, references use embedded data or multipart uploads.
+OpenAI Images and Gemini continue using the input format required by their API.
+
+The reference button offers library selection and new uploads. Adding an image
+reference selects image editing automatically. `auto` leaves aspect ratio and
+resolution to the upstream. Generation tasks appear inside the waterfall grid.
+Selecting a project in the header scopes its resources and stores new generated
+outputs in that project, including after server recovery.
+
 Open Settings -> Providers -> Manage adapter for a `Custom HTTP Adapter` or
 `Trusted JavaScript Adapter` Provider. The ready-to-import declarations are in
 [`examples/custom-providers`](./examples/custom-providers). Configure the

@@ -1,5 +1,9 @@
 # Third-party reuse audit
 
+## CPA and sub2api image response compatibility
+
+Protocol-only review: CLIProxyAPI `5208aec703b5ce7e3445f6e9d91cc13b3e78003a` (MIT), `internal/runtime/executor/codex_openai_images.go`; sub2api `deff3123ded1d14e51df1fd1286e3d43ed9ec9bd` (LGPL-3.0, matching the HPServer sub2api1 image revision), `backend/internal/service/openai_images_responses.go`. Both can put base64 data URLs in `data[].url` and image SSE events. Local CPA response logs were inspected through a field-shape-only filter that excludes credentials and image contents. No upstream code or UI was copied; fixtures and normalization changes are independently implemented. xAI polling was checked against the official REST video result example, which omits a repeated request ID.
+
 ## DEEIX administration mechanism reference
 
 Reviewed DEEIX-AI/DEEIX-Chat at commit `1a95cb0a0bbf9d6ebd8353b285eb9cd60ce4ada0` (Apache-2.0). Reference-only files: `frontend/features/admin/components/sections/models/models-capabilities-config.tsx`, `models-sheet.tsx`, `frontend/features/admin/components/sections/upstreams/upstreams-sheet.tsx`, `frontend/features/admin/model/upstreams-models.ts`, and `backend/internal/application/conversation/model_option_policy.go`.

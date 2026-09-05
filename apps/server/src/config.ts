@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 
 const EnvironmentSchema = z.object({
+  PUBLIC_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().refine(value => { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash; }, 'PUBLIC_BASE_URL must be an HTTP(S) URL without credentials, query or fragment.').optional()),
   ALLOW_HTTP_MEDIA_DOWNLOADS: z.enum(['true', 'false']).default('false'),
   ALLOW_INSECURE_PROVIDER_HTTP: z.enum(['true', 'false']).default('false'),
   ALLOW_PRIVATE_NETWORK_ACCESS: z.enum(['true', 'false']).default('false'),
@@ -29,6 +30,7 @@ const EnvironmentSchema = z.object({
 });
 
 export interface AppConfig {
+  publicBaseUrl?: string;
   allowHttpMediaDownloads: boolean;
   allowInsecureProviderHttp: boolean;
   allowPrivateNetworkAccess: boolean;
@@ -64,6 +66,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   return {
+    ...(parsed.PUBLIC_BASE_URL ? { publicBaseUrl: parsed.PUBLIC_BASE_URL } : {}),
     allowHttpMediaDownloads: parsed.ALLOW_HTTP_MEDIA_DOWNLOADS === 'true',
     allowInsecureProviderHttp: parsed.ALLOW_INSECURE_PROVIDER_HTTP === 'true',
     allowPrivateNetworkAccess: parsed.ALLOW_PRIVATE_NETWORK_ACCESS === 'true',

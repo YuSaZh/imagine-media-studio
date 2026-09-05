@@ -76,6 +76,18 @@ afterEach(() => {
 });
 
 describe('XaiImagineVideoProvider', () => {
+  it('accepts official id-less poll results bound to the requested endpoint', async () => {
+    const provider = new XaiImagineVideoProvider({ http: new FixtureClient(jsonResponse({ status: 'pending' }), jsonResponse({ status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://vidgen.x.ai/result.mp4', duration: 5, respect_moderation: true } })) });
+    await expect(provider.poll('req_fixture_001', videoContext)).resolves.toMatchObject({ state: 'remote_pending' });
+    await expect(provider.poll('req_fixture_001', videoContext)).resolves.toMatchObject({ state: 'completed', assets: [{ remoteJobId: 'req_fixture_001' }] });
+  });
+  it('sends a server-issued URL instead of embedded bytes for first-frame videos', async () => {
+    const client = new FixtureClient(jsonResponse({ request_id: 'req_fixture_001' }));
+    const publicUrl = `https://studio.example/media-inputs/frame/1999999999/${'a'.repeat(43)}`;
+    await new XaiImagineVideoProvider({ http: client }).submit(request({ operation: 'video.image_to_video', inputs: [{ assetId: 'frame', role: 'first_frame' }] }), { ...videoContext, inputs: [{ ...input('frame', 'first_frame'), publicUrl }] });
+    expect(client.requests[0]?.body).toContain(publicUrl);
+    expect(client.requests[0]?.body).not.toContain('data:image');
+  });
   it('exposes the current official model and omits remote cancel support', async () => {
     const provider = new XaiImagineVideoProvider();
     expect(getXaiImagineVideoCapabilities()).toMatchObject({
@@ -418,7 +430,6 @@ describe('XaiImagineVideoProvider', () => {
     const cases: Array<[unknown, string]> = [
       [{ request_id: 'other', status: 'pending' }, 'different request id'],
       [{ request_id: 'req_fixture_001', status: 'unknown' }, 'unknown video status'],
-      [{ status: 'pending' }, 'missing the requested id'],
       [{ request_id: 'req_fixture_001', status: 'pending', progress: 101 }, 'invalid progress'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://user:pass@vidgen.x.ai/a.mp4', duration: 4, respect_moderation: true } }, 'unsafe result URL'],
       [{ request_id: 'req_fixture_001', status: 'done', model: 'grok-imagine-video-1.5', video: { url: 'https://vidgen.x.ai/a.mp4?signature=secret', duration: 4, respect_moderation: true } }, 'credential-like query'],

@@ -12,10 +12,12 @@ import { createComposerDraftPersistence, readComposerDraft, type ComposerDraftPe
 import { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
 import type { AcquisitionRejection } from '../media-input/model/types';
 import { readGeneralSettings, useSettingsQuery } from '../settings/api/settings-query';
-import { ACTIVE_JOB_STATUSES, JOB_LABELS, generationRequest, mapMedia, mapModels, operationFor, type Creation, type MediaItem, type MediaKind, type Project, type ReferenceInput } from './data';
+import { ACTIVE_JOB_STATUSES, generationRequest, mapMedia, mapModels, operationFor, type Creation, type MediaItem, type MediaKind, type Project, type ReferenceInput } from './data';
 import { useMedia, useRefreshWorkspace, useWorkspaceCatalog, useWorkspaceJobs } from './queries';
 import { Composer } from './composer';
 import { Gallery } from './gallery';
+import { ReferencePicker } from './reference-picker';
+import { jobStudies, pendingStudies, type PendingStudy } from './pending-studies';
 import { Viewer } from './viewer';
 import { Choice, Confirm, Options, Panel, Tool } from './ui';
 
@@ -55,7 +57,14 @@ export function Workspace() {
   const [videoMode, setVideoMode] = useState<'text' | 'first_frame' | 'references'>('text');
   const [modelKey, setModelKey] = useState('');
   const [references, setReferences] = useState<ReferenceInput[]>([]);
+  const [referencePicker, setReferencePicker] = useState(false);
+  const [optimisticStudies, setOptimisticStudies] = useState<PendingStudy[]>([]);
+  const trackedJobs = useRef(new Set<string>());
   const removedUploads = useRef(new Set<string>());
+  const uploadProjects = useRef(new Map<string, string | null>());
+  const previousProject = useRef(projectId);
+  const activeProject = useRef(projectId);
+  activeProject.current = projectId;
   const [filter, setFilter] = useState<'all' | MediaKind>('all');
   const [search, setSearch] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -79,6 +88,8 @@ export function Workspace() {
   const jobQuery = useWorkspaceJobs();
   const jobs = jobQuery.data?.pages.flatMap(page => page.items) ?? [];
   const activeJobs = [...new Map(jobs.filter(job => ACTIVE_JOB_STATUSES.has(job.status)).map(job => [job.id, job])).values()];
+  useEffect(() => { for (const job of activeJobs) trackedJobs.current.add(job.id); }, [activeJobs]);
+  const pending = [...optimisticStudies.filter(study => !projectId || study.collectionId === projectId), ...jobs.filter(job => (ACTIVE_JOB_STATUSES.has(job.status) || trackedJobs.current.has(job.id) && ['completed', 'failed', 'rejected', 'expired'].includes(job.status)) && (!projectId || job.request.collectionId === projectId) && (filter === 'all' || job.operation.startsWith(`${filter}.`)) && job.prompt.toLowerCase().includes(searchQuery.toLowerCase())).flatMap(job => jobStudies(job, items))];
   const currentViewerItem = items.find(item => item.id === viewerId);
   const viewerQuery = useQuery({ queryKey: [...internalQueryKeys.assets, 'detail', viewerId], queryFn: () => internalClient.getAsset(viewerId!), enabled: !!viewerId && online });
   const viewerJobId = viewerQuery.data?.asset.jobId ?? currentViewerItem?.job?.id;
@@ -98,10 +109,12 @@ export function Workspace() {
     role: mode === 'video' && videoMode === 'first_frame' ? 'first_frame' : 'reference',
     preprocessPolicy: model?.capabilities.inputImagePolicy ?? DEFAULT_IMAGE_INPUT_POLICY,
     preserveReadyOnDispose: true,
-    onReady: (_clientId, id, role) => {
-      void internalClient.getAsset(id).then(({ asset }) => {
+    onReady: (clientId, id, role) => {
+      void internalClient.getAsset(id).then(async ({ asset }) => {
         if (removedUploads.current.has(id)) return;
-        setReferences(current => current.some(input => input.asset.id === id) ? current : [...current, { asset, role }]);
+        const project = uploadProjects.current.get(clientId);
+        if (project) await internalClient.addCollectionAssets(project, [asset.id]);
+        if ((project ?? null) === activeProject.current) setReferences(current => current.some(input => input.asset.id === id) ? current : [...current, { asset, role }]);
         void refresh();
       }).catch(() => notify('读取上传素材失败，请移除后重新上传', true));
     },
@@ -112,6 +125,12 @@ export function Workspace() {
     const timer = setTimeout(() => { setSearchQuery(search.trim().slice(0, 200)); setSelected([]); }, 250);
     return () => clearTimeout(timer);
   }, [search]);
+  useEffect(() => {
+    if (previousProject.current === projectId) return;
+    previousProject.current = projectId;
+    for (const entry of uploads.state.entries) uploads.remove(entry.clientId);
+    setReferences([]);
+  }, [projectId, uploads]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), notice.error ? 10000 : 5000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => {
     const draft = createComposerDraftPersistence(); persistence.current = draft;
@@ -151,7 +170,7 @@ export function Workspace() {
       setMode(video ? 'video' : 'image'); setVideoMode(video && asset.type === 'image' ? 'first_frame' : 'text');
       if (asset.type === 'image') setReferences([{ asset, role: video ? 'first_frame' : intent === 'edit' ? 'source' : 'reference' }]);
       setPrompt(nextPrompt ?? '');
-      go('/imagine'); setFocusToken(value => value + 1);
+      go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1);
     });
   };
   const create = async (creation: Creation) => {
@@ -159,21 +178,30 @@ export function Workspace() {
     setSubmitting(true);
     const submitted = creation.prompt;
     await run('create', async () => {
-      await internalClient.createJob(generationRequest(creation), createBrowserId());
+      const request = { ...generationRequest(creation), ...(projectId ? { collectionId: projectId } : {}) };
+      setOptimisticStudies(pendingStudies(request, { id: createBrowserId(), status: 'submitting', progress: null }));
+      await internalClient.createJob(request, createBrowserId());
       if (preferences.clearPromptAfterSubmit && promptRef.current === submitted) setPrompt('');
       setFilter('all'); setSearch('');
     });
+    setOptimisticStudies([]);
     setSubmitting(false);
+  };
+  const addLibraryReferences = (assets: AssetDto[]) => {
+    const role = mode === 'video' && videoMode === 'first_frame' ? 'first_frame' as const : 'reference' as const;
+    setReferences(current => [...current, ...assets.filter(asset => !current.some(input => input.asset.id === asset.id)).map(asset => ({ asset, role }))]);
+    setReferencePicker(false);
   };
   const addFiles = (files: readonly File[], rejected: readonly AcquisitionRejection[] = []) => {
     if (!online || !model) { notify('请先启用支持图片输入的模型', true); return; }
     const role = mode === 'video' && videoMode === 'first_frame' ? 'first_frame' : 'reference';
     const readyLocalIds = new Set(uploads.state.entries.map(entry => entry.assetId));
-    uploads.addFiles(files, { existingCount: references.filter(input => input.role === role).length + uploads.state.entries.filter(entry => !entry.assetId).length,
+    const uploadIds = uploads.addFiles(files, { existingCount: references.filter(input => input.role === role).length + uploads.state.entries.filter(entry => !entry.assetId).length,
       existingTotalBytes: references.filter(input => !readyLocalIds.has(input.asset.id)).reduce((sum, input) => sum + input.asset.fileSize, 0),
       maxItems: mode === 'video' && videoMode === 'text' ? 0 : role === 'first_frame' ? 1 : model.capabilities.maxReferenceImages,
       preliminaryRejections: rejected,
     });
+    for (const id of uploadIds ?? []) uploadProjects.current.set(id, projectId);
   };
   const changeMode = (next: MediaKind) => {
     setMode(next);
@@ -205,31 +233,31 @@ export function Workspace() {
     onRetry: (job: JobDto) => { void run(`retry:${job.id}`, async () => { await internalClient.retryJob(job.id); }, '已重新提交任务'); }, onView: viewJob,
   };
   const renderJobs = <Suspense fallback={<p className="loading-state">正在加载任务…</p>}><Jobs {...jobActions} /></Suspense>;
-  const isCreate = section === 'imagine';
   const isProjects = ['projects', 'folders'].includes(section);
+  const isCreate = section === 'imagine' || isProjects && !!projectId;
   const title = currentProject?.name ?? (section === 'library' ? '全部作品' : section === 'saved' ? '收藏' : isProjects ? '项目' : '最近创作');
 
   return <div className="imagine-app">
     <aside className="side-rail"><button className="identity" aria-label="Imagine 首页" onClick={() => go('/imagine')}><Sparkles size={25} strokeWidth={1.7} /></button><nav aria-label="主导航">{NAVIGATION.map(({ path, label, icon: Icon }) => <Tool label={label} key={path} className={location.pathname.startsWith(path) ? 'is-active' : ''} aria-current={location.pathname.startsWith(path) ? 'page' : undefined} onClick={() => go(path)}><Icon size={21} strokeWidth={1.6} /></Tool>)}</nav><div className="rail-bottom"><Tool label="连接与偏好" onClick={() => go('/settings/providers')}><Settings2 size={21} /></Tool><span className="avatar">I</span></div></aside>
     <main ref={mainRef} className={`workspace section-${isCreate ? 'create' : section}`}>
-      <header className="workspace-header"><div className="workspace-location"><Tool label="打开导航" className="mobile-menu" onClick={() => setMenuOpen(true)}><Menu size={21} /></Tool><button className="wordmark" onClick={() => go('/imagine')}>Imagine<span className="wordmark-dot">.</span></button><span className="header-divider" /><span className="current-location">{section === 'settings' ? '设置' : section === 'jobs' ? '生成任务' : title}</span></div><div className="header-actions"><button className="task-indicator" aria-label="生成任务" onClick={() => setTaskOpen(true)}>{activeJobs.length ? <LoaderCircle className="spin" size={16} /> : <Clock3 size={17} />}<span>任务</span>{activeJobs.length > 0 && <b>{activeJobs.length}</b>}</button><Tool className="mobile-settings" label="连接与偏好" onClick={() => go('/settings/providers')}><Settings2 size={19} /></Tool></div></header>
+      <header className="workspace-header"><div className="workspace-location"><Tool label="打开导航" className="mobile-menu" onClick={() => setMenuOpen(true)}><Menu size={21} /></Tool><button className="wordmark" onClick={() => go('/imagine')}>Imagine<span className="wordmark-dot">.</span></button><span className="header-divider" /><Options label="选择项目" className="current-location" trigger={<><span className="project-trigger-text">{section === 'settings' ? '设置' : section === 'jobs' ? '生成任务' : title}</span><ArrowUpRight size={12} /></>}><Choice active={!projectId} onClick={() => go('/imagine')}>最近创作</Choice>{projects.map(project => <Choice key={project.id} active={projectId === project.id} onClick={() => go(`/projects/${project.id}`)}><Folder size={15} />{project.name}</Choice>)}</Options></div><div className="header-actions"><button className="task-indicator" aria-label="生成任务" onClick={() => setTaskOpen(true)}>{activeJobs.length ? <LoaderCircle className="spin" size={16} /> : <Clock3 size={17} />}<span>任务</span>{activeJobs.length > 0 && <b>{activeJobs.length}</b>}</button><Tool className="mobile-settings" label="连接与偏好" onClick={() => go('/settings/providers')}><Settings2 size={19} /></Tool></div></header>
       {!online && <div className="offline-banner" role="status">当前离线，仅显示最近缓存的作品；草稿已保留。</div>}
       {pwa.updateAvailable && !updateDismissed && settingsQuery.data?.settings['pwa.update_notifications'] !== false && <div className="workspace-update" role="status"><span>新版本已就绪</span><button className="quiet-command" disabled={pwa.updating} onClick={() => void activatePwaUpdate()}>更新应用</button><Tool label="稍后更新" onClick={() => setUpdateDismissed(true)}><X size={16} /></Tool></div>}
-      {isCreate && <section className="creation-area"><div className="creation-heading"><h1>Imagine</h1><span className="creation-mark"><Sparkles size={22} strokeWidth={1.3} /></span></div><Composer prompt={prompt} onPrompt={setPrompt} mode={mode} onMode={changeMode} videoMode={videoMode} onVideoMode={changeVideoMode} models={models} model={model} onModel={setModelKey} references={references} uploads={uploads} onFiles={addFiles} onRemove={id => setReferences(current => current.filter(input => input.asset.id !== id && !(input.role === 'mask' && input.asset.parentAssetId === id)))} onCreate={creation => void create(creation)} onConnections={() => go('/settings/providers')} online={online} submitting={submitting} loading={catalog.models.isPending || catalog.providers.isPending} focusToken={focusToken} /></section>}
+      {isCreate && <section className="creation-area"><div className="creation-heading"><h1>Imagine</h1><span className="creation-mark"><Sparkles size={22} strokeWidth={1.3} /></span></div><Composer prompt={prompt} onPrompt={setPrompt} mode={mode} onMode={changeMode} videoMode={videoMode} onVideoMode={changeVideoMode} models={models} model={model} onModel={setModelKey} references={references} uploads={uploads} onFiles={addFiles} onRemove={id => setReferences(current => current.filter(input => input.asset.id !== id && !(input.role === 'mask' && input.asset.parentAssetId === id)))} onCreate={creation => void create(creation)} onLibrary={() => setReferencePicker(true)} onConnections={() => go('/settings/providers')} online={online} submitting={submitting} loading={catalog.models.isPending || catalog.providers.isPending} focusToken={focusToken} /></section>}
       {section === 'settings' ? <Suspense fallback={<p className="loading-state">正在加载设置…</p>}><Settings online={online} /></Suspense> : section === 'jobs' ? <section className="library-area"><div className="library-title"><h1>生成任务</h1></div>{renderJobs}</section> : <section className="library-area" aria-label="作品库">
         <div className="library-heading"><div className="library-title">{isCreate ? <h2>{title}</h2> : <h1>{title}</h1>}<span>{isProjects && !projectId ? projects.length : items.length}{mediaQuery.hasNextPage ? '+' : ''}</span></div><div className="library-tools">{isProjects && !projectId ? <button className="quiet-command" disabled={!online} onClick={() => editProject('new')}><Plus size={16} />新建项目</button> : <><label className="library-search"><Search size={16} /><input aria-label="搜索作品" value={search} maxLength={200} onChange={event => setSearch(event.target.value)} placeholder="搜索作品" /></label><Tool label={selecting ? '退出多选' : '选择作品'} aria-pressed={selecting} onClick={() => { setSelecting(!selecting); setSelected([]); }}><CheckCheck size={19} /></Tool>{currentProject && <Options label="项目操作" trigger={<MoreHorizontal size={19} />}><Choice active={false} onClick={() => editProject(currentProject)}><Pencil size={15} />重命名</Choice><Choice active={false} onClick={() => setConfirmation({ title: '删除项目？', description: '项目归档关系将被移除，作品文件会保留。', action: async () => { await internalClient.deleteCollection(currentProject.id); go('/projects'); } })}><Trash2 size={15} />删除项目</Choice></Options>}</>}</div></div>
         {isProjects && !projectId ? <>{catalog.projects.isError && <p className="error-state">项目加载失败<button onClick={() => void catalog.projects.refetch()}>重试</button></p>}<div className="project-grid">{projects.map(project => <article className="project-tile" key={project.id}><button className="project-open" onClick={() => go(`/projects/${project.id}`)}><div className="project-cover">{items.filter(item => item.collectionIds.includes(project.id)).slice(0, 3).map(item => <img key={item.id} src={item.thumbnail} alt="" />)}<Folder size={28} strokeWidth={1.3} /></div><span><strong>{project.name}</strong><small>{project.itemCount} 件作品</small></span><ArrowUpRight size={18} /></button></article>)}<button className="new-project-tile" disabled={!online} onClick={() => editProject('new')}><FolderPlus size={26} /><span>新建项目</span></button></div></> : <>
           <div className="library-filter" role="group" aria-label="作品类型">{[{ key: 'all' as const, label: '全部' }, { key: 'image' as const, label: '图片' }, { key: 'video' as const, label: '视频' }].map(item => <button key={item.key} type="button" aria-pressed={filter === item.key} onClick={() => setFilter(item.key)}>{item.label}</button>)}{selecting && <button className="select-all" onClick={() => setSelected(selected.length === items.length ? [] : items)}>选择已加载作品</button>}</div>
-          {isCreate && activeJobs.length > 0 && <div className="pending-jobs" aria-live="polite">{activeJobs.slice(0, 8).map(job => <div className="pending-job" key={job.id}><span className="pending-glyph"><LoaderCircle size={19} className="spin" /></span><div><strong>{JOB_LABELS[job.status]}{job.progress !== null ? ` · ${Math.round(job.progress)}%` : ''}</strong><p>{job.prompt}</p></div><Tool label="取消生成" disabled={!online || busy > 0} onClick={() => jobActions.onCancel(job)}><X size={17} /></Tool></div>)}</div>}
-          {mediaQuery.isPending ? <div className="loading-state" role="status"><LoaderCircle className="spin" size={24} />正在加载作品…</div> : !items.length && !mediaQuery.isError ? <div className="empty-state"><ImageIcon size={34} strokeWidth={1.2} /><h3>{searchQuery ? '没有找到相关作品' : section === 'saved' ? '还没有收藏' : projectId ? '这个项目还没有作品' : '还没有作品'}</h3><button className="quiet-command" onClick={() => { if (searchQuery) setSearch(''); else { go('/imagine'); setFocusToken(value => value + 1); } }}>{searchQuery ? '清除搜索' : '开始创作'}</button></div> : <Gallery items={items} scrollRef={mainRef} selecting={selecting} selected={selected.map(item => item.id)} online={online && busy === 0} onPick={item => selecting ? select(item) : openViewer(item.id)} onSelect={select} onSave={save} onDelete={item => remove([item])} hasMore={!!mediaQuery.hasNextPage} fetching={mediaQuery.isFetchingNextPage} error={mediaQuery.isError} onMore={() => { if (!mediaQuery.isFetchingNextPage) void mediaQuery.fetchNextPage(); }} onRetry={() => void mediaQuery.refetch()} />}
+          {mediaQuery.isPending ? <div className="loading-state" role="status"><LoaderCircle className="spin" size={24} />正在加载作品…</div> : !items.length && !(isCreate && pending.length) && !mediaQuery.isError ? <div className="empty-state"><ImageIcon size={34} strokeWidth={1.2} /><h3>{searchQuery ? '没有找到相关作品' : section === 'saved' ? '还没有收藏' : projectId ? '这个项目还没有作品' : '还没有作品'}</h3><button className="quiet-command" onClick={() => { if (searchQuery) setSearch(''); else { go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1); } }}>{searchQuery ? '清除搜索' : '开始创作'}</button></div> : <Gallery items={items} pending={isCreate ? pending : []} onCancelJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onCancel(job); }} onRetryJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onRetry(job); }} scrollRef={mainRef} selecting={selecting} selected={selected.map(item => item.id)} online={online && busy === 0} onPick={item => selecting ? select(item) : openViewer(item.id)} onSelect={select} onSave={save} onDelete={item => remove([item])} hasMore={!!mediaQuery.hasNextPage} fetching={mediaQuery.isFetchingNextPage} error={mediaQuery.isError} onMore={() => { if (!mediaQuery.isFetchingNextPage) void mediaQuery.fetchNextPage(); }} onRetry={() => void mediaQuery.refetch()} />}
         </>}
       </section>}
     </main>
     {selecting && <div className={`batch-toolbar ${isCreate ? '' : 'batch-toolbar-library'}`}><span>已选 {selected.length} 件</span><Tool label="收藏所选作品" disabled={!selected.length || !online || busy > 0} onClick={() => void run('bulk-save', async () => { for (const item of selected) await internalClient.patchAsset(item.id, true); }, '已加入收藏')}><Bookmark size={18} /></Tool><Options label="将所选作品加入项目" trigger={<FolderPlus size={18} />}><div className="option-heading">项目</div>{projects.map(project => <Choice key={project.id} active={false} onClick={() => void run('bulk-project', async () => { if (!selected.length) return; await internalClient.addCollectionAssets(project.id, selected.map(item => item.id)); setSelected([]); setSelecting(false); }, '已加入项目')}>{project.name}</Choice>)}</Options><Tool label="删除所选作品" disabled={!selected.length || !online || busy > 0} onClick={() => remove(selected)}><Trash2 size={18} /></Tool><Tool label="关闭多选" onClick={() => { setSelected([]); setSelecting(false); }}><X size={18} /></Tool></div>}
-    {viewer && !viewerQuery.isError && <Viewer item={viewer} index={Math.max(0, items.findIndex(item => item.id === viewer.id))} total={Math.max(1, items.length)} projects={projects} online={online} busy={busy > 0} providerName={catalog.providers.data?.find(provider => provider.id === viewer.providerId)?.name ?? '本地上传'} canEdit={models.some(item => item.capabilities.operations.includes('image.edit'))} canMask={models.some(item => item.capabilities.supportsMask)} canVideo={models.some(item => item.capabilities.operations.includes('video.image_to_video'))} onClose={closeViewer} onMove={delta => { const index = items.findIndex(item => item.id === viewer.id); const next = items[(Math.max(0, index) + delta + items.length) % items.length]; if (next) openViewer(next.id); }} onSave={() => save(viewer)} onDelete={() => remove([viewer])} onContinue={(intent, nextPrompt) => void continueWith(viewer, intent, nextPrompt)} onMask={() => { closeViewer(); void navigate(`/edit/${viewer.id}`); }} onProject={(id, included) => void run('project-membership', async () => { if (included) await internalClient.addCollectionAssets(id, [viewer.id]); else await internalClient.removeCollectionAsset(id, viewer.id); }, included ? '已加入项目' : '已移出项目')} onNotice={notify} />}
+    {viewer && !viewerQuery.isError && <Viewer item={viewer} index={Math.max(0, items.findIndex(item => item.id === viewer.id))} total={Math.max(1, items.length)} projects={projects} online={online} busy={busy > 0} providerName={catalog.providers.data?.find(provider => provider.id === viewer.providerId)?.name ?? '本地上传'} canEdit={models.some(item => item.capabilities.operations.includes('image.edit'))} canMask={models.some(item => item.capabilities.supportsMask)} canVideo={models.some(item => item.capabilities.operations.includes('video.image_to_video'))} onClose={closeViewer} onMove={delta => { const index = items.findIndex(item => item.id === viewer.id); const next = items[(Math.max(0, index) + delta + items.length) % items.length]; if (next) openViewer(next.id); }} onSave={() => save(viewer)} onDelete={() => remove([viewer])} onContinue={(intent, nextPrompt) => void continueWith(viewer, intent, nextPrompt)} onMask={() => { closeViewer(); void navigate(`/edit/${viewer.id}${projectId ? `?project=${encodeURIComponent(projectId)}` : ''}`); }} onProject={(id, included) => void run('project-membership', async () => { if (included) await internalClient.addCollectionAssets(id, [viewer.id]); else await internalClient.removeCollectionAsset(id, viewer.id); }, included ? '已加入项目' : '已移出项目')} onNotice={notify} />}
     {viewerId && (viewerQuery.isError || (!viewer && !online)) && <Panel open title="作品不可用" onClose={closeViewer}><p className="error-state">作品已删除或暂时无法加载。</p></Panel>}
-    {editorId && <Suspense fallback={<Panel open title="局部编辑" onClose={() => go('/imagine')}><p className="loading-state">正在加载编辑器…</p></Panel>}><Editor assetId={editorId} onClose={() => go('/imagine')} onApply={(source: AssetDto, mask: AssetDto) => { clearInputs(); setMode('image'); setReferences([{ asset: source, role: 'source' }, { asset: mask, role: 'mask' }]); go('/imagine'); setFocusToken(value => value + 1); void refresh(); }} /></Suspense>}
+    {editorId && <Suspense fallback={<Panel open title="局部编辑" onClose={() => go(projectId ? `/projects/${projectId}` : '/imagine')}><p className="loading-state">正在加载编辑器…</p></Panel>}><Editor assetId={editorId} onClose={() => go(projectId ? `/projects/${projectId}` : '/imagine')} onApply={(source: AssetDto, mask: AssetDto) => { clearInputs(); setMode('image'); setReferences([{ asset: source, role: 'source' }, { asset: mask, role: 'mask' }]); go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1); void refresh(); }} /></Suspense>}
     <Panel title="Imagine" open={menuOpen} onClose={() => setMenuOpen(false)} className="navigation-panel"><nav aria-label="手机导航">{NAVIGATION.map(({ path, label, icon: Icon }) => <button type="button" key={path} aria-current={location.pathname.startsWith(path) ? 'page' : undefined} onClick={() => go(path)}><Icon size={20} /><span>{label}</span></button>)}</nav><div className="mobile-project-list"><span className="muted-label">项目</span>{projects.map(project => <button key={project.id} onClick={() => go(`/projects/${project.id}`)}><Folder size={17} />{project.name}</button>)}</div></Panel>
+    {referencePicker && <ReferencePicker projectId={projectId} selectedIds={references.map(input => input.asset.id)} maximum={Math.max(0, (mode === 'video' && videoMode === 'first_frame' ? 1 : model?.capabilities.maxReferenceImages ?? 0) - references.length)} onPick={addLibraryReferences} onClose={() => setReferencePicker(false)} />}
     <Panel title="生成任务" open={taskOpen} onClose={() => setTaskOpen(false)} className="task-panel">{taskOpen && renderJobs}</Panel>
     <Panel title={projectEditor === 'new' ? '新建项目' : '重命名项目'} open={projectEditor !== null} onClose={() => setProjectEditor(null)} className="compact-panel"><form className="project-form" onSubmit={event => { event.preventDefault(); void submitProject(); }}><label>项目名称<input aria-label="项目名称" value={projectName} maxLength={120} onChange={event => setProjectName(event.target.value)} /></label><div><button type="button" className="quiet-command" disabled={busy > 0} onClick={() => setProjectEditor(null)}>取消</button><button className="primary-command" type="submit" disabled={!projectName.trim() || busy > 0}>保存项目</button></div></form></Panel>
     {confirmation && <Confirm title={confirmation.title} description={confirmation.description} busy={busy > 0} onClose={() => setConfirmation(null)} onConfirm={() => { const action = confirmation.action; setConfirmation(null); void run('delete', action, '删除成功'); }} />}

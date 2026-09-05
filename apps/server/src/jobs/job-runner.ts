@@ -6,7 +6,7 @@ import type {
   ProviderInput,
   SubmittedAsset,
 } from '@imagine/provider-contract';
-import type { JobStatus } from '@imagine/shared';
+import { providerGenerationRequest, type JobStatus } from '@imagine/shared';
 import PQueue from 'p-queue';
 
 import {
@@ -626,11 +626,12 @@ export class JobRunner {
         return;
       }
       const context = this.contextFor(claimed.job, registration, controller.signal, inputs);
-      await registration.adapter.validate(claimed.job.request, context);
+      const providerRequest = providerGenerationRequest(claimed.job.request);
+      await registration.adapter.validate(providerRequest, context);
       if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
         return;
       }
-      const result = await registration.adapter.submit(claimed.job.request, context);
+      const result = await registration.adapter.submit(providerRequest, context);
       if (!await this.isOperationActive(jobId, ['submitting'], controller)) {
         return;
       }

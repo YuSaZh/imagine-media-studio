@@ -6,6 +6,7 @@ import type { GenerationRequest } from '@imagine/shared';
 
 import type { AssetRecord } from '../database/assets.js';
 import { openStoredFile } from '../storage/path-safety.js';
+import type { PublicInputLinks } from '../security/public-input-links.js';
 
 export type ProviderInputLoaderErrorCode =
   | 'provider_input_changed'
@@ -30,6 +31,7 @@ export interface ProviderInputAssetLookup {
 }
 
 export interface ProviderInputLoaderOptions {
+  publicLinks?: PublicInputLinks;
   assets: ProviderInputAssetLookup;
   dataRoot: string;
   maxBytesPerFile: number;
@@ -78,12 +80,14 @@ async function readBounded(handle: FileHandle, maxBytes: number): Promise<Uint8A
 }
 
 export class ProviderInputLoader {
+  private readonly publicLinks: PublicInputLinks | undefined;
   private readonly assets: ProviderInputAssetLookup;
   private readonly dataRoot: string;
   private readonly maxBytesPerFile: number;
   private readonly maxTotalBytes: number;
 
   public constructor(options: ProviderInputLoaderOptions) {
+    this.publicLinks = options.publicLinks;
     assertPositiveLimit(options.maxBytesPerFile, 'maxBytesPerFile');
     assertPositiveLimit(options.maxTotalBytes, 'maxTotalBytes');
     if (options.maxBytesPerFile > options.maxTotalBytes) {
@@ -156,6 +160,7 @@ export class ProviderInputLoader {
           role: input.role,
           mimeType: asset.mimeType,
           bytes,
+          ...(this.publicLinks ? { publicUrl: this.publicLinks.create(asset) } : {}),
           ...(filename === undefined ? {} : { filename }),
           parentAssetId: asset.parentAssetId,
           ...(asset.width === null ? {} : { width: asset.width }),
