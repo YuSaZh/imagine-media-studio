@@ -130,12 +130,14 @@ test('reference upload, canvas mask and server-backed edit submission', async ({
   await page.getByRole('button', { name: '应用蒙版' }).click();
   await expect(page.locator('.mask-workspace')).toHaveCount(0);
   await expect(page.locator('.reference')).toHaveCount(2);
-  await page.getByLabel('创作描述', { exact: true }).fill('edit masked coast');
+  const prompt = `edit masked coast ${randomUUID()}`;
+  await page.getByLabel('创作描述', { exact: true }).fill(prompt);
   const response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
   await page.getByRole('button', { name: '开始生成', exact: true }).click();
   const result = await response;
   expect(result.status()).toBe(202);
-  const { job } = await result.json();
+  const job = (await (await request.get('/internal/jobs?limit=100')).json()).items.find((item: { prompt: string }) => item.prompt === prompt);
+  expect(job).toBeDefined();
   const detail = await (await request.get(`/internal/jobs/${job.id}`)).json();
   expect(detail.job.request.operation).toBe('image.edit');
   expect(detail.job.request.inputs.map((input: { role: string }) => input.role).sort()).toEqual(['mask', 'source']);
@@ -231,6 +233,7 @@ test('custom generation parameters reach the job request from the bottom compose
     await page.getByLabel('分辨率', { exact: true }).selectOption('custom');
     await page.getByLabel('像素宽度', { exact: true }).fill('1920');
     await page.getByLabel('像素高度', { exact: true }).fill('1080');
+    await expect(page.getByLabel('画幅', { exact: true })).toHaveValue('16:9');
     await page.getByLabel('生成数量', { exact: true }).selectOption('2');
     await page.getByLabel('质量', { exact: true }).selectOption('high');
     await page.getByLabel('输出格式', { exact: true }).selectOption('jpeg');

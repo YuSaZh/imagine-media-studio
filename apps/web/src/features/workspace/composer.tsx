@@ -85,6 +85,13 @@ export function Composer(props: ComposerProps) {
     });
   }, [model]);
   useEffect(() => { setExtra({}); }, [model?.key]);
+  useEffect(() => {
+    if (resolution !== 'custom' || !Number.isInteger(customWidth) || !Number.isInteger(customHeight) || customWidth < 1 || customHeight < 1) return;
+    let divisor = customWidth;
+    let remainder = customHeight;
+    while (remainder) [divisor, remainder] = [remainder, divisor % remainder];
+    setRatio(`${customWidth / divisor}:${customHeight / divisor}`);
+  }, [customWidth, customHeight, resolution]);
   useEffect(() => { if (props.focusToken) textareaRef.current?.focus(); }, [props.focusToken]);
   useEffect(() => {
     const element = composerRef.current;
