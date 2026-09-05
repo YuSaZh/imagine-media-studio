@@ -1,3 +1,4 @@
+import { createBrowserId } from '../../../browser-id.js';
 import type {
   AcquiredImage,
   AcquisitionRejection,
@@ -76,7 +77,7 @@ export function acquireImageFiles(
   const accepted: AcquiredImage[] = [];
   const rejected: AcquisitionRejection[] = [];
   const fingerprints = new Set(options.existingFingerprints ?? []);
-  const createId = options.createId ?? (() => globalThis.crypto.randomUUID());
+  const createId = options.createId ?? createBrowserId;
   const allowedMimeTypes = new Set(
     options.allowedMimeTypes?.map((mimeType) => mimeType.trim().toLowerCase()) ??
       SUPPORTED_REFERENCE_MIME_TYPES,

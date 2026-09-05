@@ -1,4 +1,5 @@
 import { internalClient } from '../../../api/internal-client.js';
+import { createBrowserId } from '../../../browser-id.js';
 import type { ImageAssetInputDescriptor, ReferenceUploadRole } from '../model/types.js';
 
 export async function uploadReferenceImage(
@@ -13,7 +14,7 @@ export async function uploadReferenceImage(
     await Promise.resolve();
     signal.throwIfAborted();
     return {
-      assetId: `fixture-${role}-${globalThis.crypto.randomUUID()}`,
+      assetId: `fixture-${role}-${createBrowserId()}`,
       inputDescriptor: preparedDescriptor,
     };
   }

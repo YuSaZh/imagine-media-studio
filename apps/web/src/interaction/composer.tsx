@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createBrowserId } from '../browser-id';
 import { ArrowUp, Check, ChevronDown, ImagePlus, Image as ImageIcon, Plus, Ratio, SlidersHorizontal, Video, X } from 'lucide-react';
 import { MODEL_OPTIONS, RATIOS, type MediaKind, type Study } from './data';
 import { Choice, Options, Tool } from './ui';
@@ -61,7 +62,7 @@ export function Composer({ prompt, setPrompt, mode, setMode, references, setRefe
     if (accepted.length + references.length > model.references) { setError(`当前模型最多接受 ${model.references} 张参考图。`); return; }
     setReferences([...references, ...accepted.map(file => {
       const src = URL.createObjectURL(file);
-      return { id: crypto.randomUUID(), title: file.name, prompt: '', src, kind: 'image' as const, ratio: '1:1', model: '上传', projectId: null, saved: false, mimeType: file.type };
+      return { id: createBrowserId(), title: file.name, prompt: '', src, kind: 'image' as const, ratio: '1:1', model: '上传', projectId: null, saved: false, mimeType: file.type };
     })]);
   };
   const submit = () => {

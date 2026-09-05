@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createBrowserId } from '../browser-id';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { ArrowUpRight, Bookmark, Check, CheckCheck, Clock3, Copy, Folder, FolderPlus, Grid2X2, Image as ImageIcon, Layers3, LoaderCircle, Menu, MoreHorizontal, Pencil, Play, Plus, Search, Settings2, Sparkles, Trash2, Undo2, X } from 'lucide-react';
 import { Composer, type Creation } from './composer';
@@ -97,7 +98,7 @@ function App() {
     setNotice({ text: `已删除 ${removed.length} 件作品`, undo: () => { setStudies(items => [...removed, ...items]); showNotice('已恢复作品'); } });
   };
   const create = (creation: Creation) => {
-    const id = crypto.randomUUID();
+    const id = createBrowserId();
     const source = creation.references[0];
     const destination = projectId;
     const job: DemoJob = { id, prompt: creation.prompt, kind: creation.kind, model: creation.model, count: creation.count, status: 'queued' };
@@ -140,7 +141,7 @@ function App() {
     const name = projectName.trim();
     if (!name) return;
     if (projectEditor === 'new') {
-      const project = { id: crypto.randomUUID(), name };
+      const project = { id: createBrowserId(), name };
       setProjects(items => [...items, project]); navigate('projects', project.id);
     } else if (projectEditor) setProjects(items => items.map(item => item.id === projectEditor.id ? { ...item, name } : item));
     setProjectEditor(null);

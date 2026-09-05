@@ -69,7 +69,7 @@ export default defineConfig({
         globIgnores: ['mock-media/**', 'screenshots/**'],
         globPatterns: ['**/*.{css,html,js,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/internal(?:\/|$)/],
+        navigateFallbackDenylist: [/^\/internal(?:\/|$)/, /^\/interaction\.html$/],
         runtimeCaching: [createDerivedMediaRuntimeCaching()],
       },
     }),

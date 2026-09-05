@@ -158,7 +158,9 @@ INTERACTION_BASE_URL=http://127.0.0.1:<本任务空闲端口> node apps/web/scri
 | architecture.webp | https://images.unsplash.com/photo-1486406146926-c627a92ad1ab |
 | coast-motion.mp4 | 使用上述 coast.webp 本地制作的六秒动画 |
 
-字体使用 Google Fonts 的 DM Sans 和 Noto Sans SC；图标使用仓库已有的 Lucide；弹层与 tooltip 使用仓库已有的 Radix。没有增加依赖或引入其他项目的页面代码。
+字体优先使用系统可用的 DM Sans、Noto Sans SC，缺少时使用浏览器字体回退；不再请求外部字体，以兼容正式服务的 CSP。图标使用仓库已有的 Lucide；弹层与 tooltip 使用仓库已有的 Radix。没有增加依赖或引入其他项目的页面代码。
+
+Docker 测试构建可以设置 `--build-arg INCLUDE_INTERACTION_PREVIEW=true`，在同一 Node 服务中额外提供 `/interaction.html`。默认构建不包含原型入口。PWA 的导航回退排除这个独立页面；普通 HTTP 测试地址上的本地标识使用 `getRandomValues` 回退。
 
 ## 11. 本轮验证
 
