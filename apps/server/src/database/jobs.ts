@@ -517,7 +517,8 @@ function statusUpdateValues(
 }
 
 export class JobRepository {
-  public constructor(private readonly database: AppDatabase) {}
+  public constructor(private readonly database: AppDatabase, private readonly owner?: () => string) {}
+  private scope(): SQL | undefined { return this.owner ? eq(jobs.ownerId, this.owner()) : undefined; }
 
   /**
    * Returns whether a retained Job still names any revision under an adapter
@@ -565,6 +566,11 @@ export class JobRepository {
     );
   }
 
+  public createBatch(request: GenerationRequest, count: number, adapterRef?: CustomAdapterRef | null): JobRecord[] {
+    if (!Number.isInteger(count) || count < 1 || count > MAX_GENERATION_COUNT) throw new RangeError('Invalid generation count');
+    return this.database.transaction(() => Array.from({ length: count }, () => this.createAtCurrent({ ...request, count: 1 }, adapterRef)));
+  }
+
   public createWithInputs(
     rawRequest: GenerationRequest,
     inputs: readonly CreateJobInput[],
@@ -590,7 +596,7 @@ export class JobRepository {
         const available = transaction
           .select({ id: assets.id })
           .from(assets)
-          .where(and(inArray(assets.id, inputIds), isNull(assets.deletedAt)))
+          .where(and(inArray(assets.id, inputIds), isNull(assets.deletedAt), this.owner ? eq(assets.ownerId, this.owner()) : undefined))
           .all();
         if (available.length !== inputIds.length) {
           throw new JobRepositoryError(
@@ -655,6 +661,7 @@ export class JobRepository {
         .insert(jobs)
         .values({
           id,
+          ownerId: this.owner?.() ?? 'admin',
           operation: request.operation,
           providerId: request.providerId,
           modelId: request.modelId,
@@ -722,13 +729,14 @@ export class JobRepository {
     const condition = includeDeleted
       ? eq(jobs.id, id)
       : and(eq(jobs.id, id), isNull(jobs.deletedAt));
-    const row = this.database.select().from(jobs).where(condition).get();
+    const row = this.database.select().from(jobs).where(and(condition, this.scope())).get();
     return row ? mapJob(row) : null;
   }
 
   public page(request: JobPageRequest = {}): CursorPage<JobRecord> {
     const page = normalizePageRequest(request);
     const conditions: SQL[] = [];
+    const scope = this.scope(); if (scope) conditions.push(scope);
     if (!request.includeDeleted) conditions.push(isNull(jobs.deletedAt));
     if (page.cursor) conditions.push(jobCursorCondition(page.cursor));
     if (request.status !== undefined) conditions.push(eq(jobs.status, request.status));
@@ -1212,6 +1220,7 @@ export class JobRepository {
   }
 
   public retry(id: string): JobRecord | null {
+    if (!this.get(id)) return null;
     return this.database.transaction((transaction) => {
       const source = transaction
         .select()
@@ -1258,6 +1267,7 @@ export class JobRepository {
         .insert(jobs)
         .values({
           id: retryId,
+          ownerId: source.ownerId,
           operation: source.operation,
           providerId: source.providerId,
           modelId: source.modelId,
@@ -1449,6 +1459,7 @@ export class JobRepository {
         let assetId: string;
         if (existing) {
           if (
+            existing.ownerId !== current.ownerId ||
             existing.jobId !== jobId ||
             existing.parentAssetId !== parentAssetId ||
             existing.deletedAt !== null ||
@@ -1473,6 +1484,7 @@ export class JobRepository {
             .insert(assets)
             .values({
               id: assetId,
+              ownerId: current.ownerId,
               jobId,
               parentAssetId,
               type: input.type,
@@ -1525,7 +1537,7 @@ export class JobRepository {
           );
         }
         assetIds.push(assetId);
-        if (request.collectionId && transaction.select({ id: collections.id }).from(collections).where(eq(collections.id, request.collectionId)).get()) {
+        if (request.collectionId && transaction.select({ id: collections.id }).from(collections).where(and(eq(collections.id, request.collectionId), eq(collections.ownerId, current.ownerId))).get()) {
           transaction.insert(collectionAssets).values({ collectionId: request.collectionId, assetId, createdAt: now }).onConflictDoNothing().run();
           transaction.update(collections).set({ updatedAt: now }).where(eq(collections.id, request.collectionId)).run();
         }
@@ -1596,6 +1608,7 @@ export class JobRepository {
   }
 
   public softDelete(id: string): boolean {
+    if (!this.get(id)) return false;
     return this.database.transaction((transaction) => {
       const now = new Date();
       const changed = transaction

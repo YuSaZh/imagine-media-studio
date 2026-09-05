@@ -6,6 +6,8 @@ set -euo pipefail
 : "${SMOKE_TASK_ROOT:?SMOKE_TASK_ROOT must be set}"
 : "${IMAGINE_MEDIA_HOST_PORT:?IMAGINE_MEDIA_HOST_PORT must be set}"
 : "${APP_PASSWORD:?APP_PASSWORD must be set}"
+export ADMIN_USERNAME=studio
+export ADMIN_PASSWORD="$APP_PASSWORD"
 
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 smoke_task_root=$(realpath -e -- "$SMOKE_TASK_ROOT")

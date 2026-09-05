@@ -109,7 +109,7 @@ async function preQueueMigrations(): Promise<string> {
     readonly version: number;
   };
   const migrations = Object.fromEntries(
-    Object.entries(currentManifest.migrations).filter(([name]) => name !== '0007_pr8_media_repair_queue.sql'),
+    Object.entries(currentManifest.migrations).filter(([name]) => name < '0007'),
   );
   await writeFile(
     join(destination, 'manifest.json'),

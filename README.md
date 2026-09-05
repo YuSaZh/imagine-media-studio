@@ -47,13 +47,34 @@ root `package.json` as the release version gate; the server and web app manifest
 track that product version, while private internal library workspaces retain
 their independent placeholder versions.
 
+## Accounts and Preferences
+
+The initial administrator login is `admin` / `admin`. Set `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` before the first start to override these defaults. Existing
+assets, jobs, projects and preferences migrate to this administrator. Credentials
+are stored as salted password hashes in SQLite; subsequent restarts never reset
+them from the environment. `APP_PASSWORD` no longer controls production login.
+
+In Settings -> Preferences, users can change their username and password.
+Administrators can create or disable users and configure the public HTTPS domain.
+Media, jobs, projects, preferences and remembered model parameters are private to
+each account. Providers and model catalogs are shared and administrator-managed.
+Changing credentials or disabling an account revokes its existing sessions.
+
+Generation batches create independent jobs with a count of one for each upstream
+request. The local runner limits concurrent submissions to two per media type.
+Model parameters are remembered when submitting, independently for each account
+and model. Video aspect ratio and resolution can be selected together.
+
 ## Custom Provider usage
 
-Set `PUBLIC_BASE_URL` to this application's externally reachable URL to send
+Set the public domain in Settings -> Preferences, or use `PUBLIC_BASE_URL` as the
+initial fallback, to send
 reference images as signed, 15-minute links on xAI image/video and OpenAI
 Responses APIs. The links serve only the selected image, expire automatically,
 stop working when the asset is deleted, and are excluded from browser/PWA caches.
-Without this setting, references use embedded data or multipart uploads.
+Saved preferences take effect without restarting. Without this setting,
+references use embedded data or multipart uploads.
 Use an HTTPS public URL for xAI image fetching. When terminating HTTPS at a
 trusted reverse proxy, set `TRUST_PROXY_HOPS=1` and restrict the application port
 to that proxy (for example, a loopback Docker port binding). The proxy must set

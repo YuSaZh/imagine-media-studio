@@ -11,6 +11,7 @@ import { useRefreshWorkspace, useWorkspaceCatalog } from './queries';
 import { ModelEditor, ProviderEditor } from './provider-editor';
 import { Choice, Confirm, Options, Tool } from './ui';
 import { ModelManagement } from './model-management';
+import { AccountSettings, useAccount } from './account-settings';
 
 const AdapterController = lazy(() => import('../settings/controllers/adapter-controller').then(module => ({ default: module.CustomAdapterWorkspaceContainer })));
 
@@ -23,8 +24,9 @@ function exportConnection(provider: ProviderDto, models: readonly ModelDto[]) {
 }
 
 export function Settings({ online }: { online: boolean }) {
+  const account = useAccount();
   const path = useLocation().pathname;
-  const section = path.endsWith('/models') ? 'models' : path.endsWith('/providers') ? 'providers' : path.endsWith('/storage') ? 'storage' : path.endsWith('/pwa') ? 'pwa' : 'general';
+  const section = account.data?.user?.role === 'user' && !path.endsWith('/pwa') ? 'general' : path.endsWith('/models') ? 'models' : path.endsWith('/providers') ? 'providers' : path.endsWith('/storage') ? 'storage' : path.endsWith('/pwa') ? 'pwa' : 'general';
   const catalog = useWorkspaceCatalog();
   const refresh = useRefreshWorkspace();
   const [editor, setEditor] = useState<ProviderDto | 'new' | null>(null);
@@ -53,7 +55,7 @@ export function Settings({ online }: { online: boolean }) {
   };
   const sections = [{ key: 'general', path: '/settings', label: '偏好', icon: Settings2 }, { key: 'providers', path: '/settings/providers', label: '连接', icon: PlugZap }, { key: 'models', path: '/settings/models', label: '模型', icon: Code2 }, { key: 'storage', path: '/settings/storage', label: '数据', icon: Database }, { key: 'pwa', path: '/settings/pwa', label: '应用', icon: Smartphone }];
 
-  return <div className="workspace-settings"><nav className="workspace-settings-nav" aria-label="设置分类">{sections.map(item => <NavLink end key={item.key} to={item.path}><item.icon size={17} />{item.label}</NavLink>)}</nav><div className="workspace-settings-body">
+  return <div className="workspace-settings"><nav className="workspace-settings-nav" aria-label="设置分类">{sections.filter(item => account.data?.user?.role !== 'user' || ['general', 'pwa'].includes(item.key)).map(item => <NavLink end key={item.key} to={item.path}><item.icon size={17} />{item.label}</NavLink>)}</nav><div className="workspace-settings-body">
     <div className="settings-page-heading"><h1>{sections.find(item => item.key === section)?.label}</h1>{section === 'providers' && <div><Tool label="导入连接" disabled={!online || busy} onClick={() => importRef.current?.click()}><Upload size={18} /></Tool><button className="primary-command" disabled={!online || busy} onClick={() => setEditor('new')}><Plus size={16} />添加连接</button></div>}</div>
     {feedback && <p className={feedback.error ? 'error-state' : 'success-state'} role={feedback.error ? 'alert' : 'status'}>{feedback.message}</p>}
     {section === 'providers' && <>
@@ -94,6 +96,7 @@ function Preferences({ online }: { online: boolean }) {
   const values = readGeneralSettings(query.data?.settings);
   const disabled = !online || query.isPending || patch.isPending;
   return <div className="preferences">
+    <AccountSettings online={online} />
     {(query.isError || patch.isError) && <p className="error-state" role="alert">设置保存或读取失败，请重试。</p>}
     <label className="setting-line"><span>默认创作类型</span><select aria-label="默认创作类型" disabled={disabled} value={values.defaultMode} onChange={event => patch.mutate({ 'composer.default_mode': event.target.value })}><option value="image">图片</option><option value="video">视频</option></select></label>
     <label className="setting-line"><span>提交后清空提示词</span><input type="checkbox" aria-label="提交后清空提示词" checked={values.clearPromptAfterSubmit} disabled={disabled} onChange={event => patch.mutate({ 'composer.clear_prompt_after_submit': event.target.checked })} /></label>

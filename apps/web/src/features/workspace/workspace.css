@@ -109,7 +109,10 @@ svg { flex-shrink: 0; }
 .study-caption > span { margin-top: 3px; font-size: 9px; opacity: .75; }
 .study-card:hover .study-caption, .study-card:focus-within .study-caption { opacity: 1; }
 .card-bookmark, .card-more { position: absolute; top: 9px; right: 9px; display: grid; place-items: center; width: 30px; height: 30px; min-height: 30px; padding: 0; color: #fff; border-radius: 50%; background: #20352b44; backdrop-filter: blur(9px); opacity: 0; transition: opacity 140ms; }
-.card-bookmark { right: 45px; }
+.card-bookmark { right: 81px; }
+.card-reference { position: absolute; top: 9px; right: 45px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; color: #fff; border-radius: 50%; background: #20352b88; opacity: 0; }
+.study-card:hover .card-reference, .study-card:focus-within .card-reference { opacity: 1; }
+.pending-study-delete { right: 48px !important; }
 .card-bookmark.is-saved { opacity: 1; background: transparent; color: #fff; filter: drop-shadow(0 1px 4px #0006); }
 .study-card:hover .card-bookmark, .study-card:hover .card-more, .study-card:focus-within .card-bookmark, .study-card:focus-within .card-more { opacity: 1; }
 .card-more:hover { background: #20352b99; }
@@ -349,7 +352,25 @@ svg { flex-shrink: 0; }
 .success-state { color: #35704a; }
 .offline-banner { padding: 12px 26px; color: #78512d; background: #f8efdf; font-size: 12px; }
 .feedback-toast.is-error { color: #a13e3e; border-color: #ecd0d0; }
-.video-input-choices { width: max-content; margin: 0 6px 12px; }
+.video-input-row { flex-shrink: 0; }
+.video-input-choices { width: max-content; margin: 0; }
+.creation-controls .model-trigger { min-width: 0; max-width: 240px; }
+.model-trigger > span:not(.model-dot) { overflow: hidden; text-overflow: ellipsis; }
+.account-form { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line, #e5e7e6); }
+.account-form h2 { font-size: 16px; margin-bottom: 12px; }
+.account-form .setting-line > span { min-width: 0; overflow-wrap: anywhere; }
+.preferences .setting-line input:not([type='checkbox']) { width: 260px; max-width: 60%; }
+.auth-gate-form > label > input { width: 100%; height: 46px; padding: 0 14px; border: 1px solid #d8e1da; background: white; border-radius: 7px; font-size: 16px; }
+@media (max-width: 760px) {
+  .creation-composer { display: flex; flex-direction: column; }
+  .creation-controls { flex-wrap: wrap; }
+  .video-input-row { order: 10; flex-basis: 100%; margin: 3px 5px 0; }
+  .mobile-model-status { order: 4; }
+  .generation-settings-trigger { margin-left: auto; }
+  .composer-spacer { display: none; }
+  .card-bookmark, .card-bookmark:not(.is-saved) { display: grid; right: 81px; top: 9px; width: 30px; height: 30px; }
+  .card-reference, .card-more { display: grid; opacity: 1; }
+}
 .upload-retry { position: absolute; inset: 15px 20px 20px; color: white; background: #723b3bcc; border-radius: 50%; padding: 0; }
 .upload-error img { opacity: .5; }
 .project-cover:has(img) > svg { display: none; }

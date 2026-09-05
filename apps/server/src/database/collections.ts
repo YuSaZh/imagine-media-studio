@@ -40,7 +40,8 @@ function collectionCursorCondition(cursor: { timestampMs: number; id: string }):
 }
 
 export class CollectionRepository {
-  public constructor(private readonly database: AppDatabase) {}
+  public constructor(private readonly database: AppDatabase, private readonly owner?: () => string) {}
+  private scope(): SQL | undefined { return this.owner ? eq(collections.ownerId, this.owner()) : undefined; }
 
   private map(row: typeof collections.$inferSelect): CollectionRecord {
     const itemCount = this.database
@@ -53,7 +54,7 @@ export class CollectionRepository {
   }
 
   public get(id: string): CollectionRecord | null {
-    const row = this.database.select().from(collections).where(eq(collections.id, id)).get();
+    const row = this.database.select().from(collections).where(and(eq(collections.id, id), this.scope())).get();
     return row ? this.map(row) : null;
   }
 
@@ -62,7 +63,7 @@ export class CollectionRepository {
     const rows = this.database
       .select()
       .from(collections)
-      .where(page.cursor ? collectionCursorCondition(page.cursor) : undefined)
+      .where(and(this.scope(), page.cursor ? collectionCursorCondition(page.cursor) : undefined))
       .orderBy(desc(collections.updatedAt), desc(collections.id))
       .limit(page.limit + 1)
       .all()
@@ -77,7 +78,7 @@ export class CollectionRepository {
     const id = randomUUID();
     const now = new Date();
     this.database.transaction((transaction) => {
-      transaction.insert(collections).values({ id, name, createdAt: now, updatedAt: now }).run();
+      transaction.insert(collections).values({ id, ownerId: this.owner?.() ?? 'admin', name, createdAt: now, updatedAt: now }).run();
       transaction
         .insert(changeEvents)
         .values(
@@ -97,6 +98,7 @@ export class CollectionRepository {
   }
 
   public rename(id: string, name: string): CollectionRecord | null {
+    if (!this.get(id)) return null;
     const updatedAt = new Date();
     const changed = this.database.transaction((transaction) => {
       const result = transaction
@@ -123,6 +125,7 @@ export class CollectionRepository {
   }
 
   public delete(id: string): boolean {
+    if (!this.get(id)) return false;
     return this.database.transaction((transaction) => {
       const result = transaction.delete(collections).where(eq(collections.id, id)).run();
       if (result.changes === 0) return false;
@@ -142,6 +145,7 @@ export class CollectionRepository {
   }
 
   public addAssets(collectionId: string, assetIds: readonly string[]): number {
+    if (!this.get(collectionId)) throw new CollectionRepositoryError('collection_not_found', 'Collection not found.');
     const uniqueAssetIds = [...new Set(assetIds)];
     if (uniqueAssetIds.length === 0) return 0;
     return this.database.transaction((transaction) => {
@@ -156,7 +160,7 @@ export class CollectionRepository {
       const activeAssets = transaction
         .select({ id: assets.id })
         .from(assets)
-        .where(and(inArray(assets.id, uniqueAssetIds), isNull(assets.deletedAt)))
+        .where(and(inArray(assets.id, uniqueAssetIds), isNull(assets.deletedAt), this.owner ? eq(assets.ownerId, this.owner()) : undefined))
         .all();
       if (activeAssets.length !== uniqueAssetIds.length) {
         throw new CollectionRepositoryError('asset_not_found', 'One or more assets were not found.');
@@ -188,6 +192,7 @@ export class CollectionRepository {
   }
 
   public removeAsset(collectionId: string, assetId: string): boolean {
+    if (!this.get(collectionId)) return false;
     return this.database.transaction((transaction) => {
       const removed = transaction
         .delete(collectionAssets)

@@ -109,19 +109,22 @@ function assetCursorCondition(cursor: { timestampMs: number; id: string }): SQL 
 }
 
 export class AssetRepository {
-  public constructor(private readonly database: AppDatabase) {}
+  public constructor(private readonly database: AppDatabase, private readonly owner?: () => string) {}
+
+  private scope(): SQL | undefined { return this.owner ? eq(assets.ownerId, this.owner()) : undefined; }
 
   public get(id: string, includeDeleted = false): AssetRecord | null {
     const condition = includeDeleted
       ? eq(assets.id, id)
       : and(eq(assets.id, id), isNull(assets.deletedAt));
-    const row = this.database.select().from(assets).where(condition).get();
+    const row = this.database.select().from(assets).where(and(condition, this.scope())).get();
     return row ? mapAssetRow(row) : null;
   }
 
   public page(request: AssetPageRequest = {}): CursorPage<AssetRecord> {
     const page = normalizePageRequest(request);
     const conditions: SQL[] = [];
+    const scope = this.scope(); if (scope) conditions.push(scope);
     if (!request.includeDeleted) conditions.push(isNull(assets.deletedAt));
     if (page.cursor) conditions.push(assetCursorCondition(page.cursor));
     if (request.type !== undefined) conditions.push(eq(assets.type, request.type));
@@ -173,6 +176,7 @@ export class AssetRepository {
   }
 
   public create(input: CreateAssetInput): AssetRecord {
+    if (input.parentAssetId && !this.get(input.parentAssetId)) throw new Error('Parent asset not found.');
     const id = randomUUID();
     const now = new Date();
     return this.database.transaction((transaction) => {
@@ -180,6 +184,7 @@ export class AssetRepository {
         .insert(assets)
         .values({
           id,
+          ownerId: this.owner?.() ?? (input.jobId ? this.database.select({ ownerId: jobs.ownerId }).from(jobs).where(eq(jobs.id, input.jobId)).get()?.ownerId : undefined) ?? 'admin',
           jobId: input.jobId ?? null,
           parentAssetId: input.parentAssetId ?? null,
           type: input.type,
@@ -228,6 +233,7 @@ export class AssetRepository {
   }
 
   public setFavorite(id: string, favorite: boolean): AssetRecord | null {
+    if (!this.get(id)) return null;
     return this.database.transaction((transaction) => {
       const changed = transaction
         .update(assets)
@@ -252,6 +258,7 @@ export class AssetRepository {
   }
 
   public updateDerivatives(id: string, input: UpdateAssetDerivativesInput): AssetRecord | null {
+    if (!this.get(id)) return null;
     const changes: Partial<typeof assets.$inferInsert> = {};
     if ('thumbnailPath' in input) changes.thumbnailPath = input.thumbnailPath ?? null;
     if ('posterPath' in input) changes.posterPath = input.posterPath ?? null;
@@ -284,6 +291,7 @@ export class AssetRepository {
   }
 
   public softDelete(id: string): boolean {
+    if (!this.get(id)) return false;
     return this.database.transaction((transaction) => {
       const deletedAt = new Date();
       const changed = transaction

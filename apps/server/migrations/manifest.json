@@ -8,6 +8,7 @@
     "0004_pr6_custom_adapters.sql": "a316770dce4904aecd376e1be0bf4c2923a7870aeb96ca25f1a2a0281cf96799",
     "0005_pr6_trusted_adapter_tombstones.sql": "153fbc963704dc4802332c05ab0ec20497a38a56193537d15721945d0b960bd6",
     "0006_pr8_migration_checksums.sql": "7a7708311760cff8e8ba6040d9aeb062e24e67411e1908fa53e8eeda1b47a1d5",
-    "0007_pr8_media_repair_queue.sql": "296fd6f959c8029aabe8920018d7a10def1eda7cfed233d6ebd293be096e0f64"
+    "0007_pr8_media_repair_queue.sql": "296fd6f959c8029aabe8920018d7a10def1eda7cfed233d6ebd293be096e0f64",
+    "0008_accounts.sql": "d2dcf9672c2529dd6a6c955bcb48f0eb6a117d6b677c26eb887a742c68eae2f4"
   }
 }

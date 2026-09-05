@@ -180,7 +180,7 @@ export function generationRequest(input: Creation): GenerationRequest {
     const dimensions = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/.exec(resolution);
     if (!customSize || !dimensions || Number(dimensions[1]) > 16384 || Number(dimensions[2]) > 16384 || Number(dimensions[1]) * Number(dimensions[2]) > 100_000_000) throw new Error('分辨率须为有效像素尺寸，单边不超过 16384，总像素不超过 1 亿');
   }
-  if (input.count > model.capabilities.maxBatchCount || input.count < 1) throw new Error('生成数量超出模型限制');
+  if (input.count > 32 || input.count < 1 || !Number.isInteger(input.count)) throw new Error('生成数量应为 1 到 32');
   if (video && model.capabilities.durations.length && !model.capabilities.durations.includes(input.duration)) throw new Error('当前模型不支持所选时长');
   const durationRange = model.capabilities.durationRange;
   if (video && durationRange && (input.duration < durationRange.min || input.duration > durationRange.max)) throw new Error('视频时长超出模型范围');
@@ -193,11 +193,11 @@ export function generationRequest(input: Creation): GenerationRequest {
   return GenerationRequestSchema.parse({
     operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(),
     inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })),
-    ...(input.ratio && !resolution ? { aspectRatio: input.ratio } : {}),
+    ...(input.ratio && (video || !resolution) ? { aspectRatio: input.ratio } : {}),
     ...(resolution ? { resolution } : {}),
     ...(Object.keys(extra).length ? { extra } : {}),
     ...(quality !== undefined ? { quality } : {}),
-    count: video ? 1 : input.count,
+    count: input.count,
     ...(video && (model.capabilities.durations.length || durationRange) ? { durationSeconds: input.duration } : {}),
     ...(model.raw.capabilities.supportsNegativePrompt && input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),
     ...(model.raw.capabilities.supportsSeed && input.seed ? { seed } : {}),

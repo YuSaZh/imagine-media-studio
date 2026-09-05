@@ -18,7 +18,7 @@ export default async function globalSetup(): Promise<void> {
     const statusBody = await status.json() as { readonly required?: boolean };
     expect(statusBody.required).toBe(true);
 
-    const login = await context.post('/internal/auth/login', { data: { password: E2E_PASSWORD } });
+    const login = await context.post('/internal/auth/login', { data: { username: 'admin', password: E2E_PASSWORD } });
     expect(login.status()).toBe(200);
     await context.storageState({ path: E2E_STORAGE_STATE });
   } finally {

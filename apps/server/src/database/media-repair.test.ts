@@ -85,7 +85,7 @@ describe('media repair queue migration', () => {
   it('creates the bounded queue table, indexes, and the current migration entry', async () => {
     const { database } = await databaseFixture('imagine-media-repair-schema-');
     expect(database.sqlite.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({
-      version: '0007_pr8_media_repair_queue.sql',
+      version: '0008_accounts.sql',
     });
     const columns = database.sqlite
       .prepare("PRAGMA table_info('media_repair_queue')")

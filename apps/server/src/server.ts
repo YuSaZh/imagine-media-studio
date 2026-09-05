@@ -1,4 +1,8 @@
 import { existsSync } from 'node:fs';
+import { AccountAuth } from './security/account-auth.js';
+import { accountContext, requestOwner } from './security/account-context.js';
+import { AccountSettingsRepository } from './database/account-settings.js';
+import { registerAccountRoutes } from './routes/accounts.js';
 
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -304,8 +308,12 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const settings = new SettingsRepository(database.orm);
   const providerRepository = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
-  const inputResolver = new GenerationInputResolver(assets, models);
-  const publicLinks = options.config.publicBaseUrl ? new PublicInputLinks(options.config.appSecret, options.config.publicBaseUrl) : undefined;
+  const accounts = options.config.adminUsername === undefined ? undefined : new AccountAuth(database.sqlite, options.config.appSecret, options.config.adminUsername, options.config.adminPassword ?? 'admin');
+  const routeAssets = accounts ? new AssetRepository(database.orm, requestOwner) : assets;
+  const routeJobs = accounts ? new JobRepository(database.orm, requestOwner) : jobs;
+  const routeSettings = accounts ? new AccountSettingsRepository(database.orm, database.sqlite, settings, options.config.publicBaseUrl) : settings;
+  const inputResolver = new GenerationInputResolver(routeAssets, models);
+  const publicLinks = new PublicInputLinks(options.config.appSecret, () => routeSettings instanceof AccountSettingsRepository ? routeSettings.publicBaseUrl() : options.config.publicBaseUrl ?? '');
   const inputLoader = new ProviderInputLoader({
     ...(publicLinks ? { publicLinks } : {}),
     assets,
@@ -318,7 +326,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const broker = new EventBroker();
   const outbox = new OutboxPublisher(changeEvents, broker);
   const vault = new SecretVault(options.config.appSecret);
-  const passwordAuth = new PasswordAuth({
+  const passwordAuth = accounts ?? new PasswordAuth({
     appSecret: options.config.appSecret,
     password: options.config.appPassword,
   });
@@ -400,7 +408,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     maxImageBytes: options.config.maxImageUploadBytes,
     maxVideoBytes: options.config.maxVideoUploadBytes,
     paths: storage,
-    repository: mediaRepository,
+    repository: new AssetMediaRepositoryAdapter(routeAssets),
     videoProcessor,
   });
   const providerResultMedia = new AssetMediaService({
@@ -474,7 +482,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       },
     });
     app.addHook('onRequest', async (request, reply) => {
-      const pathname = new URL(request.url, 'http://localhost').pathname;
+      const pathname = request.routeOptions.url ?? new URL(request.url, 'http://localhost').pathname;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         const origin = request.headers.origin;
         const fetchSite = request.headers['sec-fetch-site'];
@@ -553,13 +561,25 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       }
       return payload;
     });
+    if (accounts) {
+      app.addHook('onRequest', (request, reply, done) => {
+        const user = accounts.user(request);
+        const path = request.routeOptions.url ?? new URL(request.url, 'http://localhost').pathname;
+        const adminOnly = /^\/internal\/(?:maintenance|adapters)(?:\/|$)/.test(path) ||
+          /^\/internal\/providers\/[^/]+\/adapter(?:\/|$)/.test(path) ||
+          (/^\/internal\/(?:providers|models)(?:\/|$)/.test(path) && !['GET', 'HEAD'].includes(request.method));
+        if (user && user.role !== 'admin' && adminOnly) { void reply.code(403).send({ error: 'admin_required' }); return; }
+        if (user) accountContext.run(user, done); else done();
+      });
+    }
 
     if (options.config.mockProviderEnabled) {
       const mockProvider = providerService.ensureMockProvider();
       if (mockProvider.enabled) await providerService.refreshModels('mock');
     }
     outbox.flush();
-    await registerAuthRoutes(app, passwordAuth);
+    if (accounts) await registerAccountRoutes(app, accounts);
+    else await registerAuthRoutes(app, passwordAuth);
     if (publicLinks) await registerPublicInputRoutes(app, { links: publicLinks, assets, dataRoot: storage.root });
     await registerMaintenanceRoutes(app, {
       authorization: {
@@ -586,24 +606,31 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       providers: providerService,
     });
     await registerResourceRoutes(app, {
-      assets,
-      collections,
-      jobs,
+      assets: routeAssets,
+      collections: accounts ? new CollectionRepository(database.orm, requestOwner) : collections,
+      jobs: routeJobs,
       inputResolver,
-      inputLoader,
+      inputLoader: new ProviderInputLoader({ assets: routeAssets, publicLinks, dataRoot: storage.root, maxBytesPerFile: options.config.providerInputMaxBytesPerFile, maxTotalBytes: options.config.providerInputMaxTotalBytes }),
       media: uploadMedia,
       models,
       outbox,
       providers: providerRegistry,
       runner,
-      settings,
+      settings: routeSettings,
       storage,
       maxUploadBytes: Math.max(
         options.config.maxImageUploadBytes,
         options.config.maxVideoUploadBytes,
       ),
     });
-    await registerEventRoutes(app, changeEvents, broker);
+    await registerEventRoutes(app, changeEvents, broker, accounts ? (request, event) => {
+      const user = accounts.user(request);
+      if (!user) return false;
+      const table = event.type.startsWith('asset.') ? 'assets' : event.type.startsWith('job.') ? 'jobs' : event.type.startsWith('collection.') ? 'collections' : null;
+      if (!table) return true;
+      const row = database.sqlite.prepare(`SELECT owner_id FROM ${table} WHERE id=?`).get(event.entityId) as { owner_id: string } | undefined;
+      return row?.owner_id === user.id;
+    } : undefined);
 
     if (existsSync(options.config.webDistDir)) {
       await app.register(fastifyStatic, {

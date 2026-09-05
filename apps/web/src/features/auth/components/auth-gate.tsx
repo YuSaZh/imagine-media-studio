@@ -106,6 +106,8 @@ export function subscribeToOnlineAuthRetry(retry: () => void): () => void {
 }
 
 interface AuthPromptProps {
+  username?: string;
+  onUsernameChange?: (username: string) => void;
   error: string | null;
   onPasswordChange: (password: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -114,6 +116,8 @@ interface AuthPromptProps {
 }
 
 export function AuthPrompt({
+  username = 'admin',
+  onUsernameChange,
   error,
   onPasswordChange,
   onSubmit,
@@ -127,6 +131,7 @@ export function AuthPrompt({
           <p className="auth-caption">受保护的工作区</p>
           <h2>登录 Imagine</h2>
         </div>
+        {onUsernameChange && <label><span>用户名</span><input name="username" autoComplete="username" required value={username} disabled={pending} maxLength={64} onChange={event => onUsernameChange(event.target.value)} /></label>}
         <label>
           <span>应用密码</span>
           <span className="auth-password-field">
@@ -190,6 +195,7 @@ export function AuthGate({
   const [offlineBootstrap, setOfflineBootstrap] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('admin');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
   const [publicAccessAcknowledged, setPublicAccessAcknowledged] = useState(false);
@@ -366,7 +372,7 @@ export function AuthGate({
     setLoginError(null);
     setLoginPending(true);
     try {
-      const response = await internalClient.login(password);
+      const response = await internalClient.login(password, username);
       if (!loginIsCurrent()) return;
       initialStatusRequestPending = false;
       initialStatusRequest = Promise.resolve(response);
@@ -426,6 +432,8 @@ export function AuthGate({
   }
   return (
     <AuthPrompt
+      username={username}
+      onUsernameChange={setUsername}
       key={loginError ?? 'login'}
       error={loginError}
       onPasswordChange={setPassword}

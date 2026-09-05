@@ -89,7 +89,7 @@ export function Workspace() {
   const jobs = jobQuery.data?.pages.flatMap(page => page.items) ?? [];
   const activeJobs = [...new Map(jobs.filter(job => ACTIVE_JOB_STATUSES.has(job.status)).map(job => [job.id, job])).values()];
   useEffect(() => { for (const job of activeJobs) trackedJobs.current.add(job.id); }, [activeJobs]);
-  const pending = [...optimisticStudies.filter(study => !projectId || study.collectionId === projectId), ...jobs.filter(job => (ACTIVE_JOB_STATUSES.has(job.status) || trackedJobs.current.has(job.id) && ['completed', 'failed', 'rejected', 'expired'].includes(job.status)) && (!projectId || job.request.collectionId === projectId) && (filter === 'all' || job.operation.startsWith(`${filter}.`)) && job.prompt.toLowerCase().includes(searchQuery.toLowerCase())).flatMap(job => jobStudies(job, items))];
+  const pending = [...optimisticStudies.filter(study => !projectId || study.collectionId === projectId), ...jobs.filter(job => (ACTIVE_JOB_STATUSES.has(job.status) || ['failed', 'rejected', 'expired'].includes(job.status) || trackedJobs.current.has(job.id) && job.status === 'completed') && (!projectId || job.request.collectionId === projectId) && (filter === 'all' || job.operation.startsWith(`${filter}.`)) && job.prompt.toLowerCase().includes(searchQuery.toLowerCase())).flatMap(job => jobStudies(job, items))];
   const currentViewerItem = items.find(item => item.id === viewerId);
   const viewerQuery = useQuery({ queryKey: [...internalQueryKeys.assets, 'detail', viewerId], queryFn: () => internalClient.getAsset(viewerId!), enabled: !!viewerId && online });
   const viewerJobId = viewerQuery.data?.asset.jobId ?? currentViewerItem?.job?.id;
@@ -173,6 +173,22 @@ export function Workspace() {
       go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1);
     });
   };
+  const useCardReference = async (item: MediaItem) => {
+    await run(`reference:${item.id}`, async () => {
+      let { asset } = await internalClient.getAsset(item.id);
+      if (asset.type === 'video') {
+        if (!asset.posterUrl) throw new Error('视频封面尚不可用');
+        const response = await fetch(asset.posterUrl, { credentials: 'same-origin' });
+        if (!response.ok) throw new Error('视频封面读取失败');
+        const blob = await response.blob();
+        asset = (await internalClient.uploadAsset(new File([blob], 'video-reference.jpg', { type: blob.type }), { role: 'reference' })).asset;
+      }
+      if (mode === 'video') setVideoMode('first_frame');
+      setReferences(current => mode === 'video' ? [{ asset, role: 'first_frame' }] : [...current.filter(input => input.asset.id !== asset.id), { asset, role: 'reference' }]);
+      go(projectId ? `/projects/${projectId}` : '/imagine');
+      setFocusToken(value => value + 1);
+    });
+  };
   const create = async (creation: Creation) => {
     if (submitting) return;
     setSubmitting(true);
@@ -180,7 +196,8 @@ export function Workspace() {
     await run('create', async () => {
       const request = { ...generationRequest(creation), ...(projectId ? { collectionId: projectId } : {}) };
       setOptimisticStudies(pendingStudies(request, { id: createBrowserId(), status: 'submitting', progress: null }));
-      await internalClient.createJob(request, createBrowserId());
+      const result = await internalClient.createJob(request, createBrowserId());
+      for (const job of result.jobs ?? [result.job]) trackedJobs.current.add(job.id);
       if (preferences.clearPromptAfterSubmit && promptRef.current === submitted) setPrompt('');
       setFilter('all'); setSearch('');
     });
@@ -248,7 +265,7 @@ export function Workspace() {
         <div className="library-heading"><div className="library-title">{isCreate ? <h2>{title}</h2> : <h1>{title}</h1>}<span>{isProjects && !projectId ? projects.length : items.length}{mediaQuery.hasNextPage ? '+' : ''}</span></div><div className="library-tools">{isProjects && !projectId ? <button className="quiet-command" disabled={!online} onClick={() => editProject('new')}><Plus size={16} />新建项目</button> : <><label className="library-search"><Search size={16} /><input aria-label="搜索作品" value={search} maxLength={200} onChange={event => setSearch(event.target.value)} placeholder="搜索作品" /></label><Tool label={selecting ? '退出多选' : '选择作品'} aria-pressed={selecting} onClick={() => { setSelecting(!selecting); setSelected([]); }}><CheckCheck size={19} /></Tool>{currentProject && <Options label="项目操作" trigger={<MoreHorizontal size={19} />}><Choice active={false} onClick={() => editProject(currentProject)}><Pencil size={15} />重命名</Choice><Choice active={false} onClick={() => setConfirmation({ title: '删除项目？', description: '项目归档关系将被移除，作品文件会保留。', action: async () => { await internalClient.deleteCollection(currentProject.id); go('/projects'); } })}><Trash2 size={15} />删除项目</Choice></Options>}</>}</div></div>
         {isProjects && !projectId ? <>{catalog.projects.isError && <p className="error-state">项目加载失败<button onClick={() => void catalog.projects.refetch()}>重试</button></p>}<div className="project-grid">{projects.map(project => <article className="project-tile" key={project.id}><button className="project-open" onClick={() => go(`/projects/${project.id}`)}><div className="project-cover">{items.filter(item => item.collectionIds.includes(project.id)).slice(0, 3).map(item => <img key={item.id} src={item.thumbnail} alt="" />)}<Folder size={28} strokeWidth={1.3} /></div><span><strong>{project.name}</strong><small>{project.itemCount} 件作品</small></span><ArrowUpRight size={18} /></button></article>)}<button className="new-project-tile" disabled={!online} onClick={() => editProject('new')}><FolderPlus size={26} /><span>新建项目</span></button></div></> : <>
           <div className="library-filter" role="group" aria-label="作品类型">{[{ key: 'all' as const, label: '全部' }, { key: 'image' as const, label: '图片' }, { key: 'video' as const, label: '视频' }].map(item => <button key={item.key} type="button" aria-pressed={filter === item.key} onClick={() => setFilter(item.key)}>{item.label}</button>)}{selecting && <button className="select-all" onClick={() => setSelected(selected.length === items.length ? [] : items)}>选择已加载作品</button>}</div>
-          {mediaQuery.isPending ? <div className="loading-state" role="status"><LoaderCircle className="spin" size={24} />正在加载作品…</div> : !items.length && !(isCreate && pending.length) && !mediaQuery.isError ? <div className="empty-state"><ImageIcon size={34} strokeWidth={1.2} /><h3>{searchQuery ? '没有找到相关作品' : section === 'saved' ? '还没有收藏' : projectId ? '这个项目还没有作品' : '还没有作品'}</h3><button className="quiet-command" onClick={() => { if (searchQuery) setSearch(''); else { go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1); } }}>{searchQuery ? '清除搜索' : '开始创作'}</button></div> : <Gallery items={items} pending={isCreate ? pending : []} onCancelJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onCancel(job); }} onRetryJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onRetry(job); }} scrollRef={mainRef} selecting={selecting} selected={selected.map(item => item.id)} online={online && busy === 0} onPick={item => selecting ? select(item) : openViewer(item.id)} onSelect={select} onSave={save} onDelete={item => remove([item])} hasMore={!!mediaQuery.hasNextPage} fetching={mediaQuery.isFetchingNextPage} error={mediaQuery.isError} onMore={() => { if (!mediaQuery.isFetchingNextPage) void mediaQuery.fetchNextPage(); }} onRetry={() => void mediaQuery.refetch()} />}
+          {mediaQuery.isPending ? <div className="loading-state" role="status"><LoaderCircle className="spin" size={24} />正在加载作品…</div> : !items.length && !(isCreate && pending.length) && !mediaQuery.isError ? <div className="empty-state"><ImageIcon size={34} strokeWidth={1.2} /><h3>{searchQuery ? '没有找到相关作品' : section === 'saved' ? '还没有收藏' : projectId ? '这个项目还没有作品' : '还没有作品'}</h3><button className="quiet-command" onClick={() => { if (searchQuery) setSearch(''); else { go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1); } }}>{searchQuery ? '清除搜索' : '开始创作'}</button></div> : <Gallery onReference={item => void useCardReference(item)} onDeleteJob={id => { void run(`delete-job:${id}`, async () => { await internalClient.deleteJob(id); trackedJobs.current.delete(id); }); }} items={items} pending={isCreate ? pending : []} onCancelJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onCancel(job); }} onRetryJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onRetry(job); }} scrollRef={mainRef} selecting={selecting} selected={selected.map(item => item.id)} online={online && busy === 0} onPick={item => selecting ? select(item) : openViewer(item.id)} onSelect={select} onSave={save} onDelete={item => remove([item])} hasMore={!!mediaQuery.hasNextPage} fetching={mediaQuery.isFetchingNextPage} error={mediaQuery.isError} onMore={() => { if (!mediaQuery.isFetchingNextPage) void mediaQuery.fetchNextPage(); }} onRetry={() => void mediaQuery.refetch()} />}
         </>}
       </section>}
     </main>

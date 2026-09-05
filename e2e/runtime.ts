@@ -63,5 +63,5 @@ process.env.IMAGINE_E2E_DATA_DIR = E2E_DATA_DIR;
 export const E2E_STORAGE_STATE = resolve(E2E_DATA_DIR, 'storage-state.json');
 
 export function basicAuthorizationHeader(): string {
-  return `Basic ${Buffer.from(`e2e:${E2E_PASSWORD}`, 'utf8').toString('base64')}`;
+  return `Basic ${Buffer.from(`admin:${E2E_PASSWORD}`, 'utf8').toString('base64')}`;
 }

@@ -43,6 +43,7 @@ import { ProviderInputLoaderError } from '../providers/provider-input-loader.js'
 import { isSecretLikeKey, sanitizeLegacyJsonValue } from '../security/config-sanitizer.js';
 import { discardStagedFile, stageReadable, type StagedFile } from '../storage/atomic-file.js';
 import type { StoragePaths } from '../storage/paths.js';
+import { AccountSettingsRepository } from '../database/account-settings.js';
 import { toAssetDto, toCollectionDto, toJobDto, toModelDto } from './dto.js';
 
 const JobPageQuerySchema = CursorPageQuerySchema.extend({
@@ -180,7 +181,12 @@ function registerSettingsRoutes(app: FastifyInstance, options: ResourceRoutesOpt
   app.patch('/internal/settings', async (request, reply) => {
     const input = parseOrReply(SettingsPatchSchema, request.body, reply);
     if (!input) return;
-    const records = await publishCommitted(options, () => options.settings.upsertMany(input.values));
+    let records;
+    try { records = await publishCommitted(options, () => options.settings.upsertMany(input.values)); }
+    catch (error) {
+      if (options.settings instanceof AccountSettingsRepository && error instanceof Error && 'statusCode' in error && (error.statusCode === 400 || error.statusCode === 403)) return errorResponse(reply, error.statusCode, 'settings_invalid', error.message);
+      throw error;
+    }
     return {
       settings: safeSettings(records),
     };
@@ -264,6 +270,8 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       }
       return errorResponse(reply, 400, 'model_parameters_invalid', error instanceof Error ? error.message : '模型参数无效');
     }
+    const batchCount = input.count ?? 1;
+    input = { ...input, count: 1 };
     let loadedInputs: Awaited<ReturnType<ProviderInputLoaderPort['load']>>;
     try {
       loadedInputs = await options.inputLoader.load(input);
@@ -293,12 +301,14 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       return errorResponse(reply, normalized.kind === 'rejected' ? 400 : 502, normalized.code, normalized.message);
     }
     try {
-      const job = await publishCommitted(options, () => options.jobs.createAtCurrent(
+      const batch = await publishCommitted(options, () => options.jobs.createBatch(
         input,
+        batchCount,
         registration.adapterRef ?? null,
       ));
-      await options.runner.enqueue(job.id);
-      return reply.code(202).send({ job: toJobDto(job, options.jobs.listOutputs(job.id).length) });
+      await Promise.all(batch.map(job => options.runner.enqueue(job.id)));
+      const results = batch.map(job => toJobDto(job, options.jobs.listOutputs(job.id).length));
+      return reply.code(202).send({ job: results[0], ...(results.length > 1 ? { jobs: results } : {}) });
     } catch (error) {
       if (error instanceof JobRepositoryError) {
         return errorResponse(

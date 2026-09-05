@@ -1,3 +1,4 @@
+import { AccountResponseSchema, AccountListSchema } from '@imagine/shared';
 import {
   AdapterDocumentFormatSchema,
   AdapterEmptyQuerySchema,
@@ -633,6 +634,11 @@ function requestSignal(options: InternalRequestOptions): Pick<RequestInit, 'sign
 }
 
 export const internalClient = {
+  getMyAccount: () => requestJson('/internal/account', AccountResponseSchema),
+  listAccounts: () => requestJson('/internal/accounts', AccountListSchema),
+  createAccount: (username: string, password: string) => requestJson('/internal/accounts', AccountResponseSchema, { method: 'POST', body: jsonBody({ username, password }) }),
+  updateAccount: (id: string, input: { enabled?: boolean; password?: string }) => requestJson(`/internal/accounts/${encodeURIComponent(id)}`, AccountListSchema, { method: 'PATCH', body: jsonBody(input) }),
+  updateMyAccount: (input: { currentPassword: string; username?: string; password?: string }) => requestJson('/internal/account', AccountResponseSchema, { method: 'PATCH', body: jsonBody(input) }),
   getAuthStatus: async () => {
     let status: AuthStatus;
     try {
@@ -662,8 +668,8 @@ export const internalClient = {
     }
     return status;
   },
-  login: async (password: string) => {
-    const input = AuthLoginSchema.parse({ password });
+  login: async (password: string, username?: string) => {
+    const input = AuthLoginSchema.parse({ password, ...(username ? { username } : {}) });
     await clearOfflineBootstrapState({ broadcast: true, change: 'logout' });
     await clearDerivedMediaRuntimeCache();
     const status = await requestJson('/internal/auth/login', AuthStatusSchema, {

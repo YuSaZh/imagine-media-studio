@@ -1,5 +1,5 @@
 import type { InternalEvent } from '@imagine/shared';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { ChangeEventStore, EventBroker } from '../events/event-broker.js';
 
@@ -21,6 +21,7 @@ export async function registerEventRoutes(
   app: FastifyInstance,
   store: ChangeEventStore,
   broker: EventBroker,
+  visible?: (request: FastifyRequest, event: InternalEvent) => boolean,
 ): Promise<void> {
   app.get('/internal/events', (request, reply) => {
     const rawLastEventId = request.headers['last-event-id'];
@@ -58,6 +59,7 @@ export async function registerEventRoutes(
     const writeEvent = (event: InternalEvent) => {
       if (closed || event.id <= highestWrittenId) return;
       highestWrittenId = event.id;
+      if (visible && !visible(request, event)) return;
       if (!response.write(formatSseEvent(event))) {
         cleanup();
         response.end();

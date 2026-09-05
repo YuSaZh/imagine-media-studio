@@ -160,7 +160,7 @@ export class ProviderInputLoader {
           role: input.role,
           mimeType: asset.mimeType,
           bytes,
-          ...(this.publicLinks ? { publicUrl: this.publicLinks.create(asset) } : {}),
+          ...(this.publicLinks?.enabled ? { publicUrl: this.publicLinks.create(asset) } : {}),
           ...(filename === undefined ? {} : { filename }),
           parentAssetId: asset.parentAssetId,
           ...(asset.width === null ? {} : { width: asset.width }),

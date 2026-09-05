@@ -64,7 +64,7 @@ describe('resource job route provider error normalization', () => {
       await registerResourceRoutes(app, options);
       const input = { ...createMockGenerationRequest(), count: 1, profile: 'openai-images-v1' };
       await app.inject({ method: 'POST', url: '/internal/jobs', payload: input });
-      expect(validate.mock.calls[0]?.[0]).toMatchObject({ count: 2, profile: 'xai-imagine-image-v1' });
+      expect(validate.mock.calls[0]?.[0]).toMatchObject({ count: 1, profile: 'xai-imagine-image-v1' });
       validate.mockClear();
       const rejected = await app.inject({ method: 'POST', url: '/internal/jobs', payload: { ...input, format: 'png' } });
       expect(rejected.statusCode).toBe(400);

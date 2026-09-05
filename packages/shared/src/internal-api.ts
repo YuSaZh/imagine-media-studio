@@ -82,7 +82,12 @@ export const AuthStatusSchema = z.object({
   publicAccessWarning: z.boolean().default(false),
 }).strict();
 
+export const AccountIdentitySchema = z.object({ id: z.string(), username: z.string(), role: z.enum(['admin', 'user']) });
+export const AccountResponseSchema = z.object({ user: AccountIdentitySchema });
+export const AccountListSchema = z.object({ users: z.array(AccountIdentitySchema.extend({ enabled: z.boolean() })) });
+
 export const AuthLoginSchema = z.object({
+  username: z.string().min(1).max(64).optional(),
   password: z.string().min(1).max(1024),
 }).strict();
 
@@ -1096,7 +1101,7 @@ export const JobPageSchema = z.object({
   nextCursor: z.string().nullable(),
 }).strict();
 
-export const JobResponseSchema = z.object({ job: JobDtoSchema }).strict();
+export const JobResponseSchema = z.object({ job: JobDtoSchema, jobs: z.array(JobDtoSchema).optional() }).strict();
 
 export const JobDetailResponseSchema = z.object({
   job: JobDtoSchema,

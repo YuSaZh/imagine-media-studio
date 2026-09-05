@@ -12,7 +12,8 @@ describe('workspace API contracts', () => {
     const input: Creation = { model: models[1]!, prompt: ' test ', operation: 'image.generate', inputs: [], ratio: '1:1', resolution: '', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false };
     expect(generationRequest(input)).toMatchObject({ providerId: 'second', modelId: 'same-model', prompt: 'test' });
     expect(() => generationRequest({ ...input, ratio: '16:9' })).toThrow();
-    expect(() => generationRequest({ ...input, count: 5 })).toThrow();
+    expect(generationRequest({ ...input, count: 5 }).count).toBe(5);
+    expect(() => generationRequest({ ...input, count: 33 })).toThrow();
     expect(() => generationRequest({ ...input, operation: 'video.generate' })).toThrow();
   });
   it('excludes disabled providers and models', () => {

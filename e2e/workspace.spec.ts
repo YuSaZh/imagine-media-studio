@@ -363,3 +363,120 @@ test('xAI reference upload automatically chooses image edit and auto ratio', asy
     expect(payload).not.toHaveProperty('aspectRatio');
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });
+
+test('card references, video parameter memory and responsive video controls', async ({ page, request }) => {
+  const asset = await upload(request);
+  await request.patch('/internal/providers/mock', { data: { isDefault: true } });
+  await open(page);
+  const card = page.locator(`[data-study-id="${asset.id}"]`);
+  await card.hover();
+  await card.locator('.card-reference').click();
+  await expect(page.locator('.reference-tray img')).toHaveCount(1);
+  await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+  const modes = await page.getByRole('group', { name: '视频输入方式' }).boundingBox();
+  const controls = await page.locator('.creation-controls').boundingBox();
+  if (page.viewportSize()!.width <= 760) {
+    expect(modes!.y).toBeGreaterThan(controls!.y);
+    const settings = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
+    const submit = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
+    expect(submit!.x - settings!.x).toBeLessThan(60);
+  } else expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(5);
+  await page.getByRole('button', { name: '生成设置', exact: true }).click();
+  await page.getByLabel('分辨率', { exact: true }).selectOption('720p');
+  await page.getByLabel('画幅', { exact: true }).selectOption('9:16');
+  await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('720p');
+  await page.keyboard.press('Escape');
+  await page.getByLabel('创作描述', { exact: true }).fill('video remembers independent dimensions');
+  const submitted = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  expect((await submitted).postDataJSON()).toMatchObject({ aspectRatio: '9:16', resolution: '720p' });
+  await expect.poll(async () => Object.values((await (await request.get('/internal/settings')).json()).settings).some((value: unknown) => !!value && typeof value === 'object' && 'resolution' in value && value.resolution === '720p')).toBe(true);
+  await page.reload();
+  await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+  await page.getByRole('button', { name: '生成设置', exact: true }).click();
+  await expect(page.getByLabel('画幅', { exact: true })).toHaveValue('9:16');
+  await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('720p');
+});
+
+test('preferences expose administrator account management and live public domain', async ({ page, request }) => {
+  await open(page, '/settings');
+  await page.getByLabel('公网域名', { exact: true }).fill('https://imagine.example.com');
+  await page.getByRole('button', { name: '保存公网域名', exact: true }).click();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings.public_base_url).toBe('https://imagine.example.com');
+  await page.reload();
+  await expect(page.getByLabel('公网域名', { exact: true })).toHaveValue('https://imagine.example.com');
+  const username = `user-${randomUUID()}`;
+  await page.getByLabel('新账号用户名', { exact: true }).fill(username);
+  await page.getByLabel('新账号初始密码', { exact: true }).fill('test-user-password');
+  await page.getByRole('button', { name: '添加账号', exact: true }).click();
+  await expect(page.getByLabel(`启用账号 ${username}`, { exact: true })).toBeChecked();
+  await page.getByLabel(`启用账号 ${username}`, { exact: true }).uncheck();
+  await expect(page.getByLabel(`启用账号 ${username}`, { exact: true })).not.toBeChecked();
+  await expect(page.getByLabel(`启用账号 ${username}`, { exact: true })).toBeEnabled();
+  expect((await request.post('/internal/auth/login', { data: { username, password: 'test-user-password' } })).status()).toBe(401);
+  await request.patch('/internal/settings', { data: { values: { public_base_url: '' } } });
+});
+
+test('failed waterfall cards can be deleted independently', async ({ page, request }) => {
+  const response = await request.post('/internal/jobs', { data: { operation: 'image.generate', providerId: 'mock', modelId: 'mock-image-v1', prompt: 'failed card deletion', inputs: [] } });
+  expect(response.status()).toBe(202);
+  const id = (await response.json()).job.id as string;
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).job.status).toBe('completed');
+  await page.route('**/internal/jobs?*', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.items = body.items.map((job: { id: string; request: Record<string, unknown> }) => job.id === id ? { ...job, status: 'failed', errorMessage: '测试失败状态', request: { ...job.request, count: 2 } } : job);
+    await route.fulfill({ response, json: body });
+  });
+  await open(page);
+  const card = page.locator(`[data-pending-job="${id}"]`).first();
+  await expect(card.getByRole('button', { name: '重试生成' })).toBeVisible();
+  await card.getByRole('button', { name: '删除失败任务' }).click();
+  await expect(page.locator(`[data-pending-job="${id}"]`)).toHaveCount(0);
+  expect((await request.get(`/internal/jobs/${id}`)).status()).toBe(404);
+  await page.unrouteAll({ behavior: 'wait' });
+});
+
+test('ordinary accounts log in without seeing administrator data and can change their credentials', async ({ page, request, browser }) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  await upload(request);
+  const username = `member-${randomUUID()}`;
+  expect((await request.post('/internal/accounts', { data: { username, password: 'member-password' } })).status()).toBe(201);
+  await open(page);
+  const context = await browser.newContext({ baseURL: new URL(page.url()).origin, viewport: page.viewportSize()!, storageState: { cookies: [], origins: [] } });
+  try {
+    const other = await context.newPage();
+    await other.goto('/imagine');
+    await expect(other.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await other.screenshot({ path: `/tmp/imagine-account-login-${page.viewportSize()!.width}.png` });
+    await other.getByLabel('用户名', { exact: true }).fill(username);
+    await other.getByLabel('应用密码', { exact: true }).fill('member-password');
+    await other.getByRole('button', { name: '进入工作区', exact: true }).click();
+    await expect(other.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
+    await expect(other.locator('.study-card')).toHaveCount(0);
+    await other.goto('/settings');
+    await expect(other.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
+    await expect(other.getByLabel('公网域名', { exact: true })).toHaveCount(0);
+    await expect(other.getByLabel('新账号用户名', { exact: true })).toHaveCount(0);
+    await other.getByLabel('当前密码', { exact: true }).fill('member-password');
+    await other.getByLabel('新密码', { exact: true }).fill('changed-password');
+    await other.getByRole('button', { name: '保存账号', exact: true }).click();
+    await expect(other.getByRole('status').filter({ hasText: '已保存' })).toBeVisible();
+    await other.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(other.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await other.getByLabel('用户名', { exact: true }).fill(username);
+    await other.getByLabel('应用密码', { exact: true }).fill('changed-password');
+    await other.getByRole('button', { name: '进入工作区', exact: true }).click();
+    await expect(other.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
+    await page.goto('/settings');
+    await page.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await page.getByLabel('用户名', { exact: true }).fill(username);
+    await page.getByLabel('应用密码', { exact: true }).fill('changed-password');
+    await page.getByRole('button', { name: '进入工作区', exact: true }).click();
+    await expect(page.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
+    await page.goto('/imagine');
+    await expect(page.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
+    await expect(page.locator('.study-card')).toHaveCount(0);
+  } finally { await context.close(); }
+});

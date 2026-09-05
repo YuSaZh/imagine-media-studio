@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 
 const EnvironmentSchema = z.object({
+  ADMIN_USERNAME: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.-]+$/).default('admin'),
+  ADMIN_PASSWORD: z.string().min(1).max(1024).default('admin'),
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(1).default(0),
   PUBLIC_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().refine(value => { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash; }, 'PUBLIC_BASE_URL must be an HTTP(S) URL without credentials, query or fragment.').optional()),
   ALLOW_HTTP_MEDIA_DOWNLOADS: z.enum(['true', 'false']).default('false'),
@@ -31,6 +33,8 @@ const EnvironmentSchema = z.object({
 });
 
 export interface AppConfig {
+  adminUsername?: string;
+  adminPassword?: string;
   trustProxyHops?: number;
   publicBaseUrl?: string;
   allowHttpMediaDownloads: boolean;
@@ -68,6 +72,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   return {
+    adminUsername: parsed.ADMIN_USERNAME,
+    adminPassword: parsed.ADMIN_PASSWORD,
     ...(parsed.TRUST_PROXY_HOPS > 0 ? { trustProxyHops: parsed.TRUST_PROXY_HOPS } : {}),
     ...(parsed.PUBLIC_BASE_URL ? { publicBaseUrl: parsed.PUBLIC_BASE_URL } : {}),
     allowHttpMediaDownloads: parsed.ALLOW_HTTP_MEDIA_DOWNLOADS === 'true',

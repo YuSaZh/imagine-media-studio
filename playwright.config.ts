@@ -16,6 +16,6 @@ export default defineConfig({
     hasTouch: width < 1100, isMobile: width < 1100, colorScheme: 'light', locale: 'zh-CN', timezoneId: 'UTC',
   } })),
   webServer: { command: 'pnpm --filter @imagine/server start', reuseExistingServer: false, timeout: 30000,
-    url: `${E2E_BASE_URL}/internal/health`, env: { APP_PORT: String(E2E_PORT), APP_PASSWORD: E2E_PASSWORD,
+    url: `${E2E_BASE_URL}/internal/health`, env: { APP_PORT: String(E2E_PORT), APP_PASSWORD: E2E_PASSWORD, ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: E2E_PASSWORD,
       DATA_DIR: E2E_DATA_DIR, MOCK_PROVIDER_ENABLED: 'true', WEB_DIST_DIR: resolve('apps/web/dist') } },
 });

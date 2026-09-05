@@ -111,6 +111,8 @@ const compose = {
         DATA_DIR: '/data',
         APP_SECRET: required('APP_SECRET'),
         APP_PASSWORD: required('APP_PASSWORD'),
+        ADMIN_USERNAME: 'studio',
+        ADMIN_PASSWORD: required('APP_PASSWORD'),
         MOCK_PROVIDER_ENABLED: 'true',
         LOG_LEVEL: 'info',
         ALLOW_HTTP_MEDIA_DOWNLOADS: 'false',

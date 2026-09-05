@@ -125,6 +125,7 @@ export const models = sqliteTable(
 export const jobs = sqliteTable(
   'jobs',
   {
+    ownerId: text('owner_id').notNull().default('admin'),
     id: text('id').primaryKey(),
     operation: text('operation').notNull(),
     providerId: text('provider_id').notNull(),
@@ -185,6 +186,7 @@ export const jobs = sqliteTable(
 export const assets = sqliteTable(
   'assets',
   {
+    ownerId: text('owner_id').notNull().default('admin'),
     id: text('id').primaryKey(),
     jobId: text('job_id').references(() => jobs.id, { onDelete: 'set null' }),
     parentAssetId: text('parent_asset_id').references((): AnySQLiteColumn => assets.id, {
@@ -256,13 +258,14 @@ export const jobOutputs = sqliteTable(
 export const collections = sqliteTable(
   'collections',
   {
+    ownerId: text('owner_id').notNull().default('admin'),
     id: text('id').primaryKey(),
     name: text('name').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [
-    uniqueIndex('collections_name_idx').on(table.name),
+    uniqueIndex('collections_name_idx').on(table.ownerId, table.name),
     index('collections_updated_at_idx').on(table.updatedAt, table.id),
   ],
 );

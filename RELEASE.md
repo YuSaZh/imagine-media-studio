@@ -27,16 +27,16 @@ the data set:
 
 ```text
 APP_SECRET=<at-least-32-random-characters>
-APP_PASSWORD=<strong-application-password>
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=<initial-administrator-password>
 MOCK_PROVIDER_ENABLED=false
 ```
 
 `APP_SECRET` encrypts Provider credentials stored in SQLite. It is not included
 in database backups or full-data archives; losing or changing it makes existing
-Provider credentials undecryptable. `APP_PASSWORD` is optional for local use,
-but should be set before exposing the application through a public IP or domain.
-Without it, the server reports a potentially public deployment and the browser
-shows a warning that must be acknowledged again after reload. Docker
+Provider credentials undecryptable. Initial credentials default to `admin` /
+`admin`; `ADMIN_USERNAME` and `ADMIN_PASSWORD` override them only on first start.
+After initialization, change credentials in Settings -> Preferences. Docker
 administrators can inspect container environment values, so Docker daemon access
 remains an administrator trust boundary.
 
@@ -73,7 +73,7 @@ reference, command-line argument, Compose file, environment file committed to
 the repository, or logs.
 
 Binding to loopback is the conservative default. Change the published address
-only when the network boundary, TLS termination, and `APP_PASSWORD` are ready.
+only when the network boundary, TLS termination, and administrator credentials are ready.
 Source deployments may instead use the repository's `docker-compose.yml`; it
 still creates exactly one business service and uses the same `/data` contract.
 
@@ -86,8 +86,8 @@ online, database-only SQLite snapshot at `/data/backups/<id>.db`. It uses the
 SQLite Online Backup API and returns only `id`, `size`, `sha256`, and
 `createdAt`. It excludes media, Trusted Adapter files, logs, browser data, and
 environment secrets, and there is no HTTP download or restore endpoint.
-This endpoint intentionally returns `403` when `APP_PASSWORD` is not configured;
-online database maintenance requires an authenticated application administrator.
+This endpoint returns `403` for ordinary accounts; online database maintenance
+requires an authenticated application administrator.
 
 For a complete portable data set, use the offline archive CLI. Stop only this
 deployment before `create`; `verify` is read-only and may run while the server
