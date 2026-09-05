@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 
 const EnvironmentSchema = z.object({
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(1).default(0),
   PUBLIC_BASE_URL: z.preprocess(value => value === '' ? undefined : value, z.string().url().refine(value => { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash; }, 'PUBLIC_BASE_URL must be an HTTP(S) URL without credentials, query or fragment.').optional()),
   ALLOW_HTTP_MEDIA_DOWNLOADS: z.enum(['true', 'false']).default('false'),
   ALLOW_INSECURE_PROVIDER_HTTP: z.enum(['true', 'false']).default('false'),
@@ -30,6 +31,7 @@ const EnvironmentSchema = z.object({
 });
 
 export interface AppConfig {
+  trustProxyHops?: number;
   publicBaseUrl?: string;
   allowHttpMediaDownloads: boolean;
   allowInsecureProviderHttp: boolean;
@@ -66,6 +68,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   return {
+    ...(parsed.TRUST_PROXY_HOPS > 0 ? { trustProxyHops: parsed.TRUST_PROXY_HOPS } : {}),
     ...(parsed.PUBLIC_BASE_URL ? { publicBaseUrl: parsed.PUBLIC_BASE_URL } : {}),
     allowHttpMediaDownloads: parsed.ALLOW_HTTP_MEDIA_DOWNLOADS === 'true',
     allowInsecureProviderHttp: parsed.ALLOW_INSECURE_PROVIDER_HTTP === 'true',

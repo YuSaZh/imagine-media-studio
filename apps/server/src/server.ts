@@ -452,6 +452,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   });
   ledger.runner = runner;
   app = Fastify({
+    trustProxy: options.config.trustProxyHops ? (_address: string, hop: number) => hop < options.config.trustProxyHops! : false,
     bodyLimit: SERVER_BODY_LIMIT,
     logger: options.logger ?? { level: options.config.logLevel },
   });

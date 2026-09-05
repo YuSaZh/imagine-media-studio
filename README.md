@@ -54,6 +54,11 @@ reference images as signed, 15-minute links on xAI image/video and OpenAI
 Responses APIs. The links serve only the selected image, expire automatically,
 stop working when the asset is deleted, and are excluded from browser/PWA caches.
 Without this setting, references use embedded data or multipart uploads.
+Use an HTTPS public URL for xAI image fetching. When terminating HTTPS at a
+trusted reverse proxy, set `TRUST_PROXY_HOPS=1` and restrict the application port
+to that proxy (for example, a loopback Docker port binding). The proxy must set
+`Host` and `X-Forwarded-Proto`; this enables correct origin checks and Secure
+session cookies. Direct deployments should retain the default `0`.
 OpenAI Images and Gemini continue using the input format required by their API.
 
 The reference button offers library selection and new uploads. Adding an image
