@@ -376,11 +376,17 @@ test('card references, video parameter memory and responsive video controls', as
   const modes = await page.getByRole('group', { name: '视频输入方式' }).boundingBox();
   const controls = await page.locator('.creation-controls').boundingBox();
   if (page.viewportSize()!.width <= 760) {
-    expect(modes!.y).toBeGreaterThan(controls!.y);
+    expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(6);
+    const modeSwitch = await page.getByRole('group', { name: '创作类型' }).boundingBox();
+    expect(modes!.x).toBeGreaterThanOrEqual(modeSwitch!.x + modeSwitch!.width);
     const settings = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
     const submit = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
+    expect(modes!.x + modes!.width).toBeLessThanOrEqual(settings!.x);
     expect(submit!.x - settings!.x).toBeLessThan(60);
+    await expect(page.locator('.mode-segments span').first()).toBeHidden();
+    await expect(page.locator('.mode-segments span').last()).toBeHidden();
   } else expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(5);
+  await page.screenshot({ path: `/tmp/imagine-inline-video-${page.viewportSize()!.width}.png` });
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
   await page.getByLabel('分辨率', { exact: true }).selectOption('720p');
   await page.getByLabel('画幅', { exact: true }).selectOption('9:16');
@@ -479,4 +485,53 @@ test('ordinary accounts log in without seeing administrator data and can change 
     await expect(page.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
     await expect(page.locator('.study-card')).toHaveCount(0);
   } finally { await context.close(); }
+});
+
+test('mobile edge navigation, scroll boundaries and installed viewport remain stable', async ({ page }) => {
+  test.skip(page.viewportSize()!.width > 760);
+  await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { configurable: true, value: true }));
+  await open(page);
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute('content', /maximum-scale=1, user-scalable=no/);
+  const swipe = async (x: number, y: number, nextX: number, nextY: number) => page.evaluate(({ x, y, nextX, nextY }) => {
+    const target = document.querySelector('.workspace')!;
+    const dispatch = (type: string, clientX: number, clientY: number) => {
+      const touch = { identifier: 1, target, clientX, clientY };
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [touch] });
+      target.dispatchEvent(event); return event.defaultPrevented;
+    };
+    dispatch('touchstart', x, y); const prevented = dispatch('touchmove', nextX, nextY); dispatch('touchend', nextX, nextY); return prevented;
+  }, { x, y, nextX, nextY });
+  await page.getByRole('button', { name: '打开导航', exact: true }).click();
+  await expect(page.getByRole('navigation', { name: '手机导航' })).toBeVisible();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await page.getByRole('button', { name: '关闭面板', exact: true }).click();
+  await swipe(8, 160, 100, 164);
+  await expect(page.getByRole('navigation', { name: '手机导航' })).toBeVisible();
+  await page.getByRole('button', { name: '关闭面板', exact: true }).click();
+  await swipe(100, 160, 190, 162);
+  await expect(page.getByRole('navigation', { name: '手机导航' })).toHaveCount(0);
+  await page.locator('.workspace').evaluate(element => { element.scrollTop = 0; });
+  expect(await swipe(120, 160, 122, 250)).toBe(true);
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+  await page.locator('.library-area').evaluate(element => { (element as HTMLElement).style.minHeight = '2000px'; });
+  await page.locator('.workspace').evaluate(element => { element.scrollTop = 100; });
+  expect(await swipe(120, 160, 122, 180)).toBe(false);
+  expect(await page.evaluate(() => { const event = new Event('gesturestart', { cancelable: true }); document.dispatchEvent(event); return event.defaultPrevented; })).toBe(true);
+  await page.goto('/settings');
+  const input = page.getByLabel('新账号用户名', { exact: true });
+  await input.click();
+  expect(await input.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
+  expect(await page.evaluate(() => visualViewport?.scale ?? 1)).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('gallery action buttons share the same frosted surface', async ({ page, request }) => {
+  await upload(request); await open(page);
+  const styles = await page.locator('.study-card').first().evaluate(element => ['.card-bookmark', '.card-reference', '.card-more'].map(selector => {
+    const style = getComputedStyle(element.querySelector(selector)!);
+    return { background: style.backgroundColor, blur: style.backdropFilter, radius: style.borderRadius, width: style.width, height: style.height };
+  }));
+  expect(styles[1]).toEqual(styles[0]); expect(styles[2]).toEqual(styles[0]);
+  expect(styles[0]!.blur).toBe('blur(9px)');
 });

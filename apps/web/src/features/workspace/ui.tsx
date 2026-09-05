@@ -9,7 +9,7 @@ export function Tool({ label, children, className = '', ...props }: ButtonHTMLAt
 }
 
 export function Panel({ title, open, onClose, children, className = '' }: { title: string; open: boolean; onClose: () => void; children: ReactNode; className?: string }) {
-  return <Dialog.Root open={open} onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="panel-backdrop" /><Dialog.Content className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><Tool label="关闭面板"><X size={20} /></Tool></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
+  return <Dialog.Root open={open} onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="panel-backdrop" /><Dialog.Content className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label="关闭面板"><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 export function Options({ label, trigger, children, className = '' }: { label: string; trigger: ReactNode; children: ReactNode; className?: string }) {

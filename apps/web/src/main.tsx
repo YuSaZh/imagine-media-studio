@@ -9,6 +9,7 @@ import { subscribeToInternalEvents } from './api/internal-events';
 import { AuthGate } from './features/auth/components/auth-gate';
 import { flushPromptDraft } from './features/composer/model/composer-draft';
 import { registerPwa } from './pwa-registration';
+import { usePwaViewport } from './features/workspace/mobile-interactions';
 import './features/workspace/workspace.css';
 
 function createAppQueryClient() {
@@ -49,6 +50,10 @@ function AuthenticatedApplication() {
 }
 
 const rootElement = document.getElementById('root');
+function ApplicationRoot() {
+  usePwaViewport();
+  return <AuthGate><AuthenticatedApplication /></AuthGate>;
+}
 
 if (!rootElement) {
   throw new Error('Application root element was not found.');
@@ -56,9 +61,7 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <AuthGate>
-      <AuthenticatedApplication />
-    </AuthGate>
+    <ApplicationRoot />
   </StrictMode>,
 );
 

@@ -15,6 +15,7 @@ import { readGeneralSettings, useSettingsQuery } from '../settings/api/settings-
 import { ACTIVE_JOB_STATUSES, generationRequest, mapMedia, mapModels, operationFor, type Creation, type MediaItem, type MediaKind, type Project, type ReferenceInput } from './data';
 import { useMedia, useRefreshWorkspace, useWorkspaceCatalog, useWorkspaceJobs } from './queries';
 import { Composer } from './composer';
+import { useMobileInteractions } from './mobile-interactions';
 import { Gallery } from './gallery';
 import { ReferencePicker } from './reference-picker';
 import { jobStudies, pendingStudies, type PendingStudy } from './pending-studies';
@@ -71,6 +72,7 @@ export function Workspace() {
   const [selected, setSelected] = useState<MediaItem[]>([]);
   const [selecting, setSelecting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  useMobileInteractions(() => setMenuOpen(true));
   const [taskOpen, setTaskOpen] = useState(false);
   const [projectEditor, setProjectEditor] = useState<Project | 'new' | null>(null);
   const [projectName, setProjectName] = useState('');
