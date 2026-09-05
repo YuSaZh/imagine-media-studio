@@ -1,5 +1,11 @@
 # Third-party reuse audit
 
+## DEEIX administration mechanism reference
+
+Reviewed DEEIX-AI/DEEIX-Chat at commit `1a95cb0a0bbf9d6ebd8353b285eb9cd60ce4ada0` (Apache-2.0). Reference-only files: `frontend/features/admin/components/sections/models/models-capabilities-config.tsx`, `models-sheet.tsx`, `frontend/features/admin/components/sections/upstreams/upstreams-sheet.tsx`, `frontend/features/admin/model/upstreams-models.ts`, and `backend/internal/application/conversation/model_option_policy.go`.
+
+The useful mechanisms are shared upstream connections, model protocol bindings, and configurable parameter controls/defaults/locked values. This project implements those concepts independently within its existing React/Fastify/SQLite contracts. No upstream component source, CSS, runtime, identity/billing system or assets are copied. The existing single-process deployment and encrypted server-only credentials remain authoritative.
+
 ## 2026-09-05 production workspace replacement
 
 The new workspace uses Grok Imagine as a visual and interaction reference only, following direct public DOM/style inspection. No upstream page implementation was copied. Existing local nonvisual kernels retain their original audit and notices. Four previously reviewed Unsplash photographs were moved from the deleted prototype to `e2e/media/`; their exact source URLs are recorded in [workspace.md](../design-spec/workspace.md). They are test inputs only. Old generated study media, prototype video, legacy screenshots and page code were removed. No new third-party package was introduced.

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { NavLink, useLocation } from 'react-router-dom';
-import { ManualModelCreateSchema, ProviderCreateSchema, type ModelDto, type ProviderDto } from '@imagine/shared';
+import { PROVIDER_FAMILIES, providerFamily, ManualModelCreateSchema, ProviderCreateSchema, type ModelDto, type ProviderDto } from '@imagine/shared';
 import { Check, Code2, Database, Download, KeyRound, LoaderCircle, LogOut, MoreHorizontal, Pencil, PlugZap, Plus, Power, RefreshCw, Settings2, Smartphone, Trash2, Upload } from 'lucide-react';
 import { internalClient } from '../../api/internal-client';
 import { getPwaState, subscribeToPwaState, activatePwaUpdate, promptPwaInstall } from '../../pwa-registration';
@@ -10,6 +10,7 @@ import { readGeneralSettings, readPwaSettings, usePatchSettings, useSettingsQuer
 import { useRefreshWorkspace, useWorkspaceCatalog } from './queries';
 import { ModelEditor, ProviderEditor } from './provider-editor';
 import { Choice, Confirm, Options, Tool } from './ui';
+import { ModelManagement } from './model-management';
 
 const AdapterController = lazy(() => import('../settings/controllers/adapter-controller').then(module => ({ default: module.CustomAdapterWorkspaceContainer })));
 
@@ -23,7 +24,7 @@ function exportConnection(provider: ProviderDto, models: readonly ModelDto[]) {
 
 export function Settings({ online }: { online: boolean }) {
   const path = useLocation().pathname;
-  const section = path.endsWith('/providers') ? 'providers' : path.endsWith('/storage') ? 'storage' : path.endsWith('/pwa') ? 'pwa' : 'general';
+  const section = path.endsWith('/models') ? 'models' : path.endsWith('/providers') ? 'providers' : path.endsWith('/storage') ? 'storage' : path.endsWith('/pwa') ? 'pwa' : 'general';
   const catalog = useWorkspaceCatalog();
   const refresh = useRefreshWorkspace();
   const [editor, setEditor] = useState<ProviderDto | 'new' | null>(null);
@@ -50,7 +51,7 @@ export function Settings({ online }: { online: boolean }) {
     const created = await internalClient.createProvider({ name: provider.name, type: provider.type, config: provider.config, enabled: provider.enabled, isDefault: provider.isDefault, baseUrl: provider.baseUrl ?? null });
     for (const model of models) await internalClient.createModel({ ...model, providerId: created.provider.id });
   };
-  const sections = [{ key: 'general', path: '/settings', label: '偏好', icon: Settings2 }, { key: 'providers', path: '/settings/providers', label: '连接', icon: PlugZap }, { key: 'storage', path: '/settings/storage', label: '数据', icon: Database }, { key: 'pwa', path: '/settings/pwa', label: '应用', icon: Smartphone }];
+  const sections = [{ key: 'general', path: '/settings', label: '偏好', icon: Settings2 }, { key: 'providers', path: '/settings/providers', label: '连接', icon: PlugZap }, { key: 'models', path: '/settings/models', label: '模型', icon: Code2 }, { key: 'storage', path: '/settings/storage', label: '数据', icon: Database }, { key: 'pwa', path: '/settings/pwa', label: '应用', icon: Smartphone }];
 
   return <div className="workspace-settings"><nav className="workspace-settings-nav" aria-label="设置分类">{sections.map(item => <NavLink end key={item.key} to={item.path}><item.icon size={17} />{item.label}</NavLink>)}</nav><div className="workspace-settings-body">
     <div className="settings-page-heading"><h1>{sections.find(item => item.key === section)?.label}</h1>{section === 'providers' && <div><Tool label="导入连接" disabled={!online || busy} onClick={() => importRef.current?.click()}><Upload size={18} /></Tool><button className="primary-command" disabled={!online || busy} onClick={() => setEditor('new')}><Plus size={16} />添加连接</button></div>}</div>
@@ -64,7 +65,7 @@ export function Settings({ online }: { online: boolean }) {
         const models = catalog.models.data?.filter(model => model.providerId === provider.id) ?? [];
         const custom = provider.type === 'custom-http-v1' || provider.type === 'custom-js-v1';
         return <section className="connection-item" key={provider.id} aria-label={`连接 ${provider.name}`}>
-          <div className="connection-item-heading"><span className="connection-logo">{provider.name.slice(0, 1).toUpperCase()}</span><div><h2>{provider.name}</h2><p>{provider.type}</p></div><span className={`connection-state ${provider.enabled ? 'enabled' : ''}`}>{provider.isDefault ? '默认' : provider.enabled ? '已启用' : '已停用'}</span><Tool label={`编辑连接 ${provider.name}`} disabled={!online || busy} onClick={() => setEditor(provider)}><Pencil size={17} /></Tool><Options label={`${provider.name} 更多操作`} trigger={<MoreHorizontal size={19} />}>
+          <div className="connection-item-heading"><span className="connection-logo">{provider.name.slice(0, 1).toUpperCase()}</span><div><h2>{provider.name}</h2><p>{PROVIDER_FAMILIES.find(family => family.value === providerFamily(provider.type))?.label ?? provider.type}</p></div><span className={`connection-state ${provider.enabled ? 'enabled' : ''}`}>{provider.isDefault ? '默认' : provider.enabled ? '已启用' : '已停用'}</span><Tool label={`编辑连接 ${provider.name}`} disabled={!online || busy} onClick={() => setEditor(provider)}><Pencil size={17} /></Tool><Options label={`${provider.name} 更多操作`} trigger={<MoreHorizontal size={19} />}>
             <Choice active={false} onClick={() => void run(() => internalClient.patchProvider(provider.id, { enabled: !provider.enabled }), provider.enabled ? '连接已停用' : '连接已启用')}><Power size={15} />{provider.enabled ? '停用' : '启用'}</Choice>
             {!provider.isDefault && <Choice active={false} onClick={() => void run(() => internalClient.patchProvider(provider.id, { isDefault: true }), '已设为默认连接')}><Check size={15} />设为默认</Choice>}
             <Choice active={false} onClick={() => exportConnection(provider, models)}><Download size={15} />导出配置</Choice>
@@ -77,10 +78,11 @@ export function Settings({ online }: { online: boolean }) {
       })}</div>
     </>}
     {section === 'general' && <Preferences online={online} />}
+    {section === 'models' && <ModelManagement models={catalog.models.data ?? []} providers={catalog.providers.data ?? []} online={online} refresh={refresh} />}
     {section === 'storage' && <Storage online={online} />}
     {section === 'pwa' && <ApplicationSettings online={online} />}
     {editor && <ProviderEditor provider={editor === 'new' ? null : editor} onClose={() => setEditor(null)} onSaved={provider => { setEditor(null); void refresh(); if (provider.type.startsWith('custom-')) setAdapter(provider); }} />}
-    {modelEditor && <ModelEditor {...modelEditor} onClose={() => setModelEditor(null)} onSaved={() => { setModelEditor(null); void refresh(); }} />}
+    {modelEditor && <ModelEditor {...modelEditor} providerType={catalog.providers.data?.find(provider => provider.id === modelEditor.providerId)?.type ?? ''} onClose={() => setModelEditor(null)} onSaved={() => { setModelEditor(null); void refresh(); }} />}
     {adapter && <Suspense fallback={<p className="loading-state">正在加载适配器…</p>}><AdapterController open fixtureMode={false} provider={adapter} onOpenChange={open => { if (!open) { setAdapter(null); void refresh(); } }} /></Suspense>}
     {confirmation && <Confirm {...confirmation} busy={busy} onClose={() => setConfirmation(null)} onConfirm={() => { const action = confirmation.action; setConfirmation(null); void run(action, '已删除'); }} />}
   </div></div>;

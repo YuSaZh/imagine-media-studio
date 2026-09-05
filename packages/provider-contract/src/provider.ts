@@ -1,4 +1,4 @@
-import type { AssetInput, GenerationRequest, MediaOperation } from '@imagine/shared';
+import type { AssetInput, GenerationRequest, MediaOperation, NativeProviderProfile, ModelParameter } from '@imagine/shared';
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
@@ -12,6 +12,8 @@ export interface ImageInputConstraints {
 }
 
 export interface ModelCapabilities {
+  profile?: NativeProviderProfile;
+  parameters?: readonly ModelParameter[];
   operations: readonly MediaOperation[];
   aspectRatios?: readonly string[];
   resolutions?: readonly string[];
@@ -99,6 +101,7 @@ export interface ProviderInput {
 }
 
 export interface ProviderContext {
+  profile?: NativeProviderProfile;
   providerId: string;
   jobId?: string;
   /** Original request model, available to durable poll/recovery operations. */

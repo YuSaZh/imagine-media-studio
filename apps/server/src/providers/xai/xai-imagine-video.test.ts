@@ -506,6 +506,19 @@ describe('XaiImagineVideoProvider', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it.each([404, 405, 501])('falls back to the shared catalog when the specialized catalog returns %i', async status => {
+    const client = new FixtureClient(jsonResponse({ error: 'unavailable' }, status), jsonResponse({ data: [{ id: 'grok-imagine-image-2.0' }, { id: 'grok-imagine-video' }] }));
+    const provider = new XaiImagineVideoProvider({ http: client });
+    await expect(provider.getLiveCapabilities(videoContext)).resolves.toMatchObject({ models: [{ id: 'grok-imagine-video' }] });
+    expect(client.requests.map(request => request.url)).toEqual(['https://api.x.ai/v1/video-generation-models', 'https://api.x.ai/v1/models']);
+  });
+
+  it.each([401, 403, 429, 500])('does not hide authentication or upstream failure %i behind a fallback', async status => {
+    const client = new FixtureClient(jsonResponse({ error: 'unavailable' }, status));
+    await expect(new XaiImagineVideoProvider({ http: client }).testConnection(videoContext)).rejects.toMatchObject({ statusCode: status });
+    expect(client.requests).toHaveLength(1);
+  });
+
   it('keeps explicitly configured unknown video models conservative and filters non-video models', async () => {
     const client = new FixtureClient(jsonResponse(fixture('models-response.json')));
     const provider = new XaiImagineVideoProvider({ http: client });

@@ -11,6 +11,9 @@ import {
   GenerationRequestSchema,
   JobStatusSchema,
   SettingsPatchSchema,
+  ModelCapabilitiesSchema,
+  applyModelParameters,
+  resolveModelProfile,
 } from '@imagine/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -230,7 +233,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
   });
 
   app.post('/internal/jobs', async (request, reply) => {
-    const input = parseOrReply(GenerationRequestSchema, request.body, reply);
+    let input = parseOrReply(GenerationRequestSchema, request.body, reply);
     if (!input) return;
     let registration;
     try {
@@ -243,12 +246,20 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       return errorResponse(reply, 503, 'provider_unavailable', error instanceof Error ? error.message : undefined);
     }
     try {
-      options.inputResolver.resolve(input);
+      const resolved = options.inputResolver.resolve(input);
+      const capabilities = ModelCapabilitiesSchema.parse(resolved.model.capabilities);
+      // Protocol and parameter policy come from the persisted model, never the client.
+      delete input.profile;
+      input = applyModelParameters(input, capabilities.parameters);
+      if (['openai', 'gemini', 'xai'].includes(registration.adapter.type)) {
+        const profile = resolveModelProfile(registration.adapter.type, input.operation, input.modelId, capabilities.profile);
+        if (profile) input.profile = profile;
+      }
     } catch (error) {
       if (error instanceof GenerationInputError) {
         return errorResponse(reply, 400, error.code, error.message);
       }
-      throw error;
+      return errorResponse(reply, 400, 'model_parameters_invalid', error instanceof Error ? error.message : '模型参数无效');
     }
     let loadedInputs: Awaited<ReturnType<ProviderInputLoaderPort['load']>>;
     try {

@@ -4,6 +4,8 @@ import {
   ManualModelCreateSchema,
   ModelCapabilitiesSchema,
   ModelCapabilitySourceSchema,
+  MODEL_PROTOCOLS,
+  type NativeProviderProfile,
   type ModelCapabilitySource,
 } from '@imagine/shared';
 import { and, desc, eq, lt, ne, notInArray, or, type SQL } from 'drizzle-orm';
@@ -177,6 +179,17 @@ function modelCursorCondition(cursor: { timestampMs: number; id: string }): SQL 
 
 export class ModelRepository {
   public constructor(private readonly database: AppDatabase) {}
+
+  public preserveLegacyProtocol(providerId: string, profile: NativeProviderProfile): void {
+    const kind = MODEL_PROTOCOLS.find(item => item.value === profile)!.kind;
+    this.database.transaction(transaction => {
+      for (const model of this.listForProvider(providerId)) {
+        const capabilities = ModelCapabilitiesSchema.parse(model.capabilities);
+        if (capabilities.profile || !capabilities.operations.every(operation => operation.startsWith(`${kind}.`))) continue;
+        transaction.update(models).set({ capabilitiesJson: JSON.stringify({ ...capabilities, profile }), updatedAt: new Date() }).where(eq(models.id, model.id)).run();
+      }
+    });
+  }
 
   public get(id: string): ModelRecord | null {
     const row = this.database.select().from(models).where(eq(models.id, id)).get();

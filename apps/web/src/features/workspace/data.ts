@@ -1,5 +1,6 @@
 import type { AssetDto, AssetInput, GenerationRequest, JobDto, ModelDto, ProviderDto, JsonObject } from '@imagine/shared';
-import { GenerationRequestSchema } from '@imagine/shared';
+import { GenerationRequestSchema, applyModelParameters } from '@imagine/shared';
+import { managedParameters } from './managed-parameters';
 import { internalClient } from '../../api/internal-client';
 import { mapInternalModel } from './model-capabilities';
 import { allowsCustomSize } from './generation-options';
@@ -34,6 +35,7 @@ export interface WorkspaceModel extends ReturnType<typeof mapInternalModel> {
   key: string;
   name: string;
   providerName: string;
+  providerType: string;
   providerDefault: boolean;
   raw: ModelDto;
 }
@@ -121,6 +123,7 @@ export function mapModels(models: readonly ModelDto[], providers: readonly Provi
   return models.filter(model => model.enabled && enabled.has(model.providerId)).map(model => ({
     ...mapInternalModel(model), key: model.id, name: model.displayName,
     providerName: enabled.get(model.providerId)!.name,
+    providerType: enabled.get(model.providerId)!.type ?? '',
     providerDefault: enabled.get(model.providerId)!.isDefault, raw: model,
   })).sort((left, right) => Number(right.providerDefault) - Number(left.providerDefault));
 }
@@ -143,12 +146,26 @@ export interface Creation {
   seed: string;
   audio: boolean;
   extra?: JsonObject;
+  parameters?: JsonObject;
 }
 
 export function generationRequest(input: Creation): GenerationRequest {
   const { model } = input;
   const video = input.operation.startsWith('video.');
   if (!model.capabilities.operations.includes(input.operation)) throw new Error('当前模型不支持这项操作');
+  const rules = managedParameters(model);
+  if (rules !== undefined) {
+    const request: Record<string, unknown> = { operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(), inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })) };
+    const extra: JsonObject = {};
+    for (const rule of rules) {
+      const value = input.parameters?.[rule.path];
+      if (value === undefined) continue;
+      if (rule.path.startsWith('extra.')) extra[rule.path.slice(6)] = value;
+      else request[rule.path] = value;
+    }
+    if (Object.keys(extra).length) request.extra = extra;
+    return applyModelParameters(GenerationRequestSchema.parse(request), rules);
+  }
   const customSize = !video && allowsCustomSize(model);
   const customRatio = !input.resolution && input.ratio && !model.capabilities.aspectRatios.includes(input.ratio);
   if (customRatio && !(customSize && parseAspectRatio(input.ratio))) throw new Error('当前模型不支持所选画幅');
@@ -164,12 +181,17 @@ export function generationRequest(input: Creation): GenerationRequest {
   if (video && durationRange && (input.duration < durationRange.min || input.duration > durationRange.max)) throw new Error('视频时长超出模型范围');
   const seed = Number(input.seed);
   if (input.seed && !Number.isSafeInteger(seed)) throw new Error('种子必须是整数');
+  const extra = { ...input.extra };
+  const xai = String(model.raw.capabilities.profile ?? model.providerType).startsWith('xai');
+  const quality = xai ? extra.quality : undefined;
+  if (xai) delete extra.quality;
   return GenerationRequestSchema.parse({
     operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(),
     inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })),
     ...(input.ratio && !resolution ? { aspectRatio: input.ratio } : {}),
     ...(resolution ? { resolution } : {}),
-    ...(input.extra && Object.keys(input.extra).length ? { extra: input.extra } : {}),
+    ...(Object.keys(extra).length ? { extra } : {}),
+    ...(quality !== undefined ? { quality } : {}),
     count: video ? 1 : input.count,
     ...(video && (model.capabilities.durations.length || durationRange) ? { durationSeconds: input.duration } : {}),
     ...(model.raw.capabilities.supportsNegativePrompt && input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),

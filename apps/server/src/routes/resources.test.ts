@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   ProviderAdapter,
@@ -50,6 +50,27 @@ class AsyncValidationProvider implements ProviderAdapter {
 }
 
 describe('resource job route provider error normalization', () => {
+  it('derives protocol and locked defaults from the stored model before validation', async () => {
+    const app = Fastify({ logger: false });
+    const adapter = new AsyncValidationProvider();
+    Object.defineProperty(adapter, 'type', { value: 'xai' });
+    const validate = vi.spyOn(adapter, 'validate');
+    const options = {
+      providers: { resolve: () => ({ adapter, secrets: {}, submitReplaySafe: false }) },
+      inputResolver: { resolve: () => ({ model: { capabilities: { operations: ['image.generate'], profile: 'xai-imagine-image-v1', parameters: [{ path: 'count', label: 'Count', type: 'number', defaultValue: 2, locked: true }] } } }) },
+      inputLoader: { load: async () => [] },
+    } as unknown as ResourceRoutesOptions;
+    try {
+      await registerResourceRoutes(app, options);
+      const input = { ...createMockGenerationRequest(), count: 1, profile: 'openai-images-v1' };
+      await app.inject({ method: 'POST', url: '/internal/jobs', payload: input });
+      expect(validate.mock.calls[0]?.[0]).toMatchObject({ count: 2, profile: 'xai-imagine-image-v1' });
+      validate.mockClear();
+      const rejected = await app.inject({ method: 'POST', url: '/internal/jobs', payload: { ...input, format: 'png' } });
+      expect(rejected.statusCode).toBe(400);
+      expect(validate).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
   it('awaits asynchronous adapter errors before choosing the response', async () => {
     const app = Fastify({ logger: false });
     const adapter = new AsyncValidationProvider();
@@ -57,7 +78,7 @@ describe('resource job route provider error normalization', () => {
       providers: {
         resolve: () => ({ adapter, secrets: {}, submitReplaySafe: true }),
       },
-      inputResolver: { resolve: () => undefined },
+      inputResolver: { resolve: () => ({ model: { capabilities: { operations: ['image.generate'] } } }) },
       inputLoader: { load: async () => [] },
     } as unknown as ResourceRoutesOptions;
 

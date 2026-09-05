@@ -6,6 +6,9 @@ import {
   ProviderDtoSchema,
   ProviderTypeSchema,
   SafeConfigSchema,
+  resolveModelProfile,
+  NativeProviderProfileSchema,
+  providerFamily,
   type CustomAdapterRef,
   type JsonObject,
   type ModelCapabilities,
@@ -381,6 +384,9 @@ export class ProviderService {
     const type = input.type === undefined ? undefined : ProviderTypeSchema.parse(input.type);
     const baseUrl = !('baseUrl' in input) ? undefined : parseProviderBaseUrl(input.baseUrl);
     const config = input.config === undefined ? undefined : SafeConfigSchema.parse(input.config);
+    const existing = this.providers.get(id);
+    const legacy = NativeProviderProfileSchema.safeParse(existing?.type);
+    if (type && legacy.success && providerFamily(legacy.data) === type) this.models.preserveLegacyProtocol(id, legacy.data);
     const updated = this.providers.update(id, {
       ...(input.name === undefined ? {} : { name: input.name }),
       ...(type === undefined ? {} : { type }),
@@ -456,6 +462,9 @@ export class ProviderService {
       );
     }
     try {
+      const capabilities = ModelCapabilitiesSchema.parse(input.capabilities);
+      try { for (const operation of capabilities.operations) resolveModelProfile(provider.type, operation, input.modelId, capabilities.profile); }
+      catch { throw new ManualModelServiceError('invalid_model', '模型调用协议与连接或支持的操作不匹配。'); }
       return this.models.saveManual(input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
@@ -485,6 +494,9 @@ export class ProviderService {
     }
     let updated: ModelRecord | null;
     try {
+      const capabilities = ModelCapabilitiesSchema.parse(input.capabilities ?? current.capabilities);
+      try { if (provider) for (const operation of capabilities.operations) resolveModelProfile(provider.type, operation, input.modelId ?? current.modelId, capabilities.profile); }
+      catch { throw new ManualModelServiceError('invalid_model', '模型调用协议与连接或支持的操作不匹配。'); }
       updated = this.models.updateManual(id, input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
@@ -632,13 +644,27 @@ export class ProviderService {
         latencyMs: Math.max(0, this.clock.now() - startedAt),
         message: 'Provider connection succeeded.',
       };
-    } catch {
+    } catch (error) {
       return {
         ok: false,
         latencyMs: Math.max(0, this.clock.now() - startedAt),
-        message: 'Provider connection test failed.',
+        message: await this.connectionFailureMessage(error, registration),
       };
     }
+  }
+
+  private async connectionFailureMessage(error: unknown, registration: ProviderRegistration): Promise<string> {
+    const normalized = await Promise.resolve().then(() => registration.adapter.normalizeError(error)).catch(() => null);
+    const status = normalized?.statusCode;
+    const descriptions: Readonly<Record<number, string>> = {
+      400: '连接请求不符合上游接口规范', 401: 'API Key 无效或已失效', 403: 'API Key 没有访问权限',
+      404: '模型目录接口不存在，请检查 Base URL 和协议', 405: '模型目录接口不支持 GET 请求',
+      429: '上游请求限流或额度不足', 500: '上游服务内部错误', 502: '上游网关错误', 503: '上游服务暂不可用',
+    };
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) {
+      return `HTTP ${status}：${descriptions[status] ?? '上游拒绝了连接检测请求'}`;
+    }
+    return 'Provider connection test failed.';
   }
 
   /** Returns the last in-process catalog state without exposing adapter data. */

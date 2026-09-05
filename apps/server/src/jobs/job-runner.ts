@@ -1230,6 +1230,7 @@ export class JobRunner {
       providerId: job.request.providerId,
       jobId: job.id,
       modelId: job.request.modelId,
+      ...(job.request.profile ? { profile: job.request.profile } : {}),
       idempotencyKey: job.idempotencyKey,
       attempt: job.attempt,
       ...(signal ? { signal } : {}),

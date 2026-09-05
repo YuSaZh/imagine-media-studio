@@ -45,3 +45,13 @@ Previously reviewed Unsplash photos now live only in `e2e/media/`; tests upload 
 | architecture.webp | https://images.unsplash.com/photo-1486406146926-c627a92ad1ab |
 
 Icons use existing Lucide; dialogs/popovers/tooltips use existing Radix. No dependency was added or upgraded.
+
+## Connection and model administration
+
+`/settings/providers` manages shared OpenAI, Gemini and xAI connections. One connection stores one endpoint and encrypted credentials for both image and video models. Existing individual protocol identifiers remain readable; editing a legacy connection upgrades it to its family while preserving existing model protocol bindings.
+
+`/settings/models` provides search, connection/type filters, model creation, editing, copying, enable/disable and manual-model deletion. The model editor selects a family-compatible wire protocol, supported operations, reference-image limits and parameter rules. Rules define paths, scalar control types, choices, ranges, defaults, visibility, required values and locked defaults. Common configuration needs no JSON; advanced capabilities remain editable.
+
+When parameter rules are enabled, the Composer renders only enabled, visible controls. Empty defaults are omitted from requests. The server independently applies the stored policy, rejects undeclared parameters and overrides client values for locked parameters before persisting the job. The selected model protocol is server-derived and snapshotted for asynchronous recovery. Native adapters still validate their actual wire contracts; configuring a parameter cannot make an upstream API support it.
+
+xAI video catalog discovery tries the official dedicated path and falls back to `/models` only for HTTP 404, 405 or 501. Both catalog envelopes are supported. Connection tests expose fixed explanations for normalized HTTP statuses without returning upstream response bodies or credentials. Architecture reference and exact upstream review are recorded in `docs/third-party/reuse-audit.md`.

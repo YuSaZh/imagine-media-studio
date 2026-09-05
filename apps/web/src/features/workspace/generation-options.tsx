@@ -14,7 +14,7 @@ const labels: Record<string, string> = { quality: '质量', output_format: '输�
 
 export function ExtraParameters({ model, values, onChange }: { model: WorkspaceModel | undefined; values: JsonObject; onChange: (values: JsonObject) => void }) {
   const set = (key: string, value: JsonValue | undefined) => { const next = { ...values }; if (value === undefined) delete next[key]; else next[key] = value; onChange(next); };
-  return <>{Object.entries(parameterFields(model)).filter(([key]) => key !== 'size').map(([key, value]) => {
+  return <>{Object.entries(parameterFields(model)).filter(([key, value]) => key !== 'size' && !(key === 'audio' && model?.raw.capabilities.supportsAudio) && !('const' in object(value))).map(([key, value]) => {
     const field = object(value);
     const options = Array.isArray(field.enum) ? field.enum.filter(item => ['string', 'number', 'boolean'].includes(typeof item)) : null;
     const label = typeof field.title === 'string' ? field.title : labels[key] ?? key;

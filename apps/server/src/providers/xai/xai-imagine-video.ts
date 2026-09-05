@@ -854,7 +854,8 @@ function displayName(value: unknown): string {
 
 function parseModels(value: unknown): readonly ProviderModel[] {
   if (!isRecord(value)) throw new XaiImagineVideoResponseError('xAI models response is invalid.');
-  const entries = Array.isArray(value.models) ? value.models : undefined;
+  const compatible = !Array.isArray(value.models) && Array.isArray(value.data);
+  const entries = Array.isArray(value.models) ? value.models : compatible ? value.data as unknown[] : undefined;
   if (entries === undefined || entries.length > 200) throw new XaiImagineVideoResponseError('xAI models response is invalid.');
   const models: ProviderModel[] = [];
   const seen = new Set<string>();
@@ -868,11 +869,13 @@ function parseModels(value: unknown): readonly ProviderModel[] {
     const outputModalities = Array.isArray(entry.output_modalities)
       ? entry.output_modalities.filter((value): value is string => typeof value === 'string').map((value) => value.toLowerCase())
       : [];
-    if (!outputModalities.includes('video') || !inputModalities.some((value) => value === 'text' || value === 'image')) continue;
+    const inferredVideo = compatible && entry.output_modalities === undefined && entry.input_modalities === undefined &&
+      (VIDEO_MODEL_IDS.has(id) || /(?:^|[-_])video(?:$|[-_.])/i.test(id));
+    if (!inferredVideo && (!outputModalities.includes('video') || !inputModalities.some((value) => value === 'text' || value === 'image'))) continue;
     seen.add(id);
     models.push({
       id,
-      displayName: displayName(entry.display_name ?? entry.displayName),
+      displayName: displayName(entry.display_name ?? entry.displayName ?? id),
       capabilities: VIDEO_MODEL_IDS.has(id) ? videoCapabilities(id) : conservativeVideoCapabilities(),
     });
   }
@@ -880,10 +883,11 @@ function parseModels(value: unknown): readonly ProviderModel[] {
 }
 
 function catalogEntryIds(value: unknown): ReadonlySet<string> {
-  if (!isRecord(value) || !Array.isArray(value.models) || value.models.length > 200) {
+  const entries = isRecord(value) ? (Array.isArray(value.models) ? value.models : value.data) : undefined;
+  if (!Array.isArray(entries) || entries.length > 200) {
     throw new XaiImagineVideoResponseError('xAI models response is invalid.');
   }
-  return new Set(value.models.flatMap((entry) => {
+  return new Set(entries.flatMap((entry) => {
     if (!isRecord(entry)) return [];
     const id = nonEmptyString(entry.id)?.trim();
     return id === undefined || !isSafeModelId(id) ? [] : [id];
@@ -1048,7 +1052,7 @@ export class XaiImagineVideoProvider implements ProviderAdapter {
   public async getLiveCapabilities(context: ProviderContext): Promise<ProviderCapabilities> {
     const runtime = context as XaiImagineVideoProviderContext;
     const configured = configuredModelIds(runtime, this.configuredModels);
-    const body = await this.requestJson(runtime, '/video-generation-models', false);
+    const body = await this.requestModelCatalog(runtime);
     const catalog = parseModels(body);
     const explicit = this.configuredModels !== undefined || Array.isArray(runtime.config?.models);
     const advertisedIds = catalogEntryIds(body);
@@ -1073,7 +1077,16 @@ export class XaiImagineVideoProvider implements ProviderAdapter {
 
   public async testConnection(context: ProviderContext): Promise<void> {
     const runtime = context as XaiImagineVideoProviderContext;
-    parseModels(await this.requestJson(runtime, '/video-generation-models', false));
+    parseModels(await this.requestModelCatalog(runtime));
+  }
+
+  private async requestModelCatalog(context: XaiImagineVideoProviderContext): Promise<unknown> {
+    try {
+      return await this.requestJson(context, '/video-generation-models', false);
+    } catch (error) {
+      if (!(error instanceof XaiImagineVideoHttpError) || ![404, 405, 501].includes(error.statusCode)) throw error;
+      return this.requestJson(context, '/models', false);
+    }
   }
 
   public async validate(request: GenerationRequest, context: ProviderContext): Promise<void> {

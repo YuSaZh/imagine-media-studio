@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { GenerationRequestSchema, JobStatusSchema, MediaOperationSchema } from './generation.js';
+import { NativeProviderProfileSchema } from './provider-protocols.js';
+import { ModelParametersSchema } from './model-parameters.js';
 
 export type JsonValue =
   | boolean
@@ -894,6 +896,9 @@ export type CustomAdapterPathTestResponse = z.infer<typeof CustomAdapterPathTest
 
 export const ProviderTypeSchema = z.enum([
   'mock',
+  'openai',
+  'gemini',
+  'xai',
   'openai-images-v1',
   'openai-responses-image-v1',
   'openai-videos-v1-compatible',
@@ -996,6 +1001,8 @@ const DurationSchema = z.union([
 ]);
 
 export const ModelCapabilitiesSchema = z.object({
+  profile: NativeProviderProfileSchema.optional(),
+  parameters: ModelParametersSchema.optional(),
   operations: z.array(MediaOperationSchema).min(1),
   aspectRatios: z.array(z.string().trim().min(1).max(32)).optional(),
   resolutions: z.array(z.string().trim().min(1).max(64)).optional(),

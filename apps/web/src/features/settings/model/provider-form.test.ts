@@ -56,7 +56,7 @@ describe('Provider editor mapping', () => {
     expect(form).toMatchObject({
       baseUrl: 'https://api.example.com',
       name: 'Stored Provider',
-      type: 'xai-imagine-image-v1',
+      type: 'xai',
     });
   });
 
@@ -86,8 +86,8 @@ describe('Provider editor mapping', () => {
     });
     expect(selected.type).toBe('xai-imagine-image-v1');
     expect(providerToForm(null)).toMatchObject({
-      profile: 'openai-images-v1',
-      type: 'openai-images-v1',
+      profile: 'openai',
+      type: 'openai',
       unsupportedType: false,
     });
     expect(PROVIDER_PROFILE_OPTIONS.some((option) => (option.value as string) === 'custom')).toBe(false);

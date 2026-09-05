@@ -34,6 +34,13 @@ describe('workspace API contracts', () => {
     expect(operationFor('image', 'text', [{ role: 'source', asset: {} as never }])).toBe('image.edit');
     expect(operationFor('video', 'first_frame', [])).toBe('video.image_to_video');
   });
+  it('maps xAI quality to its native request field instead of unsupported extra fields', () => {
+    const raw = model('xai', 'first');
+    raw.capabilities.profile = 'xai-imagine-image-v1';
+    const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: '1:1', resolution: '', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false, extra: { quality: 'medium' } };
+    expect(generationRequest(input)).toMatchObject({ quality: 'medium' });
+    expect(generationRequest(input)).not.toHaveProperty('extra');
+  });
   it('traverses catalogs and rejects a repeated cursor', async () => {
     await expect(allPages(async cursor => ({ items: [cursor ?? 'first'], nextCursor: cursor ? null : 'second' }))).resolves.toEqual(['first', 'second']);
     await expect(allPages(async () => ({ items: [], nextCursor: 'same' }))).rejects.toThrow('分页游标重复');

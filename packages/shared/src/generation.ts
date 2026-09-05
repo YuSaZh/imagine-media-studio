@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NativeProviderProfileSchema } from './provider-protocols.js';
 
 export const MediaOperationSchema = z.enum([
   'image.generate',
@@ -26,6 +27,7 @@ export const GenerationRequestSchema = z.object({
   operation: MediaOperationSchema,
   providerId: z.string().trim().min(1),
   modelId: z.string().trim().min(1),
+  profile: NativeProviderProfileSchema.optional(),
   prompt: z.string().trim().min(1),
   negativePrompt: z.string().optional(),
   inputs: z.array(AssetInputSchema).default([]),

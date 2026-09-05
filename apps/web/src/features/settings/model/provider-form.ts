@@ -1,8 +1,9 @@
-import { ProviderHeadersSchema, SafeConfigSchema, ManualModelCreateSchema, type ModelDto, type ProviderDto } from '@imagine/shared';
+import { PROVIDER_FAMILIES, providerFamily, ProviderHeadersSchema, SafeConfigSchema, ManualModelCreateSchema, type ModelDto, type ProviderDto } from '@imagine/shared';
 import type { ProviderWriteInput, ManualModelCreateInput } from '../api/settings-query';
 
 
 export const PROVIDER_PROFILE_OPTIONS = [
+  ...PROVIDER_FAMILIES,
   { value: 'mock', label: 'Mock Provider' },
   { value: 'openai-images-v1', label: 'OpenAI Images v1' },
   { value: 'openai-responses-image-v1', label: 'OpenAI Responses Image v1' },
@@ -20,7 +21,7 @@ export const PROVIDER_PROFILE_OPTIONS = [
 
 type ProviderProfile = (typeof PROVIDER_PROFILE_OPTIONS)[number]['value'];
 
-const DEFAULT_PROVIDER_PROFILE: ProviderProfile = 'openai-images-v1';
+const DEFAULT_PROVIDER_PROFILE: ProviderProfile = 'openai';
 
 const KNOWN_PROVIDER_PROFILES = new Set<string>(PROVIDER_PROFILE_OPTIONS.map(({ value }) => value));
 
@@ -40,7 +41,7 @@ export interface ProviderFormState {
 
 
 export function providerToForm(provider: ProviderDto | null): ProviderFormState {
-  const type = provider?.type ?? DEFAULT_PROVIDER_PROFILE;
+  const type = provider ? providerFamily(provider.type) ?? provider.type : DEFAULT_PROVIDER_PROFILE;
   const profile: ProviderProfile = KNOWN_PROVIDER_PROFILES.has(type)
     ? type as ProviderProfile
     : DEFAULT_PROVIDER_PROFILE;

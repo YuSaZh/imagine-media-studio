@@ -89,6 +89,18 @@ async function createHarness(
   return { database, providers, models, vault, registry, service };
 }
 
+describe('provider family migration', () => {
+  it('preserves model protocol, manual policy and credentials when upgrading a legacy connection', async () => {
+    const { service, models, registry } = await createHarness();
+    const provider = service.create({ name: 'Responses endpoint', type: 'openai-responses-image-v1', baseUrl: 'https://example.com/v1', apiKey: 'retained-key' });
+    const model = service.saveManualModel({ providerId: provider.id, modelId: 'image-model', displayName: 'Image model', capabilities: { operations: ['image.generate'], parameters: [] }, enabled: true });
+    expect(service.update(provider.id, { type: 'openai' })).toMatchObject({ type: 'openai', hasApiKey: true });
+    expect(models.get(model.id)).toMatchObject({ capabilitySource: 'manual', capabilities: { profile: 'openai-responses-image-v1', parameters: [] } });
+    expect((await registry.resolve(provider.id)).secrets.apiKey).toBe('retained-key');
+    expect(() => service.saveManualModel({ providerId: provider.id, modelId: 'wrong', displayName: 'Wrong', capabilities: { operations: ['image.generate'], profile: 'xai-imagine-image-v1' }, enabled: true })).toThrow('模型调用协议');
+  });
+});
+
 function capabilities(providerType: string, modelId: string): ProviderCapabilities {
   return {
     providerType,
@@ -822,6 +834,18 @@ describe('ProviderService', () => {
     expect(result.ok).toBe(false);
     expect(result.message).toBe('Provider connection test failed.');
     expect(JSON.stringify(result)).not.toContain('secret material');
+  });
+
+  it('reports a safe upstream status without exposing its response or credentials', async () => {
+    class UnauthorizedAdapter extends MockProviderAdapter {
+      public override async testConnection(): Promise<void> { throw new Error('upstream secret key'); }
+      public override normalizeError() { return { code: 'upstream_auth', kind: 'rejected' as const, message: 'upstream secret key', retryable: false, statusCode: 401 }; }
+    }
+    const { service } = await createHarness(new UnauthorizedAdapter());
+    service.ensureMockProvider();
+    const result = await service.testConnection(MOCK_PROVIDER_ID);
+    expect(result.message).toContain('HTTP 401');
+    expect(JSON.stringify(result)).not.toContain('secret key');
   });
 
   it('uses custom HTTP catalog responses only when configured and marks static fallback stale', async () => {

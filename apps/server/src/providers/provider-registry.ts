@@ -33,6 +33,8 @@ import {
 import { MockProviderAdapter } from './mock-provider.js';
 import type { ProviderHttpClient as SafeProviderHttpClient } from './provider-http-client.js';
 import { XaiImagineImageProvider, XaiImagineVideoProvider } from './xai/index.js';
+import { FamilyProvider } from './family-provider.js';
+import { MODEL_PROTOCOLS } from '@imagine/shared';
 
 export const MOCK_PROVIDER_ID = 'mock';
 
@@ -193,6 +195,10 @@ function registryAdapterError(
 
 function createAdapter(providerType: string, mockAdapter: ProviderAdapter): ProviderAdapter | null {
   switch (providerType) {
+    case 'openai':
+    case 'gemini':
+    case 'xai':
+      return new FamilyProvider(providerType, new Map(MODEL_PROTOCOLS.filter(profile => profile.family === providerType).map(profile => [profile.value, createAdapter(profile.value, mockAdapter)!])));
     case 'mock':
       return mockAdapter;
     case 'openai-images-v1':

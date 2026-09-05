@@ -245,3 +245,50 @@ test('custom generation parameters reach the job request from the bottom compose
     expect((await sent).postDataJSON()).toMatchObject({ resolution: '1920x1080', count: 2, extra: { quality: 'high', output_format: 'jpeg' } });
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });
+
+test('shared connection model management saves rules and renders them in the composer', async ({ page, request }) => {
+  const name = `Managed connection ${randomUUID()}`;
+  const created = await request.post('/internal/providers', { data: { name, type: 'xai', baseUrl: 'https://api.example.com/v1', enabled: true, isDefault: true } });
+  expect(created.status()).toBe(201);
+  const { provider } = await created.json();
+  try {
+    for (const kind of ['image', 'video']) {
+      const response = await request.post('/internal/models', { data: { providerId: provider.id, modelId: `grok-imagine-${kind}-1.5`, displayName: `Managed ${kind}`, capabilities: { operations: [`${kind}.generate`], profile: `xai-imagine-${kind}-v1`, parameters: kind === 'image' ? [{ path: 'count', label: '生成数量', type: 'number', min: 1, max: 4, step: 1, defaultValue: 1 }] : [] }, enabled: true } });
+      expect(response.status()).toBe(201);
+    }
+    await open(page, '/settings/providers');
+    await page.getByRole('button', { name: `编辑连接 ${name}`, exact: true }).click();
+    const types = page.getByLabel('接口类型', { exact: true });
+    await expect(types).toHaveValue('xai');
+    expect(await types.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['openai', 'gemini', 'xai', 'custom-http-v1', 'custom-js-v1']);
+    await page.getByRole('button', { name: '取消', exact: true }).click();
+    await open(page, '/settings/models');
+    await page.getByLabel('筛选连接', { exact: true }).selectOption(provider.id);
+    await expect(page.locator('.model-table tbody tr')).toHaveCount(2);
+    await page.getByRole('button', { name: '编辑模型 Managed image', exact: true }).click();
+    await expect(page.getByLabel('模型调用协议', { exact: true })).toHaveValue('xai-imagine-image-v1');
+    await page.getByLabel('参数默认值 1', { exact: true }).fill('2');
+    await page.getByLabel('固定默认值', { exact: true }).check();
+    await page.screenshot({ path: `/tmp/imagine-model-editor-${page.viewportSize()!.width}.png`, fullPage: true });
+    await page.getByRole('button', { name: '保存模型', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '编辑模型', exact: true })).toHaveCount(0);
+    const models = (await (await request.get(`/internal/models?providerId=${provider.id}`)).json()).items;
+    expect(models.find((model: { displayName: string }) => model.displayName === 'Managed image').capabilities.parameters[0]).toMatchObject({ defaultValue: 2, locked: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `/tmp/imagine-model-admin-${page.viewportSize()!.width}.png`, fullPage: true });
+    await open(page);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await expect(page.getByLabel('生成数量', { exact: true })).toHaveValue('2');
+    await expect(page.getByLabel('生成数量', { exact: true })).toBeDisabled();
+    await expect(page.getByLabel('画幅', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.getByLabel('创作描述', { exact: true }).fill('managed parameters');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured' } }) : route.continue());
+    const sent = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    const payload = (await sent).postDataJSON();
+    expect(payload).toMatchObject({ providerId: provider.id, count: 2 });
+    expect(payload).not.toHaveProperty('format');
+    expect(payload).not.toHaveProperty('aspectRatio');
+  } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
+});
