@@ -9,9 +9,7 @@ import { subscribeToInternalEvents } from './api/internal-events';
 import { AuthGate } from './features/auth/components/auth-gate';
 import { flushPromptDraft } from './features/composer/model/composer-draft';
 import { registerPwa } from './pwa-registration';
-import { isVisualFixtureMode } from './visual-fixture';
-import './styles/tokens.css';
-import './styles.css';
+import './features/workspace/workspace.css';
 
 function createAppQueryClient() {
   return new QueryClient({
@@ -25,23 +23,21 @@ function createAppQueryClient() {
   });
 }
 
-function AuthenticatedApplication({ fixtureMode }: { fixtureMode: boolean }) {
+function AuthenticatedApplication() {
   const [queryClient] = useState(createAppQueryClient);
 
   useEffect(() => {
-    if (fixtureMode) return;
     const unsubscribe = subscribeToInternalEvents(queryClient);
     window.addEventListener('beforeunload', unsubscribe, { once: true });
     return () => {
       window.removeEventListener('beforeunload', unsubscribe);
       unsubscribe();
     };
-  }, [fixtureMode, queryClient]);
+  }, [queryClient]);
 
   useEffect(() => {
-    if (fixtureMode) return;
     return subscribeToAuthRequired(() => queryClient.clear());
-  }, [fixtureMode, queryClient]);
+  }, [queryClient]);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -58,12 +54,10 @@ if (!rootElement) {
   throw new Error('Application root element was not found.');
 }
 
-const fixtureMode = isVisualFixtureMode();
-
 createRoot(rootElement).render(
   <StrictMode>
-    <AuthGate fixtureMode={fixtureMode}>
-      <AuthenticatedApplication fixtureMode={fixtureMode} />
+    <AuthGate>
+      <AuthenticatedApplication />
     </AuthGate>
   </StrictMode>,
 );

@@ -22,12 +22,12 @@ export default defineConfig({
         name: 'Imagine Media Studio',
         short_name: 'Imagine Studio',
         description: 'A lightweight workspace for media generation.',
-        lang: 'en',
+        lang: 'zh-CN',
         start_url: '/',
         scope: '/',
         display: 'standalone',
-        background_color: '#f3f3ef',
-        theme_color: '#171a19',
+        background_color: '#f8f9f8',
+        theme_color: '#f8f9f8',
         icons: [
           {
             src: '/icons/app-icon-192.png',
@@ -57,7 +57,7 @@ export default defineConfig({
             label: 'Imagine Media Studio desktop gallery and Composer',
           },
           {
-            src: '/screenshots/pwa-mobile-390x844-pr1.png',
+            src: '/screenshots/pwa-mobile-390x844.png',
             sizes: '390x844',
             type: 'image/png',
             label: 'Imagine Media Studio mobile gallery and Composer',
@@ -66,10 +66,10 @@ export default defineConfig({
       },
       workbox: {
         cleanupOutdatedCaches: true,
-        globIgnores: ['mock-media/**', 'screenshots/**'],
+        globIgnores: ['screenshots/**'],
         globPatterns: ['**/*.{css,html,js,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/internal(?:\/|$)/, /^\/interaction\.html$/],
+        navigateFallbackDenylist: [/^\/internal(?:\/|$)/],
         runtimeCaching: [createDerivedMediaRuntimeCaching()],
       },
     }),

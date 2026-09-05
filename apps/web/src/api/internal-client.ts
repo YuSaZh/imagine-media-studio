@@ -1099,7 +1099,7 @@ export const internalClient = {
     }),
   deleteJob: async (jobId: string) =>
     requestEmpty(`/internal/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
-  listAssets: async (options: { collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string } = {}) =>
+  listAssets: async (options: { collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
     requestJson(`/internal/assets${queryString(options)}`, AssetPageSchema),
   getAsset: async (assetId: string) =>
     requestJson(`/internal/assets/${encodeURIComponent(assetId)}`, AssetResponseSchema),

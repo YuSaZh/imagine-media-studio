@@ -1143,6 +1143,7 @@ export type AssetDto = z.infer<typeof AssetDtoSchema>;
 export const AssetPageSchema = z.object({
   items: z.array(AssetDtoSchema),
   nextCursor: z.string().nullable(),
+  jobs: z.array(JobDtoSchema).optional(),
 }).strict();
 
 export const AssetResponseSchema = z.object({ asset: AssetDtoSchema }).strict();

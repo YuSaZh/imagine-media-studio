@@ -1,5 +1,9 @@
 # Third-party reuse audit
 
+## 2026-09-05 production workspace replacement
+
+The new workspace uses Grok Imagine as a visual and interaction reference only, following direct public DOM/style inspection. No upstream page implementation was copied. Existing local nonvisual kernels retain their original audit and notices. Four previously reviewed Unsplash photographs were moved from the deleted prototype to `e2e/media/`; their exact source URLs are recorded in [workspace.md](../design-spec/workspace.md). They are test inputs only. Old generated study media, prototype video, legacy screenshots and page code were removed. No new third-party package was introduced.
+
 Audit date: 2026-08-25 (Asia/Tokyo)
 
 Status: **PR 3 selective reuse completed for two pure algorithm subsets**. Only the exact source blobs and targets listed below were adapted; file-level attribution, the complete MIT notice, and local contract tests are present. No upstream UI, assets, tests, or generated artifacts were copied.

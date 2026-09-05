@@ -31,99 +31,15 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-  e2e:
-    name: 'Playwright base: PR 1/3/4/5 + PR 6 (12 projects)'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 11.23.0
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install media tooling for Playwright webServer
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ffmpeg
-          ffmpeg -version
-          ffprobe -version
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Prepare isolated E2E data directory
-        run: |
-          data_dir=$(mktemp -d /tmp/imagine-media-studio-e2e-base-XXXXXX)
-          chmod 0700 "$data_dir"
-          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
-      - name: Run base Playwright projects
-        run: |
-          pnpm test:e2e \
-            --project=pr1-desktop-1920x1080 \
-            --project=pr1-desktop-1440x900 \
-            --project=pr1-mobile-430x932 \
-            --project=pr1-mobile-390x844 \
-            --project=pr6-desktop-1440x900 \
-            --project=pr6-desktop-1920x1080 \
-            --project=pr6-desktop-1280x800 \
-            --project=pr6-tablet-834x1112 \
-            --project=pr6-tablet-1024x1366 \
-            --project=pr6-mobile-430x932 \
-            --project=pr6-mobile-390x844 \
-            --project=pr6-mobile-360x800
-      - if: success() && hashFiles('artifacts/visual/pr1/*.png') != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr1-ui-screenshots
-          path: artifacts/visual/pr1
-          retention-days: 7
-      - if: success() && hashFiles('artifacts/visual/pr3/*.png') != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr3-ui-screenshots
-          path: artifacts/visual/pr3
-          retention-days: 7
-      - if: always() && hashFiles('artifacts/visual/pr5/*.png') != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr5-video-pwa-screenshots
-          path: artifacts/visual/pr5
-          retention-days: 7
-      - if: always() && hashFiles('artifacts/visual/pr6/**') != ''
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr6-adapter-screenshots-and-report
-          path: artifacts/visual/pr6
-          retention-days: 7
-      - if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: playwright-base-report-and-traces
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: ignore
-          retention-days: 7
-
-  pr7-e2e:
-    name: 'Playwright PR 7: ${{ matrix.project }}'
+  workspace-e2e:
+    name: 'Workspace browser gates: ${{ matrix.project }}'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        project:
-          - pr7-desktop-1920x1080
-          - pr7-desktop-1440x900
-          - pr7-desktop-1280x800
-          - pr7-tablet-1024x1366
-          - pr7-tablet-834x1194
-          - pr7-mobile-430x932
-          - pr7-mobile-390x844
-          - pr7-mobile-360x800
+        project: [workspace-1920x1080, workspace-1440x900, workspace-1280x800, workspace-1024x1366, workspace-834x1194, workspace-430x932, workspace-390x844, workspace-360x800]
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v5
@@ -133,136 +49,26 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Install media tooling for PR7 active Job reopen test
-        if: matrix.project == 'pr7-desktop-1440x900'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ffmpeg
-          ffmpeg -version
-          ffprobe -version
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg fonts-noto-core fonts-noto-cjk
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Prepare isolated E2E data directory
+      - name: Prepare isolated E2E data
         run: |
-          data_dir=$(mktemp -d "/tmp/imagine-media-studio-e2e-${{ matrix.project }}-XXXXXX")
+          data_dir=$(mktemp -d /tmp/imagine-media-studio-e2e-workspace-XXXXXX)
           chmod 0700 "$data_dir"
           echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
-      - name: Run PR7 project
-        run: pnpm test:e2e --project=${{ matrix.project }} --grep-invert='\[PR7 (a11y|perf)\]'
-      - name: Upload PR7 screenshots and visual report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr7-${{ matrix.project }}-visual
-          path: artifacts/visual/pr7
-          if-no-files-found: ignore
-          retention-days: 7
-      - name: Upload PR7 failure report and traces
-        if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr7-${{ matrix.project }}-failure-report
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: ignore
-          retention-days: 7
-
-  pr7-a11y-perf:
-    name: 'Playwright PR 7 a11y/perf: ${{ matrix.project }}'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        project:
-          - pr7-desktop-1440x900
-          - pr7-mobile-390x844
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 11.23.0
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Prepare isolated E2E data directory
-        run: |
-          data_dir=$(mktemp -d "/tmp/imagine-media-studio-e2e-a11y-${{ matrix.project }}-XXXXXX")
-          chmod 0700 "$data_dir"
-          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
-      - name: Run PR7 a11y and performance gates
-        run: pnpm test:e2e --project=${{ matrix.project }} --grep='\[PR7 (a11y|perf)\]'
-      - name: Upload PR7 a11y and performance reports
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: pr7-a11y-perf-${{ matrix.project }}
-          path: |
-            playwright-report
-            test-results
-          if-no-files-found: ignore
-          retention-days: 7
-
-  pr8-visual:
-    name: 'PR8 project visual baseline: ${{ matrix.project }}'
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        project:
-          - pr8-visual-desktop-1440x900
-          - pr8-visual-desktop-1920x1080
-          - pr8-visual-mobile-390x844
-          - pr8-visual-mobile-430x932
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
-        with:
-          version: 11.23.0
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm exec playwright install --with-deps chromium
-      - name: Prepare isolated visual baseline data directory
-        run: |
-          data_dir=$(mktemp -d "/tmp/imagine-media-studio-e2e-pr8-visual-${{ matrix.project }}-XXXXXX")
-          chmod 0700 "$data_dir"
-          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
-      - name: Run PR8 visual baseline comparison
+      - name: Check live workflows, accessibility and visual baseline
         run: pnpm test:e2e --project=${{ matrix.project }} --update-snapshots=none
-      - name: Upload PR8 visual baseline and diff report
-        if: always()
+      - if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: pr8-visual-${{ matrix.project }}
+          name: ${{ matrix.project }}-browser-results
           path: |
-            e2e/visual-baselines/pr8/${{ matrix.project }}
             playwright-report
             test-results
           if-no-files-found: ignore
           retention-days: 7
-      - name: Clean isolated visual baseline data directory
-        if: always()
-        run: |
-          case "${IMAGINE_E2E_DATA_DIR:-}" in
-            /tmp/imagine-media-studio-e2e-pr8-visual-*) rm -rf -- "$IMAGINE_E2E_DATA_DIR" ;;
-            '') ;;
-            *) echo "Refusing to remove unexpected visual baseline data directory." >&2; exit 1 ;;
-          esac
 
   docker-smoke:
     name: Single-container PR 3, PR 5, PR 6 and PR 8 API, video, adapter, archive and persistence smoke

@@ -2,53 +2,22 @@
 
 Imagine Media Studio is a lightweight, self-hosted web interface for managing image and video generation through user-provided external APIs.
 
-**PR 0 through PR 8 implementation and automated acceptance are complete, and v0.1.0 is published.** The current application includes the clean monorepo, single-container runtime, persistent internal API, encrypted Provider configuration, recoverable in-process jobs, managed media, installable and offline-capable PWA, responsive Gallery/Composer/Viewer flows, persistent Collections, settings, protocol-fixture-verified image and video Provider profiles, custom Provider management, bounded Gallery history, mobile gestures, automated accessibility/performance gates, and the PR 8 security, integrity, archive, repair, visual-regression, and release-pipeline work described in [`PLAN.MD`](./PLAN.MD). The released image is available by the immutable digest recorded in the [v0.1.0 GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.0). Real-platform PWA installation, private-reference visual evidence, and the other external boundaries remain explicit in [`Hold.md`](./Hold.md) and are not claimed as completed.
+The default application is the redesigned Imagine workspace. Open `/imagine` for creation, `/library` and `/saved` for media, `/projects` for collections, `/jobs` for task history and `/settings` for connections. The old UI and standalone prototype have been removed. See [workspace design and verification](docs/design-spec/workspace.md).
 
-## Development Status
+## Runtime
 
-- Node.js 24
-- pnpm workspace
-- React and Vite web app
-- Fastify application server
-- SQLite and Drizzle ORM
-- AES-256-GCM Provider Secret storage
-- Upload, thumbnails, posters, Range delivery, and SSRF-safe result downloads
-- Bounded multi-reference upload, browser image preprocessing, and role-aware Composer inputs
-- Full-screen desktop/mobile Mask editor with durable parent-child Assets
-- Durable Job state machine, outbox, and one browser SSE connection
-- Mock async video generation for text, first-frame image, and multi-reference image inputs
-- `openai-videos-v1-compatible`, `gemini-veo-operation-v1`, `gemini-omni-interactions-video-v1`, and `xai-imagine-video-v1` video profiles
-- Durable video polling with provider deadlines and result expiry, cancel/retry handling, and SQLite restart recovery
-- Native video viewing with controls, inline playback, poster delivery, download, and HTTP Range support
-- Workbox `NetworkFirst` v2 runtime caching limited to same-origin successful poster/thumbnail responses, with direct media `401` cache eviction; complete videos, Provider URLs, URL credentials, query/Range, and Authorization-bearing requests are excluded
-- Central bounded durable result manifests for Provider outputs, with server-only credentials and no secret media URLs
-- Optional application-password session gate
-- One Docker service and one `/data` volume
-- OpenAI Images/Responses, Gemini Native/Interactions, and xAI Imagine image profiles with capability-driven model catalogs
-- Bounded SSRF-safe Provider HTTP transport with response limits, timeouts, and server-only credentials
-- Durable JobRunner stage retries with Provider `retry-after` handling
-- Declarative custom HTTP adapters with bounded JSON/YAML parsing, JSON/form/multipart bodies, path/status/result extraction, request schemas, capability previews, dry runs, redacted previews, simulation, and path tests
-- Administrator-installed Trusted JavaScript adapters with immutable manifest/source digests, worker execution, exact host allowlists, bounded resource/output limits, and SafeHttpPort-only network access
-- Session-scoped offline Gallery/Job snapshots, offline-safe Prompt drafts, PWA install/update guidance, and cold-launch recovery without browser-side secrets or generated POST caching
-- Infinite Gallery/Job pagination with bounded history, stable deduplication, virtual rendering, and serialized optimistic mutations with failure rollback
-- Eight-viewport PR 7 interaction coverage plus representative axe WCAG 2A/2AA, JavaScript resource, and CLS gates
-- Immutable SQLite migration checksums, bounded integrity reporting, and authenticated online database backups
-- Bounded media consistency reconciliation with a durable queue and one-shot safe thumbnail/poster repair
-- Offline full-data archive create/verify/target-only restore with server/CLI mutual exclusion
-- Four-viewport repository-owned pixel-diff baselines that remain separate from private Grok and physical-device evidence
-- Tag-gated amd64/arm64 GHCR candidate build, digest smoke, delayed stable-tag promotion, SBOM/provenance, artifact attestation, and GitHub Release automation
-- Local dependency installation, lint, typecheck, and unit checks
-- GitHub Actions quality/build, E2E, screenshot artifact, and single-container Docker smoke verification
+- Node.js 24, pnpm, React/Vite, Fastify and SQLite/Drizzle.
+- One Docker service, one application process, one port and one `/data` volume.
+- Capability-driven image/video Providers, encrypted credentials, durable jobs and one browser SSE connection.
+- Original media delivery, uploads, masks, thumbnails/posters, native video and server-side search/pagination.
+- Authenticated offline previews/drafts, PWA, preferences and custom HTTP/trusted JavaScript adapters.
+- Database integrity, backups, media repair and offline full-data archives.
 
-PR 4 image and PR 5 video adapters are verified against official-protocol fixtures, injected HTTP, deterministic Mock workflows, and the single-container runtime boundary. No production external credentials or live Provider endpoints were used; credentialed external acceptance remains pending in [`Hold.md`](./Hold.md). PR 1 visual fixtures are available only behind an explicit test session key and are never a production fallback. PR 1 strict Grok Imagine L3/L4 classification remains deferred because the authenticated private reference package is not available; public unauthenticated evidence is documented without claiming pixel parity.
+Real generation requires user-configured external APIs. Mock exercises workflows with test outputs; no sample gallery or simulated browser generation is shipped. Credentials stay on the server.
 
-PR 0 evidence is recorded in [`docs/architecture/pr0-verification.md`](./docs/architecture/pr0-verification.md), PR 2 evidence in [`docs/architecture/pr2-verification.md`](./docs/architecture/pr2-verification.md), PR 3 evidence in [`docs/architecture/pr3-verification.md`](./docs/architecture/pr3-verification.md), and PR 4 evidence in [`docs/architecture/pr4-verification.md`](./docs/architecture/pr4-verification.md). PR 1 screenshots and the current gap report are in [`artifacts/visual/pr1`](./artifacts/visual/pr1) and [`docs/design-spec/pr1-visual-diff-report.md`](./docs/design-spec/pr1-visual-diff-report.md).
-PR 3 desktop/mobile screenshots and visual review are in [`artifacts/visual/pr3`](./artifacts/visual/pr3) and [`artifacts/visual/pr3/visual-diff-report.md`](./artifacts/visual/pr3/visual-diff-report.md).
-PR 5 video, restart, media-delivery, and PWA evidence is recorded in [`docs/architecture/pr5-verification.md`](./docs/architecture/pr5-verification.md).
-PR 5 offline media acceptance covers a known recent Poster while the installed app is already controlled by its Service Worker. PR 7 now adds bounded, session-scoped cold-offline Gallery and Job reconstruction, Prompt draft recovery, and reconnect refresh without enabling offline writes.
-PR 6 custom Provider examples and the feature/security acceptance matrix are in [`examples/custom-providers`](./examples/custom-providers) and [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md). Local acceptance covered 95 test files / 828 tests, lint, typecheck, production build, E2E TypeScript compilation, Playwright (61 passed / 19 skipped), and an isolated Docker smoke. GitHub Actions run [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) for commit `79a30f2` passed the quality, Playwright, and single-container smoke jobs.
-PR 7 automated acceptance is recorded in [`docs/architecture/pr7-verification.md`](./docs/architecture/pr7-verification.md), with accessibility/performance details in [`docs/architecture/pr7-a11y-performance.md`](./docs/architecture/pr7-a11y-performance.md) and fixed-viewport evidence in [`artifacts/visual/pr7`](./artifacts/visual/pr7). GitHub Actions run [33174754136](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136) passed all 13 quality, Docker, base E2E, PR 7 viewport, axe, and performance jobs for commit `a58ab7b`.
-PR 8 and the post-release provenance fix passed all 17 jobs in [GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872) for commit `4dc4432`, including quality/build, the full isolated single-container smoke, base E2E, all PR 7 viewport and a11y/performance jobs, and all four project-owned PR 8 visual baselines. The [v0.1.0 release run 33215005527](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33215005527) passed candidate publish, exact-digest smoke, stable-tag promotion, and GitHub Release publication for tag commit `967b350`. Tags `0.1.0`, `0.1`, `latest`, and `sha-967b350ff76f15b54e4de0db91d092b778dceac8` resolve to `ghcr.io/yusazh/imagine-media-studio@sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018`.
+## Verification
+
+Run `pnpm run ci` and `E2E_PORT=<unused-task-port> pnpm test:e2e --update-snapshots=none`. CI checks eight viewport sizes, live workflows, accessibility, visual baselines and the isolated single-container Docker smoke. Backend acceptance and release history remain in `docs/architecture/` and Git history; their earlier page screenshots and selectors do not describe this UI. The published v0.1.0 image predates this redesign; build current source for the new workspace.
 
 ## Local Safety
 

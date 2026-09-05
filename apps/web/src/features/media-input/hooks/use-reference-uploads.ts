@@ -27,7 +27,6 @@ export interface AddReferenceFilesOptions {
 }
 
 export interface ReferenceUploadCallbacks {
-  fixtureMode: boolean;
   role: ReferenceUploadRole;
   onReady: (clientId: string, assetId: string, role: ReferenceUploadRole) => void;
   onRemoveReady: (assetId: string, role: ReferenceUploadRole) => void;
@@ -62,13 +61,11 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
       prepare: (file, signal) => prepareBrowserImage(file, signal, {
         policy: callbacksRef.current.preprocessPolicy,
       }),
-      upload: (file, signal, inputDescriptor, clientId) => {
+      upload: (file, signal, _inputDescriptor, clientId) => {
         const role = uploadRolesRef.current.get(clientId) ?? callbacksRef.current.role;
         return uploadReferenceImage(
           file,
           signal,
-          callbacksRef.current.fixtureMode,
-          inputDescriptor,
           role,
         );
       },
@@ -92,7 +89,7 @@ export function useReferenceUploads(callbacks: ReferenceUploadCallbacks) {
     const role = callbacksRef.current.role;
     const existingFingerprints = new Set(stateRef.current.entries.map((entry) => entry.fingerprint));
     const acquisitionOptions: AcquisitionOptions = {
-      allowDuplicateFingerprints: callbacksRef.current.fixtureMode,
+      allowDuplicateFingerprints: false,
       allowedMimeTypes: compatibleSourceMimeTypes(callbacksRef.current.preprocessPolicy),
       existingCount: options.existingCount,
       existingFingerprints,

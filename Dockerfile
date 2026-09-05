@@ -26,21 +26,13 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 FROM dependencies AS build
 
-ARG INCLUDE_INTERACTION_PREVIEW=false
-
 COPY . .
 RUN pnpm build
-RUN if [ "$INCLUDE_INTERACTION_PREVIEW" = "true" ]; then \
-  INTERACTION_BUILD_DIR=/opt/imagine-interaction pnpm --filter @imagine/web exec vite build --config vite.interaction.config.ts; \
-  fi
 RUN pnpm --filter @imagine/server --prod deploy --legacy /opt/imagine-server
 RUN mkdir -p /opt/imagine-server/public /opt/imagine-server/migrations \
   && cp -R apps/web/dist/. /opt/imagine-server/public/ \
   && cp -R apps/server/migrations/. /opt/imagine-server/migrations/ \
   && cp LICENSE THIRD_PARTY_NOTICES.md /opt/imagine-server/
-RUN if [ "$INCLUDE_INTERACTION_PREVIEW" = "true" ]; then \
-  cp -R /opt/imagine-interaction/. /opt/imagine-server/public/; \
-  fi
 
 FROM node:24-bookworm-slim AS runtime
 

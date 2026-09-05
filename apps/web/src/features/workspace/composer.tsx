@@ -1,0 +1,156 @@
+import { useEffect, useRef, useState } from 'react';
+import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
+import { ArrowUp, Check, ChevronDown, Image as ImageIcon, LoaderCircle, Plus, Ratio, RefreshCw, SlidersHorizontal, Video, X } from 'lucide-react';
+import { COMPOSER_DRAFT_MAX_PROMPT_LENGTH } from '../composer/model/composer-draft';
+import type { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
+import { filesFromClipboard, filesFromDataTransfer } from '../media-input/model/acquisition';
+import { storedInputAvailability, descriptorsExceedingTotalBytes } from '../media-input/model/input-compatibility';
+import type { AcquisitionRejection } from '../media-input/model/types';
+import { Choice, Options, Tool } from './ui';
+import { operationFor, type Creation, type MediaKind, type ReferenceInput, type WorkspaceModel } from './data';
+
+interface ComposerProps {
+  prompt: string;
+  onPrompt: (prompt: string) => void;
+  mode: MediaKind;
+  onMode: (mode: MediaKind) => void;
+  videoMode: 'text' | 'first_frame' | 'references';
+  onVideoMode: (mode: 'text' | 'first_frame' | 'references') => void;
+  models: WorkspaceModel[];
+  model: WorkspaceModel | undefined;
+  onModel: (key: string) => void;
+  references: readonly ReferenceInput[];
+  uploads: ReturnType<typeof useReferenceUploads>;
+  onFiles: (files: readonly File[], rejected?: readonly AcquisitionRejection[]) => void;
+  onRemove: (assetId: string) => void;
+  onCreate: (creation: Creation) => void;
+  onConnections: () => void;
+  online: boolean;
+  submitting: boolean;
+  loading: boolean;
+  focusToken: number;
+}
+
+const UPLOAD_STATUS = { queued: '等待上传', preprocessing: '准备图片', uploading: '正在上传', ready: '已上传', error: '上传失败' };
+
+export function Composer(props: ComposerProps) {
+  const { model, mode, prompt, references, uploads, videoMode } = props;
+  const [ratio, setRatio] = useState('');
+  const [resolution, setResolution] = useState('');
+  const [count, setCount] = useState(1);
+  const [duration, setDuration] = useState(5);
+  const [negativePrompt, setNegativePrompt] = useState('');
+  const [seed, setSeed] = useState('');
+  const [audio, setAudio] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
+  const dragDepth = useRef(0);
+  const operation = operationFor(mode, videoMode, references);
+  const policy = model?.capabilities.inputImagePolicy ?? DEFAULT_IMAGE_INPUT_POLICY;
+  const descriptors = references.map(input => ({ fileSize: input.asset.fileSize, mimeType: input.asset.mimeType, width: input.asset.width ?? 0, height: input.asset.height ?? 0 }));
+  const referenceCount = references.filter(input => input.role === 'reference').length;
+  const hasSource = references.some(input => input.role === 'source');
+  const invalidReferences = references.some((input, index) => {
+    if (storedInputAvailability({ persistedAsset: true, inputDescriptor: descriptors[index]! }, policy, true) !== 'ready') return true;
+    if (mode === 'image') {
+      if (input.role === 'mask') return !hasSource || !model?.capabilities.supportsMask;
+      return !['source', 'reference'].includes(input.role);
+    }
+    return videoMode === 'text' || (videoMode === 'first_frame' ? input.role !== 'first_frame' : input.role !== 'reference');
+  }) || referenceCount > (model?.capabilities.maxReferenceImages ?? 0) ||
+    (mode === 'video' && videoMode === 'first_frame' && references.length !== 1) ||
+    (mode === 'video' && videoMode === 'references' && references.length === 0) ||
+    descriptorsExceedingTotalBytes(descriptors, policy).size > 0;
+  const preparing = uploads.state.entries.some(entry => entry.status !== 'ready' || !references.some(input => input.asset.id === entry.assetId));
+  const canSubmit = !!model && props.online && !!prompt.trim() && !preparing && !invalidReferences && !props.submitting && !props.loading;
+  const uploadMaximum = mode === 'video' && videoMode === 'first_frame' ? 1 : model?.capabilities.maxReferenceImages ?? 0;
+  const uploadAllowed = !!model && props.online && uploadMaximum > 0 && !(mode === 'video' && videoMode === 'text');
+  const localAssetIds = new Set(uploads.state.entries.map(entry => entry.assetId));
+
+  useEffect(() => {
+    if (!model) return;
+    setRatio(current => model.capabilities.aspectRatios.includes(current) ? current : model.capabilities.aspectRatios[0] ?? '');
+    setResolution(current => model.capabilities.resolutions.includes(current) ? current : model.capabilities.resolutions[0] ?? '');
+    setCount(current => Math.max(1, Math.min(current, model.capabilities.maxBatchCount)));
+    setDuration(current => {
+      const range = model.capabilities.durationRange;
+      if (range) return Math.max(range.min, Math.min(range.max, current));
+      return model.capabilities.durations.includes(current) ? current : model.capabilities.durations[0] ?? 5;
+    });
+  }, [model]);
+  useEffect(() => { if (props.focusToken) textareaRef.current?.focus(); }, [props.focusToken]);
+  useEffect(() => {
+    const element = composerRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => document.documentElement.style.setProperty('--composer-size', `${element.offsetHeight}px`));
+    observer.observe(element);
+    return () => { observer.disconnect(); document.documentElement.style.removeProperty('--composer-size'); };
+  }, []);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const update = () => document.documentElement.style.setProperty('--keyboard-lift', `${viewport ? Math.max(0, innerHeight - viewport.height - viewport.offsetTop) : 0}px`);
+    viewport?.addEventListener('resize', update);
+    viewport?.addEventListener('scroll', update);
+    return () => { viewport?.removeEventListener('resize', update); viewport?.removeEventListener('scroll', update); document.documentElement.style.removeProperty('--keyboard-lift'); };
+  }, []);
+
+  const submit = () => {
+    if (!canSubmit || !model) return;
+    props.onCreate({ model, operation, prompt, inputs: references, ratio, resolution, count: mode === 'video' ? 1 : count, duration, negativePrompt, seed, audio });
+  };
+  const modelOptions = props.models.filter(candidate => candidate.capabilities.operations.includes(operation));
+  const videoModes = [
+    { key: 'text' as const, label: '文字', operation: 'video.generate' as const },
+    { key: 'first_frame' as const, label: '首帧', operation: 'video.image_to_video' as const },
+    { key: 'references' as const, label: '参考图', operation: 'video.reference_to_video' as const },
+  ].filter(option => props.models.some(candidate => candidate.capabilities.operations.includes(option.operation)));
+
+  return <form className={`creation-composer ${dragging ? 'is-dragging' : ''}`} ref={composerRef} aria-label="生成工作区" onSubmit={event => { event.preventDefault(); submit(); }}
+    onDragEnter={event => { event.preventDefault(); dragDepth.current += 1; setDragging(true); }}
+    onDragOver={event => event.preventDefault()}
+    onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); }}
+    onDrop={event => { event.preventDefault(); dragDepth.current = 0; setDragging(false); const files = filesFromDataTransfer(event.dataTransfer); props.onFiles(files.files, files.rejected); }}>
+    {dragging && <div className="drop-target"><Plus size={28} /></div>}
+    {(references.length > 0 || uploads.state.entries.length > 0) && <div className="reference-tray">
+      {references.filter(input => !localAssetIds.has(input.asset.id)).map((input, index) => <div className="reference" key={input.asset.id}>
+        <img src={input.asset.thumbnailUrl ?? input.asset.contentUrl} alt={input.asset.originalFilename ?? '参考图片'} /><span>{{ source: '原图', reference: '参考', first_frame: '首帧', last_frame: '尾帧', mask: '蒙版' }[input.role]}</span>
+        <Tool label={`移除参考图 ${index + 1}`} onClick={() => props.onRemove(input.asset.id)}><X size={13} /></Tool>
+      </div>)}
+      {uploads.state.entries.map((entry, index) => <div className={`reference upload-${entry.status}`} key={entry.clientId}>
+        <img src={entry.previewUrl} alt={entry.file.name} /><span>{UPLOAD_STATUS[entry.status]}</span><Tool label={`移除上传图片 ${index + 1}`} onClick={() => uploads.remove(entry.clientId)}><X size={13} /></Tool>
+        {entry.status === 'error' && <button className="upload-retry" type="button" aria-label="重试上传" title={entry.error ?? '重试上传'} onClick={() => uploads.retry(entry.clientId)}><RefreshCw size={15} /></button>}
+      </div>)}
+    </div>}
+    <textarea ref={textareaRef} aria-label="创作描述" placeholder={mode === 'image' ? (hasSource ? '想怎样修改这张图片？' : '描述你想创作的画面…') : (videoMode === 'text' ? '描述场景、镜头与动作…' : '让这个画面怎样动起来？')}
+      maxLength={COMPOSER_DRAFT_MAX_PROMPT_LENGTH} value={prompt} rows={2} onChange={event => props.onPrompt(event.target.value)}
+      onPaste={event => { const files = filesFromClipboard(event.clipboardData); if (files.files.length) { if (!files.hasText) event.preventDefault(); props.onFiles(files.files, files.rejected); } }}
+      onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); } }} />
+    {!props.online ? <p className="composer-notice" role="status">当前离线，草稿已保留</p> : !model && !props.loading ? <div className="composer-notice" role="status"><span>没有支持当前创作类型的模型</span><button type="button" onClick={props.onConnections}>配置连接</button></div> : null}
+    {uploads.state.rejections.length > 0 && <div className="composer-notice" role="alert"><span>{uploads.state.rejections.map(item => `${item.name}：${item.reason}`).join('；')}</span><button type="button" onClick={uploads.clearRejections}>关闭</button></div>}
+    {invalidReferences && references.length > 0 && <p className="composer-notice" role="alert">参考图的角色、数量或大小与当前模型不兼容，请移除或切换模型。</p>}
+    {mode === 'video' && videoModes.length > 1 && <div className="video-input-choices segments" aria-label="视频输入方式" role="group">{videoModes.map(option => <button type="button" key={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div>}
+    <div className="creation-controls">
+      <input ref={inputRef} hidden type="file" aria-label="上传参考图" accept="image/*" multiple onChange={event => { props.onFiles([...event.target.files ?? []]); event.target.value = ''; }} />
+      <Tool label="添加参考图" disabled={!uploadAllowed} onClick={() => inputRef.current?.click()}><Plus size={20} /></Tool>
+      <div className="segments mode-segments" role="group" aria-label="创作类型"><button type="button" aria-label="图片" aria-pressed={mode === 'image'} onClick={() => props.onMode('image')}><ImageIcon size={15} /><span>图片</span></button><button type="button" aria-label="视频" aria-pressed={mode === 'video'} onClick={() => props.onMode('video')}><Video size={16} /><span>视频</span></button></div>
+      <Options label="选择生成模型" className="model-trigger" trigger={<><span className="model-dot" /><span>{model?.name ?? '选择模型'}</span><ChevronDown size={13} /></>}><div className="option-heading">模型与服务</div>{modelOptions.map(option => <Choice key={option.key} active={model?.key === option.key} onClick={() => props.onModel(option.key)}><span className="choice-copy"><strong>{option.name}</strong><small>{option.providerName}</small></span>{model?.key === option.key && <Check size={15} />}</Choice>)}</Options>
+      {model && model.capabilities.aspectRatios.length > 0 && <Options label="选择画幅" className="desktop-control" trigger={<><Ratio size={15} /><span>{ratio}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div><div className="ratio-options">{model.capabilities.aspectRatios.map(value => <Choice key={value} active={ratio === value} onClick={() => setRatio(value)}><i style={{ aspectRatio: value.replace(':', '/') }} /><span>{value}</span></Choice>)}</div></Options>}
+      <Options label="生成设置" trigger={<SlidersHorizontal size={18} />}>
+        <div className="option-heading">生成设置</div>
+        <label className="setting-line mobile-control"><span>模型与服务</span><select aria-label="模型与服务" value={model?.key ?? ''} onChange={event => props.onModel(event.target.value)}>{modelOptions.map(option => <option key={option.key} value={option.key}>{option.providerName} · {option.name}</option>)}</select></label>
+        <label className="setting-line"><span>画幅</span><select aria-label="画幅" value={ratio} onChange={event => setRatio(event.target.value)}>{model?.capabilities.aspectRatios.map(value => <option key={value}>{value}</option>)}</select></label>
+        {mode === 'image' && (model?.capabilities.maxBatchCount ?? 1) > 1 && <label className="setting-line"><span>生成数量</span><select aria-label="生成数量" value={count} onChange={event => setCount(Number(event.target.value))}>{Array.from({ length: Math.min(32, model?.capabilities.maxBatchCount ?? 1) }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value} 张</option>)}</select></label>}
+        {!!model?.capabilities.resolutions.length && <label className="setting-line"><span>分辨率</span><select aria-label="分辨率" value={resolution} onChange={event => setResolution(event.target.value)}>{model.capabilities.resolutions.map(value => <option key={value}>{value}</option>)}</select></label>}
+        {mode === 'video' && (!!model?.capabilities.durations.length || model?.capabilities.durationRange) && <label className="setting-line"><span>视频时长</span>{model?.capabilities.durationRange ? <input aria-label="视频时长" type="number" min={model.capabilities.durationRange.min} max={model.capabilities.durationRange.max} value={duration} onChange={event => setDuration(Number(event.target.value))} /> : <select aria-label="视频时长" value={duration} onChange={event => setDuration(Number(event.target.value))}>{model?.capabilities.durations.map(value => <option key={value} value={value}>{value} 秒</option>)}</select>}</label>}
+        {model?.raw.capabilities.supportsNegativePrompt === true && <label className="setting-line stacked"><span>负面提示词</span><textarea aria-label="负面提示词" value={negativePrompt} onChange={event => setNegativePrompt(event.target.value)} /></label>}
+        {model?.raw.capabilities.supportsSeed === true && <label className="setting-line"><span>种子</span><input aria-label="种子" value={seed} inputMode="numeric" onChange={event => setSeed(event.target.value)} placeholder="随机" /></label>}
+        {mode === 'video' && model?.raw.capabilities.supportsAudio === true && <label className="setting-line"><span>生成音频</span><input type="checkbox" aria-label="生成音频" checked={audio} onChange={event => setAudio(event.target.checked)} /></label>}
+      </Options>
+      <span className="composer-spacer" />
+      <button type="submit" className="generate-button" aria-label="开始生成" disabled={!canSubmit}>{props.submitting ? <LoaderCircle className="spin" size={20} /> : <ArrowUp size={21} strokeWidth={2.5} />}</button>
+    </div>
+    <div className="mobile-model-status"><span>{model ? `${model.providerName} · ${model.name}` : props.loading ? '正在加载模型' : '尚未配置模型'}</span><span>{ratio}{mode === 'image' ? ` · ${count} 张` : ''}</span></div>
+  </form>;
+}

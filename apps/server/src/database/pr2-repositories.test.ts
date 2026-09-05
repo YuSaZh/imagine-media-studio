@@ -51,6 +51,24 @@ function assetInput(path: string) {
 }
 
 describe('PR 2 database repositories', () => {
+  it('searches persisted filenames and job prompts with literal characters and normal pagination', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm);
+    const jobs = new JobRepository(database.orm);
+    const job = jobs.create(createMockGenerationRequest({ prompt: '山海 100% BLUE' }));
+    const first = assets.create({ ...assetInput('first.png'), jobId: job.id, favorite: true });
+    assets.create(assetInput('blue-room.png'));
+    assets.create(assetInput('unrelated.png'));
+    expect(assets.page({ search: '100%' }).items.map((item) => item.id)).toEqual([first.id]);
+    expect(assets.page({ search: '山海', favorite: true }).items).toHaveLength(1);
+    const page = assets.page({ search: 'BLUE', limit: 1 });
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).not.toBeNull();
+    const next = assets.page({ search: 'BLUE', limit: 1, cursor: page.nextCursor! });
+    expect(next.items).toHaveLength(1);
+    expect(next.items[0]?.id).not.toBe(page.items[0]?.id);
+    expect(next.nextCursor).toBeNull();
+  });
   it('caps persisted generation counts and rejects direct invalid result manifests', async () => {
     const database = await createTestDatabase();
     const jobs = new JobRepository(database.orm);

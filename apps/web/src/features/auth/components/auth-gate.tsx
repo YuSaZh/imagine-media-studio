@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import type { AuthStatus } from '@imagine/shared';
 import {
   AlertCircle,
-  Aperture,
+  Sparkles,
   ArrowRight,
   LoaderCircle,
   LockKeyhole,
@@ -25,7 +25,6 @@ import {
   offlineBootstrapMode,
 } from '../../../pwa-offline-snapshot.js';
 
-const FIXTURE_AUTH_STATUS = { authenticated: true, publicAccessWarning: false, required: false } as const satisfies AuthStatus;
 const OFFLINE_AUTH_STATUS = { authenticated: true, publicAccessWarning: false, required: true } as const satisfies AuthStatus;
 const OFFLINE_PUBLIC_STATUS = { authenticated: false, publicAccessWarning: false, required: false } as const satisfies AuthStatus;
 let initialStatusRequest: Promise<AuthStatus> | undefined;
@@ -57,8 +56,7 @@ export interface InitialAuthResolution {
   readonly offlineBootstrap: boolean;
 }
 
-export async function resolveInitialAuthStatus(fixtureMode: boolean): Promise<InitialAuthResolution> {
-  if (fixtureMode) return { status: FIXTURE_AUTH_STATUS, offlineBootstrap: false };
+export async function resolveInitialAuthStatus(): Promise<InitialAuthResolution> {
   if (isBrowserExplicitlyOffline()) {
     markNetworkFailure();
     const bootstrapMode = offlineBootstrapMode();
@@ -90,9 +88,6 @@ export async function resolveInitialAuthStatus(fixtureMode: boolean): Promise<In
   }
 }
 
-export async function loadInitialAuthStatus(fixtureMode: boolean): Promise<AuthStatus> {
-  return (await resolveInitialAuthStatus(fixtureMode)).status;
-}
 
 export function resetInitialStatusRequest(): void {
   if (initialStatusRequestPending) return;
@@ -129,11 +124,11 @@ export function AuthPrompt({
     <AuthFrame>
       <form aria-busy={pending} className="auth-gate-form" onSubmit={onSubmit}>
         <div>
-          <p className="page-eyebrow">Protected workspace</p>
-          <h2>Unlock</h2>
+          <p className="auth-caption">受保护的工作区</p>
+          <h2>登录 Imagine</h2>
         </div>
         <label>
-          <span>Application password</span>
+          <span>应用密码</span>
           <span className="auth-password-field">
             <LockKeyhole aria-hidden="true" size={17} />
             <input
@@ -160,7 +155,7 @@ export function AuthPrompt({
           {pending
             ? <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
             : <LogIn aria-hidden="true" size={16} />}
-          {pending ? 'Unlocking' : 'Unlock workspace'}
+          {pending ? '正在登录' : '进入工作区'}
         </button>
       </form>
     </AuthFrame>
@@ -171,7 +166,7 @@ function AuthFrame({ children }: { children: ReactNode }) {
   return (
     <main className="auth-gate">
       <header className="auth-gate-brand">
-        <span aria-hidden="true"><Aperture size={22} /></span>
+        <span aria-hidden="true"><Sparkles size={22} /></span>
         <h1>Imagine Media Studio</h1>
       </header>
       {children}
@@ -188,14 +183,10 @@ function authErrorMessage(error: unknown): string {
 
 export function AuthGate({
   children,
-  fixtureMode,
 }: {
   children: ReactNode;
-  fixtureMode: boolean;
 }) {
-  const [status, setStatus] = useState<AuthStatus | null>(() =>
-    fixtureMode ? FIXTURE_AUTH_STATUS : null,
-  );
+  const [status, setStatus] = useState<AuthStatus | null>(null);
   const [offlineBootstrap, setOfflineBootstrap] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [password, setPassword] = useState('');
@@ -305,11 +296,10 @@ export function AuthGate({
   }, []);
 
   useEffect(() => {
-    if (fixtureMode) return;
     let active = true;
     const authEpoch = authEpochRef.current;
     updateStatusError(false);
-    void resolveInitialAuthStatus(false).then(
+    void resolveInitialAuthStatus().then(
       (resolution) => {
         if (active && authEpoch === authEpochRef.current) {
           updateAuthState(resolution.status, resolution.offlineBootstrap);
@@ -323,10 +313,10 @@ export function AuthGate({
     return () => {
       active = false;
     };
-  }, [attempt, fixtureMode]);
+  }, [attempt]);
 
   useEffect(() => {
-    if (fixtureMode || typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return;
     return subscribeToOnlineAuthRetry(() => {
       const current = authStateRef.current;
       if (
@@ -340,10 +330,9 @@ export function AuthGate({
       }
       retryStatus();
     });
-  }, [fixtureMode]);
+  }, []);
 
   useEffect(() => {
-    if (fixtureMode) return;
     return subscribeToAuthRequired((reason) => {
       invalidateAuthRequests();
       resetInitialStatusRequest();
@@ -367,7 +356,7 @@ export function AuthGate({
       setLoginPending(false);
       setPassword('');
     });
-  }, [fixtureMode]);
+  }, []);
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

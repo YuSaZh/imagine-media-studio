@@ -16,7 +16,6 @@ import {
 import {
   AuthGate,
   AuthPrompt,
-  loadInitialAuthStatus,
   resetInitialStatusRequest,
   resolveInitialAuthStatus,
   subscribeToOnlineAuthRetry,
@@ -273,21 +272,12 @@ afterEach(() => {
 });
 
 describe('AuthGate', () => {
-  it('bypasses auth status without an internal request in visual fixture mode', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch');
-    await expect(loadInitialAuthStatus(true)).resolves.toEqual({
-      authenticated: true,
-      publicAccessWarning: false,
-      required: false,
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 
   it('fails closed for an unknown device when explicitly offline', async () => {
     vi.stubGlobal('navigator', { onLine: false });
     const getAuthStatus = vi.spyOn(internalClient, 'getAuthStatus');
 
-    await expect(resolveInitialAuthStatus(false)).rejects.toThrow('unavailable while offline');
+    await expect(resolveInitialAuthStatus()).rejects.toThrow('unavailable while offline');
     expect(getAuthStatus).not.toHaveBeenCalled();
   });
 
@@ -296,7 +286,7 @@ describe('AuthGate', () => {
     vi.stubGlobal('navigator', { onLine: false });
     const getAuthStatus = vi.spyOn(internalClient, 'getAuthStatus');
 
-    await expect(resolveInitialAuthStatus(false)).resolves.toEqual({
+    await expect(resolveInitialAuthStatus()).resolves.toEqual({
       offlineBootstrap: true,
       status: { authenticated: true, publicAccessWarning: false, required: true },
     });
@@ -319,14 +309,14 @@ describe('AuthGate', () => {
       status: 200,
     }));
 
-    await expect(resolveInitialAuthStatus(false)).resolves.toEqual({
+    await expect(resolveInitialAuthStatus()).resolves.toEqual({
       offlineBootstrap: false,
       status: { authenticated: false, publicAccessWarning: false, required: false },
     });
     expect(storage.has(OFFLINE_PUBLIC_BOOTSTRAP_KEY)).toBe(true);
 
     vi.stubGlobal('navigator', { onLine: false });
-    await expect(resolveInitialAuthStatus(false)).resolves.toEqual({
+    await expect(resolveInitialAuthStatus()).resolves.toEqual({
       offlineBootstrap: true,
       status: { authenticated: false, publicAccessWarning: false, required: false },
     });
@@ -334,7 +324,7 @@ describe('AuthGate', () => {
 
   it('does not infer a public deployment before any online status response', async () => {
     vi.stubGlobal('navigator', { onLine: false });
-    await expect(resolveInitialAuthStatus(false)).rejects.toThrow('unavailable while offline');
+    await expect(resolveInitialAuthStatus()).rejects.toThrow('unavailable while offline');
   });
 
   it('does not bootstrap on an auth response or cleanup error disguised as a generic Error', async () => {
@@ -342,7 +332,7 @@ describe('AuthGate', () => {
     vi.stubGlobal('navigator', { onLine: true });
     vi.spyOn(internalClient, 'getAuthStatus').mockRejectedValue(new Error('invalid auth response'));
 
-    await expect(resolveInitialAuthStatus(false)).rejects.toThrow('invalid auth response');
+    await expect(resolveInitialAuthStatus()).rejects.toThrow('invalid auth response');
     expect(isOfflineBootstrapActive()).toBe(false);
   });
 
@@ -357,14 +347,14 @@ describe('AuthGate', () => {
         status: 200,
       }));
 
-    await expect(resolveInitialAuthStatus(false)).resolves.toMatchObject({ offlineBootstrap: true });
+    await expect(resolveInitialAuthStatus()).resolves.toMatchObject({ offlineBootstrap: true });
     expect(isOfflineBootstrapActive()).toBe(true);
 
     const windowTarget = new EventTarget();
     vi.stubGlobal('window', windowTarget);
     let recovered: Promise<unknown> | undefined;
     const unsubscribe = subscribeToOnlineAuthRetry(() => {
-      recovered = resolveInitialAuthStatus(false);
+      recovered = resolveInitialAuthStatus();
     });
     windowTarget.dispatchEvent(new Event('online'));
     await expect(recovered).resolves.toMatchObject({
@@ -388,7 +378,7 @@ describe('AuthGate', () => {
       />,
     );
     expect(markup).toContain('Imagine Media Studio');
-    expect(markup).toContain('Protected workspace');
+    expect(markup).toContain('受保护的工作区');
     expect(markup).toContain('type="password"');
     expect(markup).toContain('autofocus=""');
     expect(markup).toContain('aria-invalid="true"');
@@ -409,7 +399,7 @@ describe('AuthGate', () => {
     try {
       await act(async () => {
         root.render(
-          <AuthGate fixtureMode={false}>
+          <AuthGate>
             <DialogLikeChild />
           </AuthGate>,
         );
@@ -449,7 +439,7 @@ describe('AuthGate', () => {
     try {
       await act(async () => {
         root.render(
-          <AuthGate fixtureMode={false}>
+          <AuthGate>
             <DialogLikeChild />
           </AuthGate>,
         );
@@ -476,7 +466,7 @@ describe('AuthGate', () => {
     try {
       await act(async () => {
         root.render(
-          <AuthGate fixtureMode={false}>
+          <AuthGate>
             <DialogLikeChild />
           </AuthGate>,
         );
@@ -484,7 +474,7 @@ describe('AuthGate', () => {
       });
 
       expect(findByAttribute(rootElement, 'role', 'alert')).toBeNull();
-      expect(rootElement.textContent).toContain('Unlock workspace');
+      expect(rootElement.textContent).toContain('进入工作区');
     } finally {
       await act(async () => { root.unmount(); });
     }
@@ -500,7 +490,7 @@ describe('AuthGate', () => {
         pending
       />,
     );
-    expect(markup).toContain('Unlocking');
+    expect(markup).toContain('正在登录');
     expect(markup).toMatch(/<button[^>]*disabled=""/);
   });
 
@@ -516,7 +506,7 @@ describe('AuthGate', () => {
     try {
       await act(async () => {
         root.render(
-          <AuthGate fixtureMode={false}>
+          <AuthGate>
             <DialogLikeChild />
           </AuthGate>,
         );

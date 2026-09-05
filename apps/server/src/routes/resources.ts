@@ -52,6 +52,8 @@ const AssetPageQuerySchema = CursorPageQuerySchema.extend({
   favorite: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
   jobId: z.string().min(1).optional(),
   collectionId: z.string().min(1).optional(),
+  search: z.string().trim().max(200).optional(),
+  includeJobs: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
 }).strict();
 
 const ModelPageQuerySchema = CursorPageQuerySchema.extend({
@@ -418,10 +420,18 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
       ...(query.favorite === undefined ? {} : { favorite: query.favorite }),
       ...(query.jobId === undefined ? {} : { jobId: query.jobId }),
       ...(query.collectionId === undefined ? {} : { collectionId: query.collectionId }),
+      ...(query.search === undefined ? {} : { search: query.search }),
     });
     return {
       items: page.items.map((asset) => toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id))),
       nextCursor: page.nextCursor,
+      ...(query.includeJobs ? {
+        jobs: [...new Set(page.items.flatMap((asset) => asset.jobId ? [asset.jobId] : []))]
+          .flatMap((id) => {
+            const job = options.jobs.get(id);
+            return job ? [toJobDto(job, options.assets.countForJob(job.id))] : [];
+          }),
+      } : {}),
     };
   });
 

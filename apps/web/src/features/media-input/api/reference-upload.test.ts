@@ -4,21 +4,6 @@ import { internalClient } from '../../../api/internal-client.js';
 import { uploadReferenceImage } from './reference-upload.js';
 
 describe('uploadReferenceImage', () => {
-  it('uses a durable local fixture ID without calling the internal API', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch');
-    await expect(
-      uploadReferenceImage(
-        new File(['image'], 'image.png', { type: 'image/png' }),
-        new AbortController().signal,
-        true,
-        { fileSize: 5, height: 1, mimeType: 'image/png', width: 1 },
-      ),
-    ).resolves.toMatchObject({
-      assetId: expect.stringMatching(/^fixture-reference-/),
-      inputDescriptor: { fileSize: 5, height: 1, mimeType: 'image/png', width: 1 },
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 
   it('persists first-frame role through the upload API', async () => {
     const upload = vi.spyOn(internalClient, 'uploadAsset')
@@ -49,8 +34,6 @@ describe('uploadReferenceImage', () => {
     await expect(uploadReferenceImage(
       new File(['image'], 'frame.png', { type: 'image/png' }),
       new AbortController().signal,
-      false,
-      null,
       'first_frame',
     )).resolves.toMatchObject({ assetId: 'asset-frame-1' });
     expect(upload).toHaveBeenCalledWith(
