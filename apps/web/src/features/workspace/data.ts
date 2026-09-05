@@ -1,7 +1,9 @@
-import type { AssetDto, AssetInput, GenerationRequest, JobDto, ModelDto, ProviderDto } from '@imagine/shared';
+import type { AssetDto, AssetInput, GenerationRequest, JobDto, ModelDto, ProviderDto, JsonObject } from '@imagine/shared';
 import { GenerationRequestSchema } from '@imagine/shared';
 import { internalClient } from '../../api/internal-client';
 import { mapInternalModel } from './model-capabilities';
+import { allowsCustomSize } from './generation-options';
+import { parseAspectRatio, dimensionsForAspectRatio } from '../gallery/model/aspect-ratio';
 import { mapInternalGallery } from '../gallery/model/api-mapper';
 import type { FixtureGalleryItem } from '../gallery/model/types';
 import { isNetworkFailure, loadOfflineGallerySnapshot, markNetworkFailure, saveOfflineGallerySnapshot } from '../../pwa-offline-snapshot';
@@ -140,14 +142,22 @@ export interface Creation {
   negativePrompt: string;
   seed: string;
   audio: boolean;
+  extra?: JsonObject;
 }
 
 export function generationRequest(input: Creation): GenerationRequest {
   const { model } = input;
   const video = input.operation.startsWith('video.');
   if (!model.capabilities.operations.includes(input.operation)) throw new Error('当前模型不支持这项操作');
-  if (input.ratio && !model.capabilities.aspectRatios.includes(input.ratio)) throw new Error('当前模型不支持所选画幅');
-  if (input.resolution && !model.capabilities.resolutions.includes(input.resolution)) throw new Error('当前模型不支持所选分辨率');
+  const customSize = !video && allowsCustomSize(model);
+  const customRatio = !input.resolution && input.ratio && !model.capabilities.aspectRatios.includes(input.ratio);
+  if (customRatio && !(customSize && parseAspectRatio(input.ratio))) throw new Error('当前模型不支持所选画幅');
+  let resolution = input.resolution;
+  if (!resolution && customRatio) { const size = dimensionsForAspectRatio(input.ratio); resolution = `${Math.round(size.width / 16) * 16}x${Math.round(size.height / 16) * 16}`; }
+  if (resolution && !model.capabilities.resolutions.includes(resolution)) {
+    const dimensions = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/.exec(resolution);
+    if (!customSize || !dimensions || Number(dimensions[1]) > 16384 || Number(dimensions[2]) > 16384 || Number(dimensions[1]) * Number(dimensions[2]) > 100_000_000) throw new Error('分辨率须为有效像素尺寸，单边不超过 16384，总像素不超过 1 亿');
+  }
   if (input.count > model.capabilities.maxBatchCount || input.count < 1) throw new Error('生成数量超出模型限制');
   if (video && model.capabilities.durations.length && !model.capabilities.durations.includes(input.duration)) throw new Error('当前模型不支持所选时长');
   const durationRange = model.capabilities.durationRange;
@@ -157,8 +167,9 @@ export function generationRequest(input: Creation): GenerationRequest {
   return GenerationRequestSchema.parse({
     operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(),
     inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })),
-    ...(input.ratio ? { aspectRatio: input.ratio } : {}),
-    ...(input.resolution ? { resolution: input.resolution } : {}),
+    ...(input.ratio && !resolution ? { aspectRatio: input.ratio } : {}),
+    ...(resolution ? { resolution } : {}),
+    ...(input.extra && Object.keys(input.extra).length ? { extra: input.extra } : {}),
     count: video ? 1 : input.count,
     ...(video && (model.capabilities.durations.length || durationRange) ? { durationSeconds: input.duration } : {}),
     ...(model.raw.capabilities.supportsNegativePrompt && input.negativePrompt ? { negativePrompt: input.negativePrompt } : {}),

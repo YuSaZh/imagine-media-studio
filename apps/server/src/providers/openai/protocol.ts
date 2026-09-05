@@ -74,6 +74,7 @@ export interface OpenAiImageResultOptions {
 }
 
 export interface OpenAiImageRequestPolicy {
+  readonly compatibleSize?: boolean;
   readonly flexibleSize?: boolean;
   readonly supportsInputFidelity?: boolean;
 }
@@ -146,15 +147,22 @@ function flexibleSize(value: string): boolean {
   return pixels >= 655_360 && pixels <= 8_294_400 && ratio <= 3;
 }
 
+function compatibleImageSize(value: string): boolean {
+  if (!/^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(value)) return false;
+  const [width, height] = value.split('x').map(Number) as [number, number];
+  return width <= 16384 && height <= 16384 && width * height <= 100_000_000;
+}
+
 function deriveSize(
   request: GenerationRequest,
   extra: Record<string, unknown>,
   policy: OpenAiImageRequestPolicy,
 ): string | undefined {
+  const compatibleSize = (value: string) => policy.compatibleSize === true && compatibleImageSize(value);
   const explicit = extra.size ?? request.resolution;
   if (explicit !== undefined) {
     const size = assertStringOption(explicit, 'size');
-    if (size === undefined || (size !== 'auto' && !FIXED_SIZES.has(size) && !(policy.flexibleSize === true && flexibleSize(size)))) {
+    if (size === undefined || (size !== 'auto' && !FIXED_SIZES.has(size) && !compatibleSize(size) && !(policy.flexibleSize === true && flexibleSize(size)))) {
       throw new OpenAiValidationError(
         'invalid_option',
         policy.flexibleSize === true
@@ -171,7 +179,7 @@ function deriveSize(
     positiveInteger(request.width, 'width');
     positiveInteger(request.height, 'height');
     const size = `${request.width}x${request.height}`;
-    if (!((policy.flexibleSize === true && flexibleSize(size)) || FIXED_SIZES.has(size))) {
+    if (!((policy.flexibleSize === true && flexibleSize(size)) || compatibleSize(size) || FIXED_SIZES.has(size))) {
       throw new OpenAiValidationError(
         'invalid_option',
         policy.flexibleSize === true
@@ -182,6 +190,15 @@ function deriveSize(
     return size;
   }
   if (request.aspectRatio !== undefined) {
+    if (policy.compatibleSize && request.aspectRatio !== 'auto') {
+      const match = /^([1-9]\d{0,2}):([1-9]\d{0,2})$/.exec(request.aspectRatio);
+      if (!match) throw new OpenAiValidationError('invalid_option', 'aspectRatio must be a positive width:height ratio.');
+      const ratio = Number(match[1]) / Number(match[2]);
+      const width = Math.round((ratio >= 1 ? 1024 : 1024 * ratio) / 16) * 16;
+      const height = Math.round((ratio >= 1 ? 1024 / ratio : 1024) / 16) * 16;
+      if (!compatibleSize(`${width}x${height}`)) throw new OpenAiValidationError('invalid_option', 'aspectRatio produces unsupported dimensions.');
+      return `${width}x${height}`;
+    }
     const size = policy.flexibleSize === true
       ? ({ '1:1': '1024x1024', '16:9': '2048x1152', '9:16': '1152x2048', auto: 'auto' } as Readonly<Record<string, string>>)[request.aspectRatio]
       : DEFAULT_SIZE_BY_ASPECT_RATIO[request.aspectRatio];
@@ -327,7 +344,7 @@ function assertKnownKeys(value: Record<string, unknown>, keys: ReadonlySet<strin
   }
 }
 
-export function assertImageGenerationPayload(value: unknown): asserts value is Record<string, unknown> {
+export function assertImageGenerationPayload(value: unknown, policy: OpenAiImageRequestPolicy = {}): asserts value is Record<string, unknown> {
   const payload = assertPayloadObject(value, 'Images generation');
   assertKnownKeys(payload, new Set([
     'model',
@@ -355,7 +372,7 @@ export function assertImageGenerationPayload(value: unknown): asserts value is R
   const isGptImage2 = payload.model === 'gpt-image-2';
   if (payload.size !== undefined && (
     typeof payload.size !== 'string' ||
-    (isGptImage2 ? payload.size !== 'auto' && !flexibleSize(payload.size) : !FIXED_SIZES.has(payload.size))
+    (isGptImage2 ? payload.size !== 'auto' && !flexibleSize(payload.size) : !FIXED_SIZES.has(payload.size) && !(policy.compatibleSize && compatibleImageSize(payload.size)))
   )) {
     throw new OpenAiValidationError('invalid_payload', 'Images generation size is invalid.');
   }
@@ -497,7 +514,8 @@ function escapeHeaderValue(value: string): string {
 }
 
 export function mimeTypeForOutputFormat(format: OpenAiOutputFormat | undefined): string {
-  return format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+  // Unlabelled results are typed from their bytes by the media ingestion pipeline.
+  return format === undefined ? 'application/octet-stream' : format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
 }
 
 function inferMimeType(value: string): string | undefined {
@@ -634,7 +652,7 @@ function outputUrlAsset(
   const mimeType = claimedMimeType === undefined
     ? inferred ?? mimeTypeForOutputFormat(options.outputFormat)
     : normalizeMimeType(claimedMimeType);
-  if (!supportedMimeType(mimeType)) {
+  if (!supportedMimeType(mimeType) && !(claimedMimeType === undefined && mimeType === 'application/octet-stream')) {
     throw new OpenAiResponseError('invalid_response', 'OpenAI returned a URL with a non-image MIME type.');
   }
   return {

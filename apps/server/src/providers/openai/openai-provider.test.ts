@@ -172,7 +172,7 @@ describe('OpenAI provider profiles', () => {
     expect(payload).not.toHaveProperty('response_format');
   });
 
-  it('refreshes an injected OpenAI-compatible catalog and assigns conservative unknown capabilities', async () => {
+  it('exposes configurable image dimensions for an OpenAI-compatible catalog', async () => {
     const transport = new FixtureTransport(jsonResponse(JSON.parse(readFileSync(
       new URL('../../../../../fixtures/providers/openai/openai-images-v1/models-response.json', import.meta.url),
       'utf8',
@@ -198,15 +198,16 @@ describe('OpenAI provider profiles', () => {
     expect(capabilities.models[0]?.capabilities.supportsMask).toBe(true);
     expect(capabilities.models[2]?.displayName).toBe('Compatible Image Preview');
     expect(capabilities.models[2]?.capabilities).toMatchObject({
-      aspectRatios: ['1:1'],
-      resolutions: ['auto', '1024x1024'],
+      aspectRatios: expect.arrayContaining(['1:1', '16:9', '4:3']),
+      resolutions: expect.arrayContaining(['auto', '1024x1024', '1920x1080']),
       maxReferenceImages: 1,
       supportsMask: false,
       supportsBatchCount: false,
       maxBatchCount: 1,
     });
-    expect(capabilities.models[2]?.capabilities.customFields).toEqual({
+    expect(capabilities.models[2]?.capabilities.customFields).toMatchObject({
       type: 'object',
+      properties: { size: { type: 'string' }, output_format: { enum: ['png', 'jpeg', 'webp'] } },
       additionalProperties: false,
     });
   });
@@ -564,7 +565,7 @@ describe('OpenAI provider profiles', () => {
 
     expect(result).toMatchObject({
       state: 'completed',
-      assets: [{ resultId: 'ig_fixture_1', source: 'base64', mimeType: 'image/png' }],
+      assets: [{ resultId: 'ig_fixture_1', source: 'base64', mimeType: 'application/octet-stream' }],
     });
     expect(dispose).toHaveBeenCalledTimes(1);
   });
@@ -916,7 +917,7 @@ describe('OpenAI stream parser', () => {
 
     const eventLine = parseSseChunk('event: image_generation.partial_image\n');
     const dataLine = parseSseChunk('data: {"type":"image_generation.partial_image","b64_json":"AQ=="}\n\n', eventLine.remainder);
-    expect(parseOpenAiImageStream(dataLine.events).partials).toEqual([{ index: 0, base64: 'AQ==', mimeType: 'image/png' }]);
+    expect(parseOpenAiImageStream(dataLine.events).partials).toEqual([{ index: 0, base64: 'AQ==', mimeType: 'application/octet-stream' }]);
   });
 
   it('parses both official Images and Responses event names from fixed fixtures', () => {

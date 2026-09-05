@@ -22,6 +22,14 @@ describe('workspace API contracts', () => {
     expect(mediaExtension({ mimeType: 'image/jpeg', kind: 'image' })).toBe('jpg');
     expect(mediaExtension({ mimeType: 'video/webm', kind: 'video' })).toBe('webm');
   });
+  it('keeps custom dimensions and parameters without forcing an output format', () => {
+    const raw = model('custom', 'first');
+    raw.capabilities.customFields = { type: 'object', properties: { size: { type: 'string' }, output_format: { enum: ['png', 'jpeg'] } } };
+    const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: '1:1', resolution: '1920x1080', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false, extra: { output_format: 'jpeg', quality: 'high' } };
+    expect(generationRequest(input)).toMatchObject({ resolution: '1920x1080', extra: { output_format: 'jpeg', quality: 'high' } });
+    expect(generationRequest(input)).not.toHaveProperty('aspectRatio');
+    expect(generationRequest({ ...input, extra: {} })).not.toHaveProperty('format');
+  });
   it('derives edit and image-to-video operations from input roles', () => {
     expect(operationFor('image', 'text', [{ role: 'source', asset: {} as never }])).toBe('image.edit');
     expect(operationFor('video', 'first_frame', [])).toBe('video.image_to_video');

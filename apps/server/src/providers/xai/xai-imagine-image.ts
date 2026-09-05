@@ -608,6 +608,7 @@ export function buildXaiImagineImagePayload(
 function inferMimeTypeFromUrl(rawUrl: string): string {
   try {
     const pathname = new URL(rawUrl).pathname.toLowerCase();
+    if (pathname.endsWith('.png')) return 'image/png';
     if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
     if (pathname.endsWith('.webp')) return 'image/webp';
     if (pathname.endsWith('.gif')) return 'image/gif';
@@ -615,12 +616,12 @@ function inferMimeTypeFromUrl(rawUrl: string): string {
   } catch {
     // The URL is validated by the caller before this helper is reached.
   }
-  return 'image/png';
+  return 'application/octet-stream';
 }
 
 function submittedBase64Asset(item: JsonRecord, rawBase64: string, resultIndex: number): SubmittedAsset {
   let base64 = rawBase64;
-  let mimeType = 'image/png';
+  let mimeType = 'application/octet-stream';
   const uri = dataUriParts(rawBase64);
   if (uri !== null) {
     base64 = uri.base64;

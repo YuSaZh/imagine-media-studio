@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_IMAGE_INPUT_POLICY } from '@imagine/shared';
+import { DEFAULT_IMAGE_INPUT_POLICY, type JsonObject } from '@imagine/shared';
 import { ArrowUp, Check, ChevronDown, Image as ImageIcon, LoaderCircle, Plus, Ratio, RefreshCw, SlidersHorizontal, Video, X } from 'lucide-react';
 import { COMPOSER_DRAFT_MAX_PROMPT_LENGTH } from '../composer/model/composer-draft';
 import type { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
@@ -8,6 +8,7 @@ import { storedInputAvailability, descriptorsExceedingTotalBytes } from '../medi
 import type { AcquisitionRejection } from '../media-input/model/types';
 import { Choice, Options, Tool } from './ui';
 import { operationFor, type Creation, type MediaKind, type ReferenceInput, type WorkspaceModel } from './data';
+import { allowsCustomSize, ExtraParameters } from './generation-options';
 
 interface ComposerProps {
   prompt: string;
@@ -37,6 +38,9 @@ export function Composer(props: ComposerProps) {
   const { model, mode, prompt, references, uploads, videoMode } = props;
   const [ratio, setRatio] = useState('');
   const [resolution, setResolution] = useState('');
+  const [customWidth, setCustomWidth] = useState(1024);
+  const [customHeight, setCustomHeight] = useState(1024);
+  const [extra, setExtra] = useState<JsonObject>({});
   const [count, setCount] = useState(1);
   const [duration, setDuration] = useState(5);
   const [negativePrompt, setNegativePrompt] = useState('');
@@ -72,7 +76,7 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (!model) return;
     setRatio(current => model.capabilities.aspectRatios.includes(current) ? current : model.capabilities.aspectRatios[0] ?? '');
-    setResolution(current => model.capabilities.resolutions.includes(current) ? current : model.capabilities.resolutions[0] ?? '');
+    setResolution(current => model.capabilities.resolutions.includes(current) ? current : '');
     setCount(current => Math.max(1, Math.min(current, model.capabilities.maxBatchCount)));
     setDuration(current => {
       const range = model.capabilities.durationRange;
@@ -80,6 +84,7 @@ export function Composer(props: ComposerProps) {
       return model.capabilities.durations.includes(current) ? current : model.capabilities.durations[0] ?? 5;
     });
   }, [model]);
+  useEffect(() => { setExtra({}); }, [model?.key]);
   useEffect(() => { if (props.focusToken) textareaRef.current?.focus(); }, [props.focusToken]);
   useEffect(() => {
     const element = composerRef.current;
@@ -98,9 +103,10 @@ export function Composer(props: ComposerProps) {
 
   const submit = () => {
     if (!canSubmit || !model) return;
-    props.onCreate({ model, operation, prompt, inputs: references, ratio, resolution, count: mode === 'video' ? 1 : count, duration, negativePrompt, seed, audio });
+    props.onCreate({ model, operation, prompt, inputs: references, ratio, resolution: resolution === 'custom' ? `${customWidth}x${customHeight}` : resolution, count: mode === 'video' ? 1 : count, duration, negativePrompt, seed, audio, extra });
   };
   const modelOptions = props.models.filter(candidate => candidate.capabilities.operations.includes(operation));
+  const sizeLabel = resolution === 'custom' ? `${customWidth}×${customHeight}` : resolution || ratio;
   const videoModes = [
     { key: 'text' as const, label: '文字', operation: 'video.generate' as const },
     { key: 'first_frame' as const, label: '首帧', operation: 'video.image_to_video' as const },
@@ -136,13 +142,15 @@ export function Composer(props: ComposerProps) {
       <Tool label="添加参考图" disabled={!uploadAllowed} onClick={() => inputRef.current?.click()}><Plus size={20} /></Tool>
       <div className="segments mode-segments" role="group" aria-label="创作类型"><button type="button" aria-label="图片" aria-pressed={mode === 'image'} onClick={() => props.onMode('image')}><ImageIcon size={15} /><span>图片</span></button><button type="button" aria-label="视频" aria-pressed={mode === 'video'} onClick={() => props.onMode('video')}><Video size={16} /><span>视频</span></button></div>
       <Options label="选择生成模型" className="model-trigger" trigger={<><span className="model-dot" /><span>{model?.name ?? '选择模型'}</span><ChevronDown size={13} /></>}><div className="option-heading">模型与服务</div>{modelOptions.map(option => <Choice key={option.key} active={model?.key === option.key} onClick={() => props.onModel(option.key)}><span className="choice-copy"><strong>{option.name}</strong><small>{option.providerName}</small></span>{model?.key === option.key && <Check size={15} />}</Choice>)}</Options>
-      {model && model.capabilities.aspectRatios.length > 0 && <Options label="选择画幅" className="desktop-control" trigger={<><Ratio size={15} /><span>{ratio}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div><div className="ratio-options">{model.capabilities.aspectRatios.map(value => <Choice key={value} active={ratio === value} onClick={() => setRatio(value)}><i style={{ aspectRatio: value.replace(':', '/') }} /><span>{value}</span></Choice>)}</div></Options>}
+      {model && model.capabilities.aspectRatios.length > 0 && <Options label="选择画幅" className="desktop-control" trigger={<><Ratio size={15} /><span>{sizeLabel}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div><div className="ratio-options">{model.capabilities.aspectRatios.map(value => <Choice key={value} active={ratio === value} onClick={() => { setRatio(value); setResolution(''); }}><i style={{ aspectRatio: value.replace(':', '/') }} /><span>{value}</span></Choice>)}</div></Options>}
       <Options label="生成设置" trigger={<SlidersHorizontal size={18} />}>
         <div className="option-heading">生成设置</div>
         <label className="setting-line mobile-control"><span>模型与服务</span><select aria-label="模型与服务" value={model?.key ?? ''} onChange={event => props.onModel(event.target.value)}>{modelOptions.map(option => <option key={option.key} value={option.key}>{option.providerName} · {option.name}</option>)}</select></label>
-        <label className="setting-line"><span>画幅</span><select aria-label="画幅" value={ratio} onChange={event => setRatio(event.target.value)}>{model?.capabilities.aspectRatios.map(value => <option key={value}>{value}</option>)}</select></label>
+        {allowsCustomSize(model) ? <label className="setting-line"><span>画幅</span><input aria-label="画幅" list="creation-ratios" value={ratio} placeholder="16:9" onChange={event => { setRatio(event.target.value); setResolution(''); }} /><datalist id="creation-ratios">{model?.capabilities.aspectRatios.map(value => <option key={value} value={value} />)}</datalist></label> : <label className="setting-line"><span>画幅</span><select aria-label="画幅" value={ratio} onChange={event => { setRatio(event.target.value); setResolution(''); }}>{model?.capabilities.aspectRatios.map(value => <option key={value}>{value}</option>)}</select></label>}
         {mode === 'image' && (model?.capabilities.maxBatchCount ?? 1) > 1 && <label className="setting-line"><span>生成数量</span><select aria-label="生成数量" value={count} onChange={event => setCount(Number(event.target.value))}>{Array.from({ length: Math.min(32, model?.capabilities.maxBatchCount ?? 1) }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value} 张</option>)}</select></label>}
-        {!!model?.capabilities.resolutions.length && <label className="setting-line"><span>分辨率</span><select aria-label="分辨率" value={resolution} onChange={event => setResolution(event.target.value)}>{model.capabilities.resolutions.map(value => <option key={value}>{value}</option>)}</select></label>}
+        {!!model?.capabilities.resolutions.length && <label className="setting-line"><span>分辨率</span><select aria-label="分辨率" value={resolution} onChange={event => setResolution(event.target.value)}><option value="">跟随画幅</option>{model.capabilities.resolutions.map(value => <option key={value}>{value}</option>)}{allowsCustomSize(model) && <option value="custom">自定义尺寸</option>}</select></label>}
+        {resolution === 'custom' && <div className="custom-dimensions"><label>宽度<input type="number" aria-label="像素宽度" min={1} max={16384} value={customWidth} onChange={event => setCustomWidth(Number(event.target.value))} /></label><span>×</span><label>高度<input type="number" aria-label="像素高度" min={1} max={16384} value={customHeight} onChange={event => setCustomHeight(Number(event.target.value))} /></label></div>}
+        <ExtraParameters model={model} values={extra} onChange={setExtra} />
         {mode === 'video' && (!!model?.capabilities.durations.length || model?.capabilities.durationRange) && <label className="setting-line"><span>视频时长</span>{model?.capabilities.durationRange ? <input aria-label="视频时长" type="number" min={model.capabilities.durationRange.min} max={model.capabilities.durationRange.max} value={duration} onChange={event => setDuration(Number(event.target.value))} /> : <select aria-label="视频时长" value={duration} onChange={event => setDuration(Number(event.target.value))}>{model?.capabilities.durations.map(value => <option key={value} value={value}>{value} 秒</option>)}</select>}</label>}
         {model?.raw.capabilities.supportsNegativePrompt === true && <label className="setting-line stacked"><span>负面提示词</span><textarea aria-label="负面提示词" value={negativePrompt} onChange={event => setNegativePrompt(event.target.value)} /></label>}
         {model?.raw.capabilities.supportsSeed === true && <label className="setting-line"><span>种子</span><input aria-label="种子" value={seed} inputMode="numeric" onChange={event => setSeed(event.target.value)} placeholder="随机" /></label>}
@@ -151,6 +159,6 @@ export function Composer(props: ComposerProps) {
       <span className="composer-spacer" />
       <button type="submit" className="generate-button" aria-label="开始生成" disabled={!canSubmit}>{props.submitting ? <LoaderCircle className="spin" size={20} /> : <ArrowUp size={21} strokeWidth={2.5} />}</button>
     </div>
-    <div className="mobile-model-status"><span>{model ? `${model.providerName} · ${model.name}` : props.loading ? '正在加载模型' : '尚未配置模型'}</span><span>{ratio}{mode === 'image' ? ` · ${count} 张` : ''}</span></div>
+    <div className="mobile-model-status"><span>{model ? `${model.providerName} · ${model.name}` : props.loading ? '正在加载模型' : '尚未配置模型'}</span><span>{sizeLabel}{mode === 'image' ? ` · ${count} 张` : ''}</span></div>
   </form>;
 }

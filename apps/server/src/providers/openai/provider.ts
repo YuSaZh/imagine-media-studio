@@ -240,6 +240,7 @@ function imageCapabilities(
     quality: { enum: ['low', 'medium', 'high', 'auto'] },
     background: { enum: ['transparent', 'opaque', 'auto'] },
     partial_images: { type: 'integer', minimum: 0, maximum: 3 },
+    stream: { type: 'boolean' },
   };
   if (profile === 'openai-images-v1') {
     customProperties.output_format = { enum: ['png', 'jpeg', 'webp'] };
@@ -278,13 +279,15 @@ function imageCapabilities(
   if (!conservative) return capabilities;
   return {
     ...capabilities,
-    aspectRatios: ['1:1'],
-    resolutions: ['auto', '1024x1024'],
+    aspectRatios: profile === 'openai-images-v1' ? ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', 'auto'] : ['1:1'],
+    resolutions: profile === 'openai-images-v1' ? ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '1920x1080', '1080x1920'] : ['auto', '1024x1024'],
     maxReferenceImages: 1,
     supportsMask: false,
     supportsBatchCount: false,
     maxBatchCount: 1,
-    customFields: { type: 'object', additionalProperties: false },
+    customFields: profile === 'openai-images-v1'
+      ? { type: 'object', properties: { ...customProperties, size: { type: 'string', pattern: '^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$|^auto$' } }, additionalProperties: false }
+      : { type: 'object', additionalProperties: false },
   };
 }
 
@@ -350,10 +353,11 @@ function modelAllowed(model: string, configured: readonly string[], profile: Ope
   return /^gpt-[a-z0-9._-]+$/i.test(model);
 }
 
-function requestPolicy(profile: OpenAiProfile, modelId: string): { flexibleSize?: boolean; supportsInputFidelity?: boolean } {
+function requestPolicy(profile: OpenAiProfile, modelId: string): { flexibleSize?: boolean; supportsInputFidelity?: boolean; compatibleSize?: boolean } {
   if (profile !== 'openai-images-v1') return {};
   return {
     flexibleSize: imageModelId(modelId) === 'gpt-image-2',
+    compatibleSize: imageModelId(modelId) === undefined,
     supportsInputFidelity: imageModelId(modelId) !== 'gpt-image-2',
   };
 }
@@ -807,7 +811,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
       path = '/images/edits';
     } else if (this.options.profile === 'openai-images-v1') {
       const payload = buildImageGenerationPayload(options);
-      assertImageGenerationPayload(payload);
+      assertImageGenerationPayload(payload, requestPolicy(this.options.profile, request.modelId));
       body = JSON.stringify(payload);
       contentType = 'application/json';
       path = '/images/generations';

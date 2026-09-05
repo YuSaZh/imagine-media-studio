@@ -41,6 +41,7 @@ test('new workspace visual baseline and accessible responsive geometry', async (
   expect(form!.x).toBeGreaterThanOrEqual(0);
   expect(form!.x + form!.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(form!.y + form!.height).toBeLessThanOrEqual(viewport.height + 1);
+  expect(viewport.height - form!.y - form!.height).toBeLessThanOrEqual(26);
   const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(accessibility.violations).toEqual([]);
   await expect(page).toHaveScreenshot('workspace.png', { animations: 'disabled', maxDiffPixelRatio: .005 });
@@ -172,8 +173,10 @@ test('provider editor protects secrets and custom adapter management persists a 
   await page.getByRole('button', { name: '保存连接', exact: true }).click();
   const response = await created;
   expect(response.status()).toBe(201);
-  expect(await response.text()).not.toContain(secret);
-  const { provider } = await response.json();
+  const stored = await request.get('/internal/providers?limit=100');
+  expect(await stored.text()).not.toContain(secret);
+  const provider = (await stored.json()).items.find((item: { name: string }) => item.name === 'Workspace adapter');
+  expect(provider).toBeDefined();
   expect(provider.hasApiKey).toBe(true);
   await expect(page.getByLabel('适配器定义', { exact: true })).toBeVisible();
   await page.getByLabel('适配器定义', { exact: true }).fill(await readFile(resolve('examples/custom-providers/sync-image.json'), 'utf8'));
@@ -210,4 +213,32 @@ test('installed cache retains real previews and drafts while offline', async ({ 
   await expect.poll(() => page.locator('.study-card img').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(1);
   await context.setOffline(false);
 });
+});
+
+test('custom generation parameters reach the job request from the bottom composer', async ({ page, request }) => {
+  const created = await request.post('/internal/providers', { data: { name: 'Workspace parameters', type: 'openai-images-v1', baseUrl: 'https://api.example.com', enabled: true, isDefault: true } });
+  expect(created.status()).toBe(201);
+  const { provider } = await created.json();
+  try {
+    const added = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'grok-imagine-image-2.0', displayName: 'Custom image model', enabled: true, capabilities: {
+      operations: ['image.generate'], aspectRatios: ['1:1', '16:9', '4:3'], resolutions: ['auto', '1024x1024'], maxReferenceImages: 0, supportsBatchCount: true, maxBatchCount: 4,
+      customFields: { type: 'object', properties: { size: { type: 'string' }, quality: { enum: ['low', 'high'] }, output_format: { enum: ['png', 'jpeg', 'webp'] } }, additionalProperties: false },
+    } } });
+    expect(added.status()).toBe(201);
+    await open(page);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await page.getByLabel('画幅', { exact: true }).fill('4:3');
+    await page.getByLabel('分辨率', { exact: true }).selectOption('custom');
+    await page.getByLabel('像素宽度', { exact: true }).fill('1920');
+    await page.getByLabel('像素高度', { exact: true }).fill('1080');
+    await page.getByLabel('生成数量', { exact: true }).selectOption('2');
+    await page.getByLabel('质量', { exact: true }).selectOption('high');
+    await page.getByLabel('输出格式', { exact: true }).selectOption('jpeg');
+    await page.keyboard.press('Escape');
+    await page.getByLabel('创作描述', { exact: true }).fill('parameter contract');
+    const sent = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: { code: 'test_only', message: '参数捕获测试' } } }) : route.continue());
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    expect((await sent).postDataJSON()).toMatchObject({ resolution: '1920x1080', count: 2, extra: { quality: 'high', output_format: 'jpeg' } });
+  } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });

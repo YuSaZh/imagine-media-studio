@@ -50,12 +50,16 @@ svg { flex-shrink: 0; }
 .task-indicator { display: flex; align-items: center; gap: 7px; height: 34px; color: #646968; font-size: 12px; }
 .task-indicator b { min-width: 17px; height: 17px; padding: 0 4px; font-size: 10px; display: grid; place-items: center; color: #fff; background: var(--accent); border-radius: 50%; }
 .mobile-menu, .mobile-settings { display: none; }
-.creation-area { width: min(780px, calc(100% - 100px)); margin: 45px auto 56px; }
-.creation-heading { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 27px; }
+.creation-area { position: fixed; z-index: 20; bottom: calc(24px + var(--keyboard-lift)); left: calc(50% + 36px); transform: translateX(-50%); width: min(780px, calc(100% - 148px)); }
+.creation-heading { display: none; }
+.section-create .library-area { padding-bottom: calc(var(--composer-size) + var(--keyboard-lift) + 64px); }
 .creation-heading h1 { font-size: 34px; font-weight: 500; line-height: 1.2; }
 .creation-mark { align-self: flex-start; color: #a8b6b0; margin-top: -2px; }
 .creation-composer { position: relative; padding: 15px 15px 12px; border: 1px solid #dfe3e0; border-radius: 20px; background: var(--surface); box-shadow: 0 4px 9px #242f2504, 0 1px 2px #242f2503; transition: border-color 160ms, box-shadow 160ms; }
 .creation-composer:focus-within { border-color: #b9c6bf; box-shadow: 0 4px 18px #24352708; }
+.custom-dimensions { display: flex; align-items: end; gap: 8px; padding: 8px 10px; }
+.custom-dimensions label { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.custom-dimensions input { width: 100%; min-width: 0; }
 .creation-composer textarea { display: block; resize: none; width: 100%; min-height: 62px; max-height: 180px; border: 0; padding: 4px 7px 10px; font-size: 15px; line-height: 1.7; outline: 0; }
 .creation-composer textarea::placeholder { color: #939896; }
 .creation-controls { display: flex; align-items: center; min-width: 0; gap: 7px; }
@@ -239,7 +243,6 @@ svg { flex-shrink: 0; }
 .spin { animation: spin 1.3s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes surface-in { from { opacity: 0; } to { opacity: 1; } }
-@media (min-width: 1800px) { .creation-area { margin-top: 70px; margin-bottom: 70px; } }
 @media (max-width: 1100px) {
   .workspace-header { padding: 0 24px; }
   .library-area { padding-left: 24px; padding-right: 24px; }
@@ -257,7 +260,7 @@ svg { flex-shrink: 0; }
   .wordmark { font-size: 20px; }
   .header-divider, .current-location, .header-actions .preview-badge, .task-indicator > span { display: none; }
   .header-actions { gap: 9px; }
-  .creation-area { margin: 0; width: 100%; }
+  .creation-area { position: static; transform: none; margin: 0; width: 100%; }
   .creation-heading { display: none; }
   .creation-composer { position: fixed; z-index: 20; bottom: calc(max(10px, env(safe-area-inset-bottom)) + var(--keyboard-lift)); left: max(10px, env(safe-area-inset-left)); right: max(10px, env(safe-area-inset-right)); border-radius: 18px; padding: 10px 10px 8px; box-shadow: 0 -3px 30px #1b2b2209, 0 3px 10px #1b2b2210; }
   .creation-composer textarea { font-size: 16px; min-height: 44px; height: 44px; line-height: 1.4; padding: 4px 5px; }

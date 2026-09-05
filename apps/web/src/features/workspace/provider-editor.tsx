@@ -9,7 +9,11 @@ export function ProviderApiKeyField({ hasStoredKey, onChange, value }: { hasStor
 }
 
 export function ManualModelCapabilityField({ onChange, value }: { onChange: (value: string) => void; value: string }) {
-  return <label><span>模型能力 JSON</span><textarea aria-label="模型能力 JSON" className="code-input" rows={12} spellCheck={false} value={value} onChange={event => onChange(event.target.value)} /></label>;
+  let capabilities: Record<string, unknown> = {};
+  try { const parsed: unknown = JSON.parse(value); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) capabilities = parsed as Record<string, unknown>; } catch { /* The JSON editor preserves incomplete input. */ }
+  const update = (key: string, next: unknown) => onChange(JSON.stringify({ ...capabilities, [key]: next }, null, 2));
+  const list = (key: string) => Array.isArray(capabilities[key]) ? capabilities[key].join(', ') : '';
+  return <div className="model-capabilities"><div className="form-columns"><label><span>画幅选项</span><input aria-label="模型画幅选项" placeholder="1:1, 16:9, 9:16" defaultValue={list('aspectRatios')} onBlur={event => update('aspectRatios', event.target.value.split(/[,，]/).map(item => item.trim()).filter(Boolean))} /></label><label><span>分辨率选项</span><input aria-label="模型分辨率选项" placeholder="1024x1024, 1920x1080" defaultValue={list('resolutions')} onBlur={event => update('resolutions', event.target.value.split(/[,，]/).map(item => item.trim()).filter(Boolean))} /></label></div><label><span>最大生成数量</span><input aria-label="最大生成数量" type="number" min={1} max={32} value={typeof capabilities.maxBatchCount === 'number' ? capabilities.maxBatchCount : 1} onChange={event => onChange(JSON.stringify({ ...capabilities, maxBatchCount: Number(event.target.value), supportsBatchCount: Number(event.target.value) > 1 }, null, 2))} /></label><details className="form-advanced"><summary>高级能力配置</summary><label><span>模型能力 JSON</span><textarea aria-label="模型能力 JSON" className="code-input" rows={12} spellCheck={false} value={value} onChange={event => onChange(event.target.value)} /></label></details></div>;
 }
 
 export function ProviderEditor({ provider, onClose, onSaved }: { provider: ProviderDto | null; onClose: () => void; onSaved: (provider: ProviderDto) => void }) {
@@ -54,7 +58,7 @@ export function ModelEditor({ model, providerId, onClose, onSaved }: { model: Mo
     void (async () => {
       try {
         const input = buildManualModelWriteInput(form);
-        if (model) await internalClient.patchModel(model.id, { modelId: input.modelId, displayName: input.displayName, capabilities: input.capabilities, enabled: input.enabled });
+        if (model?.capabilitySource === 'manual') await internalClient.patchModel(model.id, { modelId: input.modelId, displayName: input.displayName, capabilities: input.capabilities, enabled: input.enabled });
         else await internalClient.createModel(input);
         onSaved();
       } catch (failure) { setError(failure instanceof Error ? failure.message : '模型保存失败'); }

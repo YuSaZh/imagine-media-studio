@@ -4,7 +4,7 @@ The production UI in `apps/web/src/features/workspace/` replaces the previous pa
 
 ## Interaction
 
-- `/imagine`: centered desktop Composer, virtual masonry gallery and a bottom Composer on phones. Models, input modes, aspect ratios and parameters follow enabled Provider capabilities.
+- `/imagine`: bottom Composer on desktop and phones, with a virtual masonry gallery above. Models, input modes, aspect ratios and parameters follow enabled Provider capabilities; compatible image models also expose custom pixel dimensions and declared extra fields such as quality and output format.
 - `/library`, `/saved`, `/projects/:id`: server-filtered assets, filename/prompt/model search, pagination, selection, favorites, project membership and confirmed deletion.
 - `?asset=:id`: original image or native video, original MIME download, zoom/gestures, request information and continued creation.
 - `/edit/:id`: responsive original-image mask canvas, brush/eraser, undo/redo and persisted source/mask inputs.
@@ -16,6 +16,10 @@ Grok Imagine is the sole visual reference. Its public DOM, computed styles and c
 ## Data behavior
 
 Generation calls the real Job API. No browser timer or seeded production gallery simulates output. Mock remains a server test Provider; real generation requires an external Provider.
+
+Unlabelled OpenAI-compatible and xAI image results use an unknown binary MIME hint until the existing media signature detector identifies the actual format. They are not assumed to be PNG. Explicit upstream MIME declarations remain subject to mismatch rejection. Output format is omitted unless selected by the user.
+
+Compatible Images catalogs offer custom dimensions without inheriting GPT-only fixed-size restrictions. Model capability overrides can be saved from discovered models as manual definitions. The Composer exposes declared scalar extra parameters and omits aspect ratio when explicit dimensions take precedence.
 
 Each Asset page contains at most 60 records and associated jobs. Search and project/favorite filters run on the server. There is no 1,000-result browsing cutoff or eager full-asset inventory request. Model selection distinguishes identical external model IDs belonging to different Providers. The Viewer uses original content URLs.
 
