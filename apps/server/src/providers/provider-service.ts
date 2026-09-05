@@ -324,6 +324,8 @@ function toJsonCapabilitiesRecord(
 function toProviderModelCapabilities(value: ModelCapabilities): ProviderModel['capabilities'] {
   const inputImageConstraints = value.inputImageConstraints;
   return {
+    ...(value.profile === undefined ? {} : { profile: value.profile }),
+    ...(value.parameters === undefined ? {} : { parameters: value.parameters }),
     operations: value.operations,
     ...(value.aspectRatios === undefined ? {} : { aspectRatios: value.aspectRatios }),
     ...(value.resolutions === undefined ? {} : { resolutions: value.resolutions }),
@@ -465,6 +467,8 @@ export class ProviderService {
       const capabilities = ModelCapabilitiesSchema.parse(input.capabilities);
       try { for (const operation of capabilities.operations) resolveModelProfile(provider.type, operation, input.modelId, capabilities.profile); }
       catch { throw new ManualModelServiceError('invalid_model', '模型调用协议与连接或支持的操作不匹配。'); }
+      const family = providerFamily(provider.type);
+      if (capabilities.profile && family && provider.type !== family) this.update(provider.id, { type: family });
       return this.models.saveManual(input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
@@ -497,6 +501,8 @@ export class ProviderService {
       const capabilities = ModelCapabilitiesSchema.parse(input.capabilities ?? current.capabilities);
       try { if (provider) for (const operation of capabilities.operations) resolveModelProfile(provider.type, operation, input.modelId ?? current.modelId, capabilities.profile); }
       catch { throw new ManualModelServiceError('invalid_model', '模型调用协议与连接或支持的操作不匹配。'); }
+      const family = provider && providerFamily(provider.type);
+      if (capabilities.profile && provider && family && provider.type !== family) this.update(provider.id, { type: family });
       updated = this.models.updateManual(id, input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {

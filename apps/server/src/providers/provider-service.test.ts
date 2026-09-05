@@ -12,7 +12,7 @@ import type {
   SubmitResult,
 } from '@imagine/provider-contract';
 import type { CustomAdapterRef, GenerationRequest } from '@imagine/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDatabase, type DatabaseClient } from '../database/client.js';
 import { ModelRepository } from '../database/models.js';
@@ -90,6 +90,21 @@ async function createHarness(
 }
 
 describe('provider family migration', () => {
+  it('persists protocol and parameter policy through catalog normalization', async () => {
+    const { service, registry, models } = await createHarness();
+    const provider = service.create({ name: 'Shared xAI', type: 'xai' });
+    const registration = registry.resolve(provider.id);
+    Object.assign(registration.adapter, { getLiveCapabilities: async () => ({ providerType: 'xai', models: [{ id: 'grok-imagine-image', displayName: 'Image', capabilities: { operations: ['image.generate'], profile: 'xai-imagine-image-v1', parameters: [] } }] }) });
+    vi.spyOn(registry, 'resolve').mockReturnValue({ ...registration, http: { request: vi.fn() } });
+    await service.refreshModels(provider.id);
+    expect(models.listForProvider(provider.id)[0]?.capabilities).toMatchObject({ profile: 'xai-imagine-image-v1', parameters: [] });
+  });
+  it('activates model-specific routing when a legacy connection gains an explicit binding', async () => {
+    const { service } = await createHarness();
+    const provider = service.create({ name: 'Legacy images', type: 'openai-images-v1' });
+    service.saveManualModel({ providerId: provider.id, modelId: 'video-model', displayName: 'Video', capabilities: { operations: ['video.generate'], profile: 'openai-videos-v1-compatible' }, enabled: true });
+    expect(service.page().items.find(item => item.id === provider.id)?.type).toBe('openai');
+  });
   it('preserves model protocol, manual policy and credentials when upgrading a legacy connection', async () => {
     const { service, models, registry } = await createHarness();
     const provider = service.create({ name: 'Responses endpoint', type: 'openai-responses-image-v1', baseUrl: 'https://example.com/v1', apiKey: 'retained-key' });
