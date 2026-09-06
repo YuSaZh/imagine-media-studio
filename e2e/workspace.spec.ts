@@ -335,47 +335,198 @@ test('custom generation parameters reach the job request from the bottom compose
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });
 
-test('aspect ratio stays selectable with managed rules and mode controls keep stable geometry', async ({ page, request }) => {
+test('aspect ratio stays selectable with managed rules and mode controls keep stable geometry', async ({ page, request }, testInfo) => {
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Ratio ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
   try {
     for (const kind of ['image', 'video']) {
       expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: `ratio-${kind}`, displayName: `Ratio ${kind}`, enabled: true, capabilities: {
         operations: kind === 'image' ? ['image.generate'] : ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
-        aspectRatios: ['1:1', '16:9'], maxReferenceImages: kind === 'image' ? 0 : 3,
+        aspectRatios: ['1:1', '16:9'], maxReferenceImages: 3,
         parameters: [{ path: 'aspectRatio', label: '画幅', type: 'select', options: ['1:1', '16:9', '21:9'], allowCustom: true, defaultValue: '1:1' }],
       } } })).status()).toBe(201);
     }
     await open(page);
+    const mobile = page.viewportSize()!.width <= 760;
     const ratio = page.getByRole('button', { name: '选择画幅', exact: true });
-    await expect(ratio).toBeVisible();
-    await ratio.click();
-    await page.getByRole('button', { name: '21:9', exact: true }).click();
-    await expect(ratio).toContainText('21:9');
+    if (mobile) await expect(ratio).toBeHidden();
+    else {
+      await expect(ratio).toBeVisible();
+      await ratio.click();
+      const auto = page.getByRole('button', { name: 'auto', exact: true });
+      await expect(auto.locator('.ratio-auto')).toBeVisible();
+      const square = (await auto.locator('.ratio-auto').boundingBox())!;
+      expect(square.width).toBe(square.height);
+      await page.screenshot({ path: testInfo.outputPath('auto-ratio.png'), animations: 'disabled' });
+      await auto.click();
+      await expect(ratio).toContainText('auto');
+      await ratio.click();
+      await page.getByRole('button', { name: '21:9', exact: true }).click();
+      await expect(ratio).toContainText('21:9');
+    }
     await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    if (mobile) await page.getByRole('combobox', { name: '画幅', exact: true }).selectOption('21:9');
     await expect(page.getByRole('combobox', { name: '画幅', exact: true })).toHaveValue('21:9');
     await expect(page.getByRole('textbox', { name: '画幅', exact: true })).toHaveCount(0);
     await page.getByRole('combobox', { name: '画幅', exact: true }).selectOption('16:9');
     await page.keyboard.press('Escape');
-    await expect(ratio).toContainText('16:9');
-    if (page.viewportSize()!.width <= 760) {
-      const buttons = ['添加参考图', '生成设置', '开始生成'];
-      const before = await Promise.all(buttons.map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
-      await expect(page.locator('.mode-segments span').first()).toBeHidden();
-      await page.screenshot({ path: `/tmp/imagine-ratio-image-${page.viewportSize()!.width}.png` });
-      await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
-      const after = await Promise.all(buttons.map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
-      for (let i = 0; i < before.length; i++) expect(after[i]).toEqual(before[i]);
-      await expect(ratio).toBeVisible();
-      await page.screenshot({ path: `/tmp/imagine-ratio-video-${page.viewportSize()!.width}.png` });
+    if (!mobile) await expect(ratio).toContainText('16:9');
+    const modes = page.getByRole('group', { name: '创作类型', exact: true });
+    const add = page.getByRole('button', { name: '添加参考图', exact: true });
+    await expect(add).toBeEnabled();
+    const before = await add.boundingBox();
+    const iconBefore = await add.locator('svg').boundingBox();
+    const modeBefore = await modes.boundingBox();
+    const settingsBefore = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
+    const submitBefore = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
+    await expect(modes.getByRole('button', { name: '视频', exact: true }).locator('span')).toBeHidden();
+    if (mobile) await expect(modes.getByRole('button', { name: '图片', exact: true }).locator('span')).toBeHidden();
+    else await expect(modes.getByRole('button', { name: '图片', exact: true }).locator('span')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('composer-image.png'), animations: 'disabled' });
+    await modes.getByRole('button', { name: '视频', exact: true }).click();
+    await expect(add).toBeDisabled();
+    expect(await add.boundingBox()).toEqual(before);
+    expect(await add.locator('svg').boundingBox()).toEqual(iconBefore);
+    expect(await modes.boundingBox()).toEqual(modeBefore);
+    await expect(modes.getByRole('button', { name: '图片', exact: true }).locator('span')).toBeHidden();
+    if (mobile) {
+      await expect(modes.getByRole('button', { name: '视频', exact: true }).locator('span')).toBeHidden();
+      expect(await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox()).toEqual(settingsBefore);
+      expect(await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox()).toEqual(submitBefore);
+      await expect(ratio).toBeHidden();
+    } else await expect(modes.getByRole('button', { name: '视频', exact: true }).locator('span')).toBeVisible();
+    const videoInputs = (await page.getByRole('group', { name: '视频输入方式', exact: true }).boundingBox())!;
+    if (mobile) expect(Math.abs(videoInputs.y + videoInputs.height / 2 - before!.y - before!.height / 2)).toBeLessThan(1);
+    else {
+      expect(videoInputs.y + videoInputs.height).toBeLessThanOrEqual(before!.y);
+      expect(videoInputs.x).toBe(before!.x);
     }
-    const boxes = await page.locator('.creation-controls > button:not([hidden]), .mode-segments').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).display !== 'none').map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, bottom: box.bottom }; }));
+    await page.screenshot({ path: testInfo.outputPath('composer-video.png'), animations: 'disabled' });
+    if (page.viewportSize()!.width === 360) {
+      await page.setViewportSize({ width: 320, height: 800 });
+      const toolbar = (await page.locator('.creation-controls').boundingBox())!;
+      const smallModes = (await page.getByRole('group', { name: '视频输入方式', exact: true }).boundingBox())!;
+      expect(smallModes.y).toBeLessThan(toolbar.y + 6);
+      await page.screenshot({ path: testInfo.outputPath('composer-video-320.png'), animations: 'disabled' });
+    }
+    const boxes = await page.locator('.creation-controls > button:not([hidden]), .mode-segments, .video-input-row').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).display !== 'none').map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, bottom: box.bottom }; }));
     const composer = (await page.locator('.creation-composer').boundingBox())!;
     for (const box of boxes) { expect(box.x).toBeGreaterThanOrEqual(composer.x); expect(box.right).toBeLessThanOrEqual(composer.x + composer.width); }
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
       const a = boxes[i]!, b = boxes[j]!;
       expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y).toBe(true);
     }
+    const addVideo = await add.boundingBox();
+    await modes.getByRole('button', { name: '图片', exact: true }).click();
+    await expect(add).toBeEnabled();
+    expect(await add.boundingBox()).toEqual(addVideo);
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('desktop video shortcuts preserve presets custom values and model rules', async ({ page, request }, testInfo) => {
+  test.skip(page.viewportSize()!.width <= 760);
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Desktop ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    for (const name of ['Standard video', 'Managed video']) {
+      const added = await request.post('/internal/models', { data: { providerId: provider.id, modelId: name.replace(' ', '-'), displayName: name, enabled: true, capabilities: {
+        operations: ['video.generate'], aspectRatios: ['16:9'], resolutions: ['480p', '720p', '1080p', '1440p'], durations: { min: 1, max: 30 },
+        ...(name.startsWith('Managed') ? { parameters: [
+          { path: 'resolution', label: '分辨率', type: 'select', options: ['480p', '720p', '1080p'], allowCustom: true, defaultValue: '480p' },
+          { path: 'durationSeconds', label: '视频时长', type: 'number', min: 1, max: 30, step: 1, defaultValue: 6 },
+        ] } : {}),
+      } } });
+      expect(added.status()).toBe(201);
+    }
+    await open(page);
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    for (const name of ['Standard video', 'Managed video']) {
+      await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
+      await page.locator('.choice').filter({ has: page.getByText(name, { exact: true }) }).click();
+      const resolution = page.getByRole('button', { name: '选择视频分辨率', exact: true });
+      const duration = page.getByRole('button', { name: '选择视频时长', exact: true });
+      await resolution.click();
+      await expect(page.locator('.desktop-video-options > .choice')).toHaveText(['480p', '720p', '1080p', '自定义']);
+      await page.getByRole('button', { name: '1080p', exact: true }).click();
+      await expect(resolution).toContainText('1080p');
+      await duration.click();
+      await expect(page.locator('.desktop-video-options > .choice')).toHaveText(['6s', '10s', '15s', '自定义']);
+      await page.getByRole('button', { name: '15s', exact: true }).click();
+      await expect(duration).toContainText('15s');
+      await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('1080p');
+      await expect(page.getByLabel('视频时长', { exact: true })).toHaveValue('15');
+      await page.keyboard.press('Escape');
+      await resolution.click();
+      await page.getByRole('button', { name: '自定义', exact: true }).click();
+      await page.getByLabel('自定义视频分辨率', { exact: true }).fill('0');
+      await page.getByRole('button', { name: '应用', exact: true }).click();
+      await expect(page.getByRole('alert').filter({ hasText: '超出当前模型允许范围' })).toBeVisible();
+      await page.getByLabel('自定义视频分辨率', { exact: true }).fill('1440');
+      await page.getByRole('button', { name: '应用', exact: true }).click();
+      await expect(resolution).toContainText('1440p');
+      await duration.click();
+      await page.getByRole('button', { name: '自定义', exact: true }).click();
+      await page.getByLabel('自定义视频时长', { exact: true }).fill('12');
+      await page.getByRole('button', { name: '应用', exact: true }).click();
+      await expect(duration).toContainText('12s');
+      await page.screenshot({ path: testInfo.outputPath(`${name}-shortcuts.png`), animations: 'disabled' });
+      await page.getByLabel('创作描述', { exact: true }).fill('desktop video parameter contract');
+      await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: { code: 'captured', message: 'Captured locally' } } }) : route.continue());
+      const submitted = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+      await page.getByRole('button', { name: '开始生成', exact: true }).click();
+      expect((await submitted).postDataJSON()).toMatchObject({ resolution: '1440p', durationSeconds: 12 });
+      await page.reload();
+      await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+      await expect(page.locator('.model-trigger')).toContainText(name);
+      await expect(resolution).toContainText('1440p');
+      await expect(duration).toContainText('12s');
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole('button', { name: '选择视频分辨率', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '选择视频时长', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('1440p');
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('desktop gallery scroll keeps headers fixed and paginates in its own viewport', async ({ page, request }, testInfo) => {
+  test.skip(page.viewportSize()!.width <= 760);
+  await upload(request);
+  const base = (await (await request.get('/internal/assets?limit=1')).json()).items[0];
+  const items = Array.from({ length: 90 }, () => ({ ...base, id: randomUUID() }));
+  let nextPages = 0;
+  await page.route(/\/internal\/assets\?/, route => {
+    const next = new URL(route.request().url()).searchParams.has('cursor');
+    if (next) nextPages++;
+    return route.fulfill({ json: { items: next ? items.slice(60) : items.slice(0, 60), nextCursor: next ? null : 'next-page' } });
+  });
+  await open(page);
+  const scroll = page.locator('.gallery-scroll');
+  const fixed = ['.workspace-header', '.library-heading', '.library-filter', '.creation-composer'];
+  const before = await Promise.all(fixed.map(selector => page.locator(selector).boundingBox()));
+  await expect.poll(() => scroll.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+  const bounds = (await scroll.boundingBox())!;
+  await page.mouse.move(bounds.x + 80, bounds.y + 80);
+  await page.mouse.wheel(0, 500);
+  await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBeGreaterThan(100);
+  expect(await page.locator('.workspace').evaluate(element => element.scrollTop)).toBe(0);
+  for (const [index, selector] of fixed.entries()) expect(await page.locator(selector).boundingBox()).toEqual(before[index]);
+  await page.screenshot({ path: testInfo.outputPath('desktop-gallery-scrolled.png'), animations: 'disabled' });
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(() => nextPages).toBeGreaterThan(0);
+  await expect(page.getByText('已显示全部作品', { exact: true })).toBeAttached();
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect(page.locator(`[data-study-id="${items.at(-1)!.id}"]`)).toBeInViewport();
+  expect(await page.locator('.study-card').count()).toBeLessThan(items.length);
+  const desktop = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.workspace-mobile')).toBeVisible();
+  await expect(scroll).toHaveCSS('display', 'contents');
+  await page.locator('.workspace').evaluate(element => { element.scrollTop = 100; });
+  await expect.poll(() => page.locator('.workspace').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await page.setViewportSize(desktop);
+  await expect(page.locator('.workspace-desktop')).toBeVisible();
+  await scroll.evaluate(element => { element.scrollTop = 300; });
+  await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 });
 
 test('shared connection model management saves rules and renders them in the composer', async ({ page, request }) => {
@@ -511,12 +662,15 @@ test('card references, video parameter memory and responsive video controls', as
     expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(6);
     const settings = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
     const submit = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
-    expect(modes!.y + modes!.height).toBeLessThanOrEqual(settings!.y);
-    expect(modes!.x + modes!.width).toBeLessThanOrEqual(controls!.x + controls!.width);
+    expect(Math.abs(modes!.y + modes!.height / 2 - settings!.y - settings!.height / 2)).toBeLessThan(1);
+    expect(modes!.x + modes!.width).toBeLessThanOrEqual(settings!.x);
     expect(submit!.x - settings!.x).toBeLessThan(60);
     await expect(page.locator('.mode-segments span').first()).toBeHidden();
     await expect(page.locator('.mode-segments span').last()).toBeHidden();
-  } else expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(5);
+  } else {
+    expect(modes!.y + modes!.height).toBeLessThanOrEqual(controls!.y);
+    expect(modes!.x).toBe(controls!.x);
+  }
   await page.screenshot({ path: `/tmp/imagine-inline-video-${page.viewportSize()!.width}.png` });
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
   await page.getByLabel('分辨率', { exact: true }).selectOption('720p');

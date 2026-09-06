@@ -11,6 +11,7 @@ import { flushPromptDraft } from './features/composer/model/composer-draft';
 import { registerPwa } from './pwa-registration';
 import { usePwaViewport } from './features/workspace/mobile-interactions';
 import './features/workspace/workspace.css';
+import './features/workspace/workspace-desktop.css';
 
 function createAppQueryClient() {
   return new QueryClient({

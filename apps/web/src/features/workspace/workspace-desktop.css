@@ -1,0 +1,18 @@
+.workspace-desktop.has-gallery { display: flex; flex-direction: column; overflow: hidden; scrollbar-gutter: auto; }
+.workspace-desktop.has-gallery > .workspace-header,
+.workspace-desktop.has-gallery > .offline-banner,
+.workspace-desktop.has-gallery > .workspace-update { flex-shrink: 0; }
+.workspace-desktop.has-gallery > .library-area { display: flex; flex: 1; flex-direction: column; width: 100%; min-height: 0; padding-bottom: 0; }
+.workspace-desktop.has-gallery .library-heading,
+.workspace-desktop.has-gallery .library-filter { flex-shrink: 0; }
+.workspace-desktop .gallery-scroll { display: block; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-bottom: 40px; }
+.workspace-desktop.section-create .gallery-scroll { padding-bottom: calc(var(--composer-size) + 64px); }
+.composer-desktop .desktop-video-mode-row { display: flex; align-items: center; height: 34px; margin: 0 0 10px; }
+.composer-desktop .desktop-video-option { flex: 0 0 76px; width: 76px; padding: 0 5px; }
+.composer-desktop .desktop-video-option > span { overflow: hidden; text-overflow: ellipsis; }
+.composer-desktop .model-trigger { flex-shrink: 1; }
+.desktop-video-options { min-width: 180px; }
+.desktop-video-custom { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+.desktop-video-custom label { display: grid; flex: 1; gap: 8px; min-width: 0; font-size: 12px; }
+.desktop-video-custom input { width: 110px; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; }
+.desktop-video-custom p { flex: 0 0 100%; font-size: 12px; color: #a13e3e; }

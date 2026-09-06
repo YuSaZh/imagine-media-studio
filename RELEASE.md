@@ -271,6 +271,13 @@ Keep the existing Compose project, environment file, and data mount when
 switching images. Test builds retain the base application version; their OCI
 version and revision labels identify the exact test commit.
 
+Test digest attestations are stored in GitHub without pushing a separately
+tagged attestation bundle to GHCR. BuildKit SBOM and provenance remain attached
+to the image index. The candidate, `test`, and commit tags share one image
+digest, so each test publication adds one tagged application version instead
+of an additional `sha256-...` attestation entry. Existing attestation entries
+from earlier runs are not automatically removed.
+
 ### Stable releases
 
 1. Require the release-preparation commit and normal CI on `main` to pass.

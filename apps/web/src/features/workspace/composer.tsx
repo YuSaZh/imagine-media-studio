@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_IMAGE_INPUT_POLICY, type JsonObject } from '@imagine/shared';
-import { ArrowUp, Check, ChevronDown, Image as ImageIcon, LoaderCircle, Plus, Ratio, RefreshCw, SlidersHorizontal, Upload, Video, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Image as ImageIcon, LoaderCircle, Plus, Ratio, RefreshCw, SlidersHorizontal, SquareDashed, Upload, Video, X } from 'lucide-react';
 import { COMPOSER_DRAFT_MAX_PROMPT_LENGTH } from '../composer/model/composer-draft';
 import type { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
 import { filesFromClipboard, filesFromDataTransfer } from '../media-input/model/acquisition';
@@ -12,8 +12,11 @@ import { allowsCustomSize, ExtraParameters } from './generation-options';
 import { managedParameters, ManagedParameters } from './managed-parameters';
 import { useSettingsQuery, usePatchSettings } from '../settings/api/settings-query';
 import { memoryObject, readGenerationMemory, updateGenerationMemory } from './generation-memory';
+import { DesktopVideoOptions } from './desktop-video-options';
+import type { WorkspaceLayout } from './workspace-layout';
 
 interface ComposerProps {
+  layout: WorkspaceLayout;
   projectId: string | null;
   prompt: string;
   onPrompt: (prompt: string) => void;
@@ -159,8 +162,9 @@ export function Composer(props: ComposerProps) {
     { key: 'first_frame' as const, label: '首帧', operation: 'video.image_to_video' as const },
     { key: 'references' as const, label: '参考图', operation: 'video.reference_to_video' as const },
   ].filter(option => props.models.some(candidate => candidate.capabilities.operations.includes(option.operation)));
+  const videoInputChoices = mode === 'video' && videoModes.length > 1 ? <div className="video-input-choices segments" aria-label="视频输入方式" role="group">{videoModes.map(option => <button type="button" key={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div> : null;
 
-  return <form className={`creation-composer ${dragging ? 'is-dragging' : ''}`} ref={composerRef} aria-label="生成工作区" onSubmit={event => { event.preventDefault(); submit(); }}
+  return <form className={`creation-composer composer-${props.layout} ${dragging ? 'is-dragging' : ''}`} ref={composerRef} aria-label="生成工作区" onSubmit={event => { event.preventDefault(); submit(); }}
     onDragEnter={event => { event.preventDefault(); dragDepth.current += 1; setDragging(true); }}
     onDragOver={event => event.preventDefault()}
     onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); }}
@@ -184,13 +188,15 @@ export function Composer(props: ComposerProps) {
     {!props.online ? <p className="composer-notice" role="status">当前离线，草稿已保留</p> : !model && !props.loading ? <div className="composer-notice" role="status"><span>没有支持当前创作类型的模型</span><button type="button" onClick={props.onConnections}>配置连接</button></div> : null}
     {uploads.state.rejections.length > 0 && <div className="composer-notice" role="alert"><span>{uploads.state.rejections.map(item => `${item.name}：${item.reason}`).join('；')}</span><button type="button" onClick={uploads.clearRejections}>关闭</button></div>}
     {invalidReferences && references.length > 0 && <p className="composer-notice" role="alert">参考图的角色、数量或大小与当前模型不兼容，请移除或切换模型。</p>}
+    {props.layout === 'desktop' && videoInputChoices && <div className="desktop-video-mode-row">{videoInputChoices}</div>}
     <div className="creation-controls">
       <input ref={inputRef} hidden type="file" aria-label="上传参考图" accept="image/*" multiple onChange={event => { props.onFiles([...event.target.files ?? []]); event.target.value = ''; }} />
-      {uploadAllowed ? <Options label="添加参考图" trigger={<Plus size={20} />}><Choice active={false} onClick={() => inputRef.current?.click()}><Upload size={16} />上传新图片</Choice><Choice active={false} onClick={props.onLibrary}><ImageIcon size={16} />从资源库选择</Choice></Options> : <Tool label="添加参考图" disabled><Plus size={20} /></Tool>}
+      {uploadAllowed ? <Options label="添加参考图" className="reference-trigger" trigger={<Plus size={20} />}><Choice active={false} onClick={() => inputRef.current?.click()}><Upload size={16} />上传新图片</Choice><Choice active={false} onClick={props.onLibrary}><ImageIcon size={16} />从资源库选择</Choice></Options> : <Tool label="添加参考图" className="reference-trigger" disabled><Plus size={20} /></Tool>}
       <div className="segments mode-segments" role="group" aria-label="创作类型"><button type="button" aria-label="图片" aria-pressed={mode === 'image'} onClick={() => props.onMode('image')}><ImageIcon size={15} /><span>图片</span></button><button type="button" aria-label="视频" aria-pressed={mode === 'video'} onClick={() => props.onMode('video')}><Video size={16} /><span>视频</span></button></div>
-      <div className="video-input-row">{mode === 'video' && videoModes.length > 1 && <div className="video-input-choices segments" aria-label="视频输入方式" role="group">{videoModes.map(option => <button type="button" key={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div>}</div>
+      {props.layout === 'mobile' && <div className="video-input-row">{videoInputChoices}</div>}
       <Options label="选择生成模型" className="model-trigger" trigger={<><span className="model-dot" /><span>{model?.name ?? '选择模型'}</span><ChevronDown size={13} /></>}><div className="option-heading">模型与服务</div>{modelOptions.map(option => <Choice key={option.key} active={model?.key === option.key} onClick={() => props.onModel(option.key)}><span className="choice-copy"><strong>{option.name}</strong><small>{option.providerName}</small></span>{model?.key === option.key && <Check size={15} />}</Choice>)}</Options>
-      {model && ratioOptions.length > 0 && <Options label="选择画幅" className="ratio-trigger" trigger={<><Ratio size={15} /><span>{selectedRatio}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div>{ratioRule?.locked ? <ManagedParameters rules={[ratioRule]} values={parameters} onChange={setParameters} /> : <div className="ratio-options">{ratioOptions.map(value => <Choice key={value} active={selectedRatio === value} onClick={() => chooseRatio(value)}>{value !== 'auto' && <i style={{ aspectRatio: value.replace(':', '/') }} />}<span>{value}</span></Choice>)}</div>}</Options>}
+      {model && ratioOptions.length > 0 && <Options label="选择画幅" className="ratio-trigger" trigger={<><Ratio size={15} /><span>{selectedRatio}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div>{ratioRule?.locked ? <ManagedParameters rules={[ratioRule]} values={parameters} onChange={setParameters} /> : <div className="ratio-options">{ratioOptions.map(value => <Choice key={value} active={selectedRatio === value} onClick={() => chooseRatio(value)}>{value === 'auto' ? <SquareDashed className="ratio-auto" size={24} strokeWidth={1.5} aria-hidden="true" /> : <i style={{ aspectRatio: value.replace(':', '/') }} />}<span>{value}</span></Choice>)}</div>}</Options>}
+      {props.layout === 'desktop' && mode === 'video' && <DesktopVideoOptions model={model} resolution={resolution} duration={duration} parameters={parameters} onResolution={setResolution} onDuration={setDuration} onParameters={setParameters} />}
       <Options label="生成设置" className="generation-settings-trigger" trigger={<SlidersHorizontal size={18} />}>
         <div className="option-heading">生成设置</div>
         <label className="setting-line mobile-control"><span>模型与服务</span><select aria-label="模型与服务" value={model?.key ?? ''} onChange={event => props.onModel(event.target.value)}>{modelOptions.map(option => <option key={option.key} value={option.key}>{option.providerName} · {option.name}</option>)}</select></label>

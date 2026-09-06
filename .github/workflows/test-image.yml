@@ -24,7 +24,6 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-      artifact-metadata: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -79,12 +78,14 @@ jobs:
           cache-from: type=gha,scope=test-image
           cache-to: type=gha,mode=max,scope=test-image
 
-      - name: Attest test candidate
+      - name: Attest test candidate in GitHub
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
+          # A registry-pushed bundle creates a second tagged GHCR version.
+          push-to-registry: false
+          create-storage-record: false
 
   smoke:
     name: Verify test candidate digest

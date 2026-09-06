@@ -68,8 +68,13 @@ svg { flex-shrink: 0; }
 .segments { display: flex; align-items: center; padding: 3px; background: #f0f1f0; border-radius: 999px; flex-shrink: 0; }
 .segments button { display: flex; gap: 6px; align-items: center; justify-content: center; min-height: 28px; padding: 0 11px; border-radius: 999px; font-size: 11px; color: #626b65; white-space: nowrap; }
 .segments button[aria-pressed='true'] { background: #fff; color: #242825; box-shadow: 0 1px 4px #19221b14; }
+.mode-segments { width: 110px; height: 34px; }
+.mode-segments button { flex: 0 0 36px; width: 36px; padding: 0; }
+.mode-segments button[aria-pressed='true'] { flex-basis: 68px; width: 68px; }
+.mode-segments button:not([aria-pressed='true']) span { display: none; }
 .option-trigger { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; min-width: 34px; padding: 0 10px; gap: 7px; border-radius: 999px; font-size: 11px; color: #606762; white-space: nowrap; }
 .option-trigger:hover, .option-trigger[data-state='open'] { background: #f1f3f1; }
+.creation-controls > .reference-trigger { flex: 0 0 36px; width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; }
 .model-trigger { margin-left: 2px; }
 .model-dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; }
 .composer-spacer { flex: 1; }
@@ -87,6 +92,7 @@ svg { flex-shrink: 0; }
 .composer-notice button { font-size: 11px; color: var(--accent); text-decoration: underline; }
 .drop-target { position: absolute; inset: 0; display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: inherit; background: #eef7eff2; color: var(--accent); z-index: 3; pointer-events: none; }
 .library-area { margin: 0 auto; max-width: 1420px; padding: 0 38px 40px; }
+.gallery-scroll { display: contents; }
 .library-heading { display: flex; gap: 18px; align-items: center; justify-content: space-between; min-height: 42px; }
 .library-title { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .library-title h2 { font-size: 15px; font-weight: 500; }
@@ -163,6 +169,7 @@ svg { flex-shrink: 0; }
 .ratio-options { display: flex; flex-wrap: wrap; gap: 2px; max-width: 300px; }
 .ratio-options .choice { flex-direction: column; justify-content: end; width: 48px; height: 66px; gap: 7px; padding: 6px 4px; font-size: 10px; }
 .ratio-options i { width: 21px; max-height: 29px; border: 1.4px solid #7f8d83; border-radius: 2px; }
+.ratio-auto { color: #7f8d83; }
 .setting-line { display: flex; justify-content: space-between; align-items: center; gap: 22px; min-height: 58px; margin: 0 10px; border-bottom: 1px solid #eef0ed; font-size: 12px; }
 .setting-line:last-child { border-bottom: 0; }
 .setting-line select { height: 32px; padding: 0 8px; background: #f4f6f3; border: 0; border-radius: 4px; font-size: 12px; }
@@ -269,16 +276,14 @@ svg { flex-shrink: 0; }
   .creation-composer { position: fixed; z-index: 20; bottom: calc(max(10px, env(safe-area-inset-bottom)) + var(--keyboard-lift)); left: max(10px, env(safe-area-inset-left)); right: max(10px, env(safe-area-inset-right)); border-radius: 18px; padding: 10px 10px 8px; box-shadow: 0 -3px 30px #1b2b2209, 0 3px 10px #1b2b2210; }
   .creation-composer textarea { font-size: 16px; min-height: 44px; height: 44px; line-height: 1.4; padding: 4px 5px; }
   .creation-composer textarea:focus { height: 68px; }
-  .creation-controls { gap: 5px; }
+  .creation-controls { gap: 4px; }
   .creation-controls > .tool { width: 36px; flex-basis: 36px; height: 40px; }
   .segments button { min-height: 31px; font-size: 12px; padding: 0 10px; }
   .mode-segments button span { display: none; }
   .creation-controls .model-trigger { display: none; }
   .creation-controls .desktop-control { display: none; }
   .creation-controls .option-trigger { height: 40px; width: 38px; }
-  .creation-controls .ratio-trigger { width: 88px; min-width: 0; flex: 0 0 88px; padding: 0 3px; gap: 4px; }
-  .ratio-trigger span { overflow: hidden; text-overflow: ellipsis; }
-  .ratio-trigger svg { flex-shrink: 0; }
+  .creation-controls .ratio-trigger { display: none; }
   .generate-button { width: 40px; height: 40px; }
   .mobile-model-status { display: flex; justify-content: space-between; gap: 10px; height: 22px; padding: 7px 6px 1px; font-size: 10px; line-height: 14px; color: #6a756c; }
   .mobile-control { display: flex; }
@@ -372,13 +377,14 @@ svg { flex-shrink: 0; }
   body { position: fixed; inset: 0; }
   input, select, textarea { font-size: 16px !important; }
   .creation-composer { display: flex; flex-direction: column; container-type: inline-size; }
-  .creation-controls { flex-wrap: wrap; }
-  .creation-controls > .tool, .creation-controls > .option-trigger:not(.ratio-trigger):not(.model-trigger) { width: 36px; min-width: 36px; flex: 0 0 36px; height: 40px; padding: 0; }
-  .mode-segments { width: 78px; height: 40px; }
+  .creation-controls { flex-wrap: nowrap; }
+  .creation-controls > .reference-trigger, .creation-controls > .generation-settings-trigger { width: 36px; min-width: 36px; flex: 0 0 36px; height: 40px; padding: 0; }
+  .mode-segments { width: 70px; height: 40px; }
   .mode-segments button span { display: none; }
-  .mode-segments button { width: 36px; height: 34px; padding: 0; }
-  .video-input-row { order: -1; flex: 0 0 100%; height: 34px; margin: 0; display: flex; justify-content: center; }
+  .mode-segments button, .mode-segments button[aria-pressed='true'] { flex-basis: 32px; width: 32px; height: 34px; padding: 0; }
+  .video-input-row { height: 34px; margin: 0; }
   .video-input-choices { height: 34px; }
+  .video-input-choices button { padding: 0 5px; font-size: 11px; }
   .mobile-model-status { order: 4; }
   .generation-settings-trigger { margin-left: auto; }
   .composer-spacer { display: none; }
@@ -387,7 +393,11 @@ svg { flex-shrink: 0; }
 }
 @container (max-width: 300px) {
   .creation-controls { gap: 2px; }
-  .creation-controls .ratio-trigger { width: 76px; flex-basis: 76px; }
+  .creation-controls > .reference-trigger, .creation-controls > .generation-settings-trigger { flex-basis: 32px; width: 32px; min-width: 32px; }
+  .mode-segments { width: 66px; }
+  .mode-segments button, .mode-segments button[aria-pressed='true'] { flex-basis: 30px; width: 30px; }
+  .video-input-choices button { padding: 0 3px; font-size: 10px; }
+  .generate-button { width: 36px; height: 36px; }
 }
 @media (hover: none) { .tip { display: none; } }
 .upload-retry { position: absolute; inset: 15px 20px 20px; color: white; background: #723b3bcc; border-radius: 50%; padding: 0; }
