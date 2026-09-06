@@ -41,6 +41,13 @@ describe('workspace API contracts', () => {
     const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: '1:1', resolution: '', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false, extra: { quality: 'medium' } };
     expect(generationRequest(input)).toMatchObject({ quality: 'medium' });
     expect(generationRequest(input)).not.toHaveProperty('extra');
+    delete raw.capabilities.profile;
+    raw.modelId = 'grok-imagine-image-2.0';
+    const automatic = { ...input, model: mapModels([raw], [{ ...provider('first'), type: 'openai' }])[0]! };
+    expect(generationRequest(automatic)).toMatchObject({ quality: 'medium' });
+    expect(generationRequest(automatic)).not.toHaveProperty('extra');
+    raw.capabilities.profile = 'openai-images-v1';
+    expect(generationRequest({ ...automatic, model: mapModels([raw], [{ ...provider('first'), type: 'openai' }])[0]! })).toMatchObject({ extra: { quality: 'medium' } });
   });
   it('traverses catalogs and rejects a repeated cursor', async () => {
     await expect(allPages(async cursor => ({ items: [cursor ?? 'first'], nextCursor: cursor ? null : 'second' }))).resolves.toEqual(['first', 'second']);

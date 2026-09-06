@@ -312,7 +312,7 @@ test('custom generation parameters reach the job request from the bottom compose
   const { provider } = await created.json();
   try {
     const added = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'grok-imagine-image-2.0', displayName: 'Custom image model', enabled: true, capabilities: {
-      operations: ['image.generate'], aspectRatios: ['1:1', '16:9', '4:3'], resolutions: ['auto', '1024x1024'], maxReferenceImages: 0, supportsBatchCount: true, maxBatchCount: 4,
+      profile: 'openai-images-v1', operations: ['image.generate'], aspectRatios: ['1:1', '16:9', '4:3'], resolutions: ['auto', '1024x1024'], maxReferenceImages: 0, supportsBatchCount: true, maxBatchCount: 4,
       customFields: { type: 'object', properties: { size: { type: 'string' }, quality: { enum: ['low', 'high'] }, output_format: { enum: ['png', 'jpeg', 'webp'] } }, additionalProperties: false },
     } } });
     expect(added.status()).toBe(201);

@@ -1,5 +1,5 @@
 import type { AssetDto, AssetInput, GenerationRequest, JobDto, ModelDto, ProviderDto, JsonObject } from '@imagine/shared';
-import { GenerationRequestSchema, applyModelParameters, normalizeAutomaticParameters } from '@imagine/shared';
+import { GenerationRequestSchema, applyModelParameters, matchModelProtocol, normalizeAutomaticParameters } from '@imagine/shared';
 import { managedParameters } from './managed-parameters';
 import { internalClient } from '../../api/internal-client';
 import { mapInternalModel } from './model-capabilities';
@@ -187,7 +187,7 @@ export function generationRequest(input: Creation): GenerationRequest {
   const seed = Number(input.seed);
   if (input.seed && !Number.isSafeInteger(seed)) throw new Error('种子必须是整数');
   const extra = { ...input.extra };
-  const xai = String(model.raw.capabilities.profile ?? model.providerType).startsWith('xai');
+  const xai = String(model.raw.capabilities.profile ?? matchModelProtocol(model.id) ?? model.providerType).startsWith('xai');
   const quality = xai ? extra.quality : undefined;
   if (xai) delete extra.quality;
   return GenerationRequestSchema.parse({

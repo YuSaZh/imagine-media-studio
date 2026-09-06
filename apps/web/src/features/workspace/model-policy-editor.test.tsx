@@ -16,6 +16,7 @@ describe('model parameter administration', () => {
     expect(rules.map(rule => rule.path)).toEqual(['audio', 'quality']);
     expect(rules.every(rule => rule.defaultValue === undefined)).toBe(true);
     expect(parameterPresets({ operations: ['image.generate'], customFields: { properties: { quality: { type: 'string', enum: ['low', 'high'] } } } }, 'openai')[0]?.path).toBe('extra.quality');
+    expect(parameterPresets({ operations: ['image.generate'], customFields: { properties: { quality: { type: 'string', enum: ['low', 'high'] } } } }, 'openai', 'grok-imagine-image')[0]?.path).toBe('quality');
   });
   it('retains the JSON editor for incomplete or malformed advanced configuration', () => {
     for (const value of ['null', '{', '{"parameters":[null]}', '{"parameters":[{"path":"quality","label":"Quality","options":1}]}']) {
