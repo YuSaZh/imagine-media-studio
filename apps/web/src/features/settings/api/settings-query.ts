@@ -78,11 +78,22 @@ export interface ProviderWriteInput {
 
 export type ManualModelCreateInput = Omit<ManualModelCreate, 'enabled'> & { enabled?: boolean };
 
-const settingKey = [...internalQueryKeys.settings, "live"] as const;
+export const settingKey = [...internalQueryKeys.settings, "live"] as const;
 export function useSettingsQuery() {
  return useQuery({ queryKey: settingKey, queryFn: () => internalClient.getSettings(), staleTime: 30000 });
 }
 export function usePatchSettings() {
  const client = useQueryClient();
- return useMutation({ mutationFn: (values: Readonly<Record<string, JsonValue>>) => internalClient.patchSettings(values), onSuccess: response => client.setQueryData(settingKey, response) });
+ return useMutation({
+  mutationKey: settingKey,
+  scope: { id: 'account-settings' },
+  mutationFn: (values: Readonly<Record<string, JsonValue>>) => internalClient.patchSettings(values),
+  onMutate: values => {
+   void client.cancelQueries({ queryKey: settingKey });
+   client.setQueryData<{ settings: JsonObject }>(settingKey, current => current ? { ...current, settings: { ...current.settings, ...values } } : current);
+  },
+  onSettled: () => {
+   if (client.isMutating({ mutationKey: settingKey }) === 1) void client.invalidateQueries({ queryKey: settingKey });
+  },
+ });
 }

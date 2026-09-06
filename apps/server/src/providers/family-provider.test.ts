@@ -24,13 +24,17 @@ describe('shared provider connections', () => {
   });
   it('routes submit and recovery using the server snapshot and strips internal fields', async () => {
     const image: ProviderAdapter = { type: 'openai-responses-image-v1', getCapabilities: vi.fn(), validate: vi.fn(), submit: vi.fn().mockResolvedValue({ state: 'completed', assets: [] }), normalizeError: vi.fn() };
-    const video: ProviderAdapter = { ...image, type: 'openai-videos-v1-compatible', submit: vi.fn().mockResolvedValue({ state: 'pending', remoteJobId: 'job' }), poll: vi.fn().mockResolvedValue({ state: 'remote_running' }) };
+    const video: ProviderAdapter = { ...image, type: 'xai-imagine-video-v1', submit: vi.fn().mockResolvedValue({ state: 'pending', remoteJobId: 'job' }), poll: vi.fn().mockResolvedValue({ state: 'remote_running' }), cancel: vi.fn().mockResolvedValue(undefined) };
     const family = new FamilyProvider('openai', new Map([[image.type, image], [video.type, video]]));
     const context = { providerId: 'shared', secrets: {} };
     const request = { providerId: 'shared', modelId: 'my-model', operation: 'image.generate' as const, prompt: 'test', inputs: [], profile: 'openai-responses-image-v1' as const };
     await family.submit(request, context);
     expect(image.submit).toHaveBeenCalledWith({ providerId: 'shared', modelId: 'my-model', operation: 'image.generate', prompt: 'test', inputs: [] }, context);
-    await family.poll('job', { ...context, modelId: 'video', profile: 'openai-videos-v1-compatible' });
+    await family.submit({ ...request, operation: 'video.generate', profile: 'xai-imagine-video-v1' }, context);
+    expect(video.submit).toHaveBeenCalledOnce();
+    await family.poll('job', { ...context, modelId: 'video', profile: 'xai-imagine-video-v1' });
+    await family.cancel('job', { ...context, modelId: 'video', profile: 'xai-imagine-video-v1' });
+    expect(video.cancel).toHaveBeenCalledOnce();
     expect(video.poll).toHaveBeenCalledOnce();
     await expect(family.submit({ ...request, profile: 'xai-imagine-image-v1' }, context)).rejects.toThrow();
   });

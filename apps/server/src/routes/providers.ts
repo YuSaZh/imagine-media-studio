@@ -90,6 +90,11 @@ export async function registerProviderRoutes(
     });
   });
 
+  app.get<{ Params: { id: string } }>('/internal/providers/:id/models/catalog', async (request, reply) => {
+    try { return await options.providers.discoverModels(request.params.id); }
+    catch (error) { return providerError(reply, error); }
+  });
+
   app.get<{ Params: { id: string } }>('/internal/providers/:id', async (request, reply) => {
     const provider = options.providers.get(request.params.id);
     return provider

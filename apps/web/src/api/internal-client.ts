@@ -1,4 +1,4 @@
-import { AccountResponseSchema, AccountListSchema } from '@imagine/shared';
+import { AccountResponseSchema, AccountListSchema, RemoteModelCatalogSchema } from '@imagine/shared';
 import {
   AdapterDocumentFormatSchema,
   AdapterEmptyQuerySchema,
@@ -744,6 +744,8 @@ export const internalClient = {
       method: 'POST',
       body: '{}',
     }),
+  discoverProviderModels: async (providerId: string) =>
+    requestJson(`/internal/providers/${encodeURIComponent(providerId)}/models/catalog`, RemoteModelCatalogSchema),
   listTrustedAdapters: async (options: InternalRequestOptions = {}) => {
     parseEmptyQuery();
     return requestJson('/internal/adapters', TrustedAdapterPageSchema, requestSignal(options));

@@ -37,7 +37,7 @@ export function resolveModelProfile(providerType: string, operation: string, mod
   const kind = operation.startsWith('video.') ? 'video' : 'image';
   if (declared) {
     const profile = MODEL_PROTOCOLS.find(profile => profile.value === declared);
-    if (!profile || profile.family !== family || profile.kind !== kind) throw new Error('模型调用协议与提供商或创作类型不匹配');
+    if (!profile || profile.kind !== kind) throw new Error('模型调用协议与创作类型不匹配');
     return declared;
   }
   const legacy = MODEL_PROTOCOLS.find(profile => profile.value === providerType);

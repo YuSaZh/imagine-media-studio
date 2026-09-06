@@ -24,8 +24,76 @@ test.beforeEach(async ({ request, page }) => {
   for (const project of (await collections.json()).items) expect((await request.delete(`/internal/collections/${project.id}`)).ok()).toBeTruthy();
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
-  expect((await request.patch('/internal/settings', { data: { values: { 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  expect((await request.patch('/internal/settings', { data: { values: { 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
+});
+
+test('generation memory separates projects modes and models before submission', async ({ page, request }) => {
+  const created = await request.post('/internal/providers', { data: { name: `Memory ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } });
+  const { provider } = await created.json();
+  const project = await (await request.post('/internal/collections', { data: { name: 'Memory project' } })).json();
+  try {
+    for (const [id, kind] of [['memory-a', 'image'], ['memory-b', 'image'], ['memory-video', 'video']]) {
+      expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: id, displayName: id, capabilities: { operations: [`${kind}.generate`], aspectRatios: ['1:1', '16:9'], resolutions: ['1024x1024'], durations: [5, 10] }, enabled: true } })).status()).toBe(201);
+    }
+    await open(page, `/projects/${project.collection.id}`);
+    const choose = async (id: string) => {
+      if (page.viewportSize()!.width < 600) {
+        await page.getByRole('button', { name: '生成设置', exact: true }).click();
+        await page.getByLabel('模型与服务', { exact: true }).selectOption({ label: `${provider.name} · ${id}` });
+        await page.keyboard.press('Escape');
+        return;
+      }
+      await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
+      await page.locator('.choice').filter({ has: page.getByText(id, { exact: true }) }).click();
+    };
+    const count = async (value?: string) => {
+      await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      if (value) await page.getByLabel('生成数量', { exact: true }).selectOption(value);
+      const result = await page.getByLabel('生成数量', { exact: true }).inputValue();
+      await page.keyboard.press('Escape');
+      return result;
+    };
+    await choose('memory-a'); await count('3');
+    await choose('memory-b'); expect(await count()).toBe('1'); await count('2');
+    await choose('memory-a'); expect(await count()).toBe('3');
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await choose('memory-video'); await count('4');
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '图片', exact: true }).click();
+    await expect(page.locator('.model-trigger')).toContainText('memory-a');
+    expect(await count()).toBe('3');
+    await page.reload();
+    await expect(page.locator('.model-trigger')).toContainText('memory-a');
+    expect(await count()).toBe('3');
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await expect(page.locator('.model-trigger')).toContainText('memory-video');
+    expect(await count()).toBe('4');
+    await page.goto('/imagine');
+    await choose('memory-a'); expect(await count()).toBe('1'); await count('5');
+    await page.goto(`/projects/${project.collection.id}`);
+    await expect(page.locator('.model-trigger')).toContainText('memory-a');
+    expect(await count()).toBe('3');
+    await page.screenshot({ path: `/tmp/imagine-generation-memory-${page.viewportSize()!.width}.png` });
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('model editor offers the complete catalog and cross-family protocols', async ({ page, request }) => {
+  const name = `Catalog ${randomUUID()}`;
+  const { provider } = await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json();
+  try {
+    await page.route(`**/internal/providers/${provider.id}/models/catalog`, route => route.fulfill({ json: { models: [{ id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2' }, { id: 'unknown-model', displayName: 'unknown-model' }] } }));
+    await open(page, '/settings/providers');
+    await page.getByRole('region', { name: `连接 ${name}`, exact: true }).getByRole('button', { name: '添加模型', exact: true }).click();
+    await page.getByLabel('远端模型目录', { exact: true }).selectOption('gemini-3.1-flash-image');
+    await expect(page.getByLabel('模型显示名称', { exact: true })).toHaveValue('Nano Banana 2');
+    await expect(page.getByLabel('模型调用协议', { exact: true }).locator('option').first()).toContainText('默认接口（OpenAI）');
+    await page.getByLabel('模型调用协议', { exact: true }).selectOption('gemini-generate-content-image-v1');
+    await page.screenshot({ path: `/tmp/imagine-catalog-editor-${page.viewportSize()!.width}.png` });
+    await page.getByRole('button', { name: '保存模型', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '添加模型', exact: true })).toHaveCount(0);
+    const models = await (await request.get(`/internal/models?providerId=${provider.id}`)).json();
+    expect(models.items[0]).toMatchObject({ displayName: 'Nano Banana 2', capabilities: { profile: 'gemini-generate-content-image-v1' } });
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
 test('new workspace visual baseline and accessible responsive geometry', async ({ page, request }) => {
@@ -396,7 +464,7 @@ test('card references, video parameter memory and responsive video controls', as
   const submitted = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
   await page.getByRole('button', { name: '开始生成', exact: true }).click();
   expect((await submitted).postDataJSON()).toMatchObject({ aspectRatio: '9:16', resolution: '720p' });
-  await expect.poll(async () => Object.values((await (await request.get('/internal/settings')).json()).settings).some((value: unknown) => !!value && typeof value === 'object' && 'resolution' in value && value.resolution === '720p')).toBe(true);
+  await expect.poll(async () => Object.values((await (await request.get('/internal/settings')).json()).settings['generation.default']?.video?.models ?? {}).some((value: unknown) => !!value && typeof value === 'object' && 'resolution' in value && value.resolution === '720p')).toBe(true);
   await page.reload();
   await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
@@ -404,8 +472,10 @@ test('card references, video parameter memory and responsive video controls', as
   await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('720p');
 });
 
-test('preferences expose administrator account management and live public domain', async ({ page, request }) => {
+test('account category exposes administrator account management and live public domain', async ({ page, request }) => {
   await open(page, '/settings');
+  await expect(page.getByLabel('账号用户名', { exact: true })).toHaveCount(0);
+  await page.getByRole('link', { name: '账号管理', exact: true }).click();
   await page.getByLabel('公网域名', { exact: true }).fill('https://imagine.example.com');
   await page.getByRole('button', { name: '保存公网域名', exact: true }).click();
   await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings.public_base_url).toBe('https://imagine.example.com');
@@ -460,7 +530,7 @@ test('ordinary accounts log in without seeing administrator data and can change 
     await other.getByRole('button', { name: '进入工作区', exact: true }).click();
     await expect(other.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
     await expect(other.locator('.study-card')).toHaveCount(0);
-    await other.goto('/settings');
+    await other.goto('/settings/account');
     await expect(other.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
     await expect(other.getByLabel('公网域名', { exact: true })).toHaveCount(0);
     await expect(other.getByLabel('新账号用户名', { exact: true })).toHaveCount(0);
@@ -474,7 +544,7 @@ test('ordinary accounts log in without seeing administrator data and can change 
     await other.getByLabel('应用密码', { exact: true }).fill('changed-password');
     await other.getByRole('button', { name: '进入工作区', exact: true }).click();
     await expect(other.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
-    await page.goto('/settings');
+    await page.goto('/settings/account');
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
     await page.getByLabel('用户名', { exact: true }).fill(username);
@@ -518,7 +588,7 @@ test('mobile edge navigation, scroll boundaries and installed viewport remain st
   await page.locator('.workspace').evaluate(element => { element.scrollTop = 100; });
   expect(await swipe(120, 160, 122, 180)).toBe(false);
   expect(await page.evaluate(() => { const event = new Event('gesturestart', { cancelable: true }); document.dispatchEvent(event); return event.defaultPrevented; })).toBe(true);
-  await page.goto('/settings');
+  await page.goto('/settings/account');
   const input = page.getByLabel('新账号用户名', { exact: true });
   await input.click();
   expect(await input.evaluate(element => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);

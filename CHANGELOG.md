@@ -6,6 +6,13 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ### Fixed
 
+- Remember image/video model selections and per-model generation parameters
+  independently for each project, saving changes before submission.
+- Give account management its own settings category.
+- Offer the complete remote model catalog when adding a model, with common
+  display-name mappings and an exact model-ID fallback.
+- Allow individual models to use OpenAI, Gemini, or xAI protocols independently
+  of the connection's default interface.
 - Validate repository release provenance against BuildKit's emitted SLSA v1
   `buildDefinition` and `runDetails` structure for both supported platforms.
 

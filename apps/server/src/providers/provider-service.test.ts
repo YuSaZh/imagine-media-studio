@@ -9,6 +9,7 @@ import type {
   ProviderCapabilities,
   ProviderContext,
   ProviderError,
+  ProviderHttpClientPort,
   SubmitResult,
 } from '@imagine/provider-contract';
 import type { CustomAdapterRef, GenerationRequest } from '@imagine/shared';
@@ -70,7 +71,7 @@ afterEach(async () => {
 
 async function createHarness(
   adapter: MockProviderAdapter = new MockProviderAdapter(),
-  options: { readonly http?: ProviderHttpClient } = {},
+  options: { readonly http?: ProviderHttpClientPort } = {},
 ) {
   const directory = await mkdtemp(resolve(tmpdir(), 'imagine-provider-service-test-'));
   temporaryDirectories.push(directory);
@@ -90,6 +91,32 @@ async function createHarness(
 }
 
 describe('provider family migration', () => {
+  it('lists the complete paginated remote catalog without importing or filtering unknown models', async () => {
+    const urls: string[] = [];
+    const dispose = vi.fn();
+    const { service, models } = await createHarness(undefined, { http: { request: async request => {
+      urls.push(request.url);
+      expect(request.headers.authorization).toBe('Bearer catalog-key');
+      return { status: 200, statusCode: 200, headers: { 'content-type': 'application/json' }, json: urls.length === 1
+        ? { data: [{ id: 'gpt-image-2' }, { id: 'unknown-text-model' }], has_more: true, last_id: 'unknown-text-model' }
+        : { data: [{ id: 'gemini-3.1-flash-image' }, { id: 'gpt-image-2' }], has_more: false }, dispose };
+    } } });
+    const provider = service.create({ name: 'Catalog', type: 'openai', baseUrl: 'https://example.com/v1', apiKey: 'catalog-key' });
+    expect(await service.discoverModels(provider.id)).toEqual({ models: [
+      { id: 'gpt-image-2', displayName: 'GPT Image 2' }, { id: 'unknown-text-model', displayName: 'unknown-text-model' }, { id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2' },
+    ] });
+    expect(urls[1]).toBe('https://example.com/v1/models?after=unknown-text-model');
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(models.listForProvider(provider.id)).toEqual([]);
+  });
+  it('allows cross-family model protocols and keeps manual display names on refresh', async () => {
+    const { service, models } = await createHarness();
+    const provider = service.create({ name: 'Mixed', type: 'openai' });
+    service.saveManualModel({ providerId: provider.id, modelId: 'gpt-image-1', displayName: 'My image', capabilities: { operations: ['image.generate'], profile: 'xai-imagine-image-v1' }, enabled: true });
+    await service.refreshModels(provider.id);
+    expect(models.listForProvider(provider.id).find(model => model.modelId === 'gpt-image-1')).toMatchObject({ displayName: 'My image', capabilities: { profile: 'xai-imagine-image-v1' } });
+    expect(models.listForProvider(provider.id).filter(model => model.capabilitySource !== 'manual').every(model => !model.displayName.startsWith('OpenAI Images'))).toBe(true);
+  });
   it('persists protocol and parameter policy through catalog normalization', async () => {
     const { service, registry, models } = await createHarness();
     const provider = service.create({ name: 'Shared xAI', type: 'xai' });
@@ -112,7 +139,7 @@ describe('provider family migration', () => {
     expect(service.update(provider.id, { type: 'openai' })).toMatchObject({ type: 'openai', hasApiKey: true });
     expect(models.get(model.id)).toMatchObject({ capabilitySource: 'manual', capabilities: { profile: 'openai-responses-image-v1', parameters: [] } });
     expect((await registry.resolve(provider.id)).secrets.apiKey).toBe('retained-key');
-    expect(() => service.saveManualModel({ providerId: provider.id, modelId: 'wrong', displayName: 'Wrong', capabilities: { operations: ['image.generate'], profile: 'xai-imagine-image-v1' }, enabled: true })).toThrow('模型调用协议');
+    expect(() => service.saveManualModel({ providerId: provider.id, modelId: 'wrong', displayName: 'Wrong', capabilities: { operations: ['image.generate'], profile: 'xai-imagine-video-v1' }, enabled: true })).toThrow('模型调用协议');
   });
 });
 

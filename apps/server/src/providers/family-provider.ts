@@ -1,5 +1,5 @@
 import type { ProviderAdapter, ProviderCapabilities, ProviderContext, ProviderError, ProviderAssetReference } from '@imagine/provider-contract';
-import { resolveModelProfile, type GenerationRequest, type NativeProviderProfile, type ProviderFamily } from '@imagine/shared';
+import { providerFamily, resolveModelProfile, type GenerationRequest, type NativeProviderProfile, type ProviderFamily } from '@imagine/shared';
 
 interface CatalogAdapter extends ProviderAdapter {
   getLiveCapabilities?(context: ProviderContext): Promise<ProviderCapabilities>;
@@ -25,7 +25,7 @@ export class FamilyProvider implements ProviderAdapter {
   }
 
   private async catalog(context: ProviderContext, live: boolean): Promise<ProviderCapabilities> {
-    const primary = [...this.adapters.values()].filter(adapter => !adapter.type.includes('responses') && !adapter.type.includes('interactions'));
+    const primary = [...this.adapters.values()].filter(adapter => providerFamily(adapter.type) === this.type && !adapter.type.includes('responses') && !adapter.type.includes('interactions'));
     const results = await Promise.allSettled(primary.map(adapter => this.call(adapter, async () => {
       const result = live && adapter.getLiveCapabilities ? await adapter.getLiveCapabilities(context) : await adapter.getCapabilities(context);
       return result.models.map(model => ({ ...model, capabilities: { ...model.capabilities, profile: adapter.type as NativeProviderProfile } }));

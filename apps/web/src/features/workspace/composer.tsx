@@ -11,8 +11,10 @@ import { operationFor, type Creation, type MediaKind, type ReferenceInput, type 
 import { allowsCustomSize, ExtraParameters } from './generation-options';
 import { managedParameters, ManagedParameters } from './managed-parameters';
 import { useSettingsQuery, usePatchSettings } from '../settings/api/settings-query';
+import { memoryObject, readGenerationMemory, updateGenerationMemory } from './generation-memory';
 
 interface ComposerProps {
+  projectId: string | null;
   prompt: string;
   onPrompt: (prompt: string) => void;
   mode: MediaKind;
@@ -55,6 +57,8 @@ export function Composer(props: ComposerProps) {
   const savedSettings = useSettingsQuery();
   const saveSettings = usePatchSettings();
   const hydratedModel = useRef('');
+  const [hydrated, setHydrated] = useState(false);
+  const lastSaved = useRef('');
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
@@ -76,7 +80,7 @@ export function Composer(props: ComposerProps) {
     (mode === 'video' && videoMode === 'references' && references.length === 0) ||
     descriptorsExceedingTotalBytes(descriptors, policy).size > 0;
   const preparing = uploads.state.entries.some(entry => entry.status !== 'ready' || !references.some(input => input.asset.id === entry.assetId));
-  const canSubmit = !!model && props.online && !!prompt.trim() && !preparing && !invalidReferences && !props.submitting && !props.loading;
+  const canSubmit = hydrated && !!model && props.online && !!prompt.trim() && !preparing && !invalidReferences && !props.submitting && !props.loading;
   const uploadMaximum = mode === 'video' && videoMode === 'first_frame' ? 1 : model?.capabilities.maxReferenceImages ?? 0;
   const uploadAllowed = !!model && props.online && uploadMaximum > 0 && !(mode === 'video' && videoMode === 'text');
   const localAssetIds = new Set(uploads.state.entries.map(entry => entry.assetId));
@@ -84,7 +88,8 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     if (!model || !savedSettings.data || hydratedModel.current === model.key) return;
     hydratedModel.current = model.key;
-    const raw = savedSettings.data.settings[`model.${model.key}`];
+    const raw = memoryObject(readGenerationMemory(savedSettings.data.settings, props.projectId, mode).models)[model.key]
+      ?? (props.projectId === null ? savedSettings.data.settings[`model.${model.key}`] : undefined);
     const saved: JsonObject = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as JsonObject : {};
     const object = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
     setRatio(typeof saved.ratio === 'string' && (saved.ratio === 'auto' || allowsCustomSize(model) || model.capabilities.aspectRatios.includes(saved.ratio)) ? saved.ratio : 'auto');
@@ -98,7 +103,18 @@ export function Composer(props: ComposerProps) {
     setExtra(object(saved.extra)); setParameters(object(saved.parameters));
     setNegativePrompt(typeof saved.negativePrompt === 'string' ? saved.negativePrompt : '');
     setSeed(typeof saved.seed === 'string' ? saved.seed : ''); setAudio(saved.audio === true);
-  }, [model, savedSettings.data]);
+    setHydrated(true);
+  }, [model, savedSettings.data, props.projectId, mode]);
+  useEffect(() => {
+    if (!hydrated || !model || !savedSettings.data) return;
+    const options = { ratio, resolution, count, duration, customWidth, customHeight, extra, parameters, negativePrompt, seed, audio };
+    const serialized = JSON.stringify(options);
+    if (!lastSaved.current) { lastSaved.current = serialized; return; }
+    if (lastSaved.current === serialized) return;
+    lastSaved.current = serialized;
+    const memory = readGenerationMemory(savedSettings.data.settings, props.projectId, mode);
+    saveSettings.mutate(updateGenerationMemory(savedSettings.data.settings, props.projectId, mode, { models: { ...memoryObject(memory.models), [model.key]: options } }));
+  }, [hydrated, model, savedSettings.data, props.projectId, mode, ratio, resolution, count, duration, customWidth, customHeight, extra, parameters, negativePrompt, seed, audio, saveSettings]);
   useEffect(() => {
     if (resolution !== 'custom' || !Number.isInteger(customWidth) || !Number.isInteger(customHeight) || customWidth < 1 || customHeight < 1) return;
     let divisor = customWidth;
@@ -124,7 +140,6 @@ export function Composer(props: ComposerProps) {
 
   const submit = () => {
     if (!canSubmit || !model) return;
-    saveSettings.mutate({ [`model.${model.key}`]: { ratio, resolution, count, duration, customWidth, customHeight, extra, parameters, negativePrompt, seed, audio } });
     props.onCreate({ model, operation, prompt, inputs: references, ratio, resolution: resolution === 'custom' ? `${customWidth}x${customHeight}` : resolution, count, duration, negativePrompt, seed, audio, extra, parameters });
   };
   const modelOptions = props.models.filter(candidate => candidate.capabilities.operations.includes(operation));

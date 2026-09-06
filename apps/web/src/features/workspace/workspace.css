@@ -587,3 +587,5 @@ svg { flex-shrink: 0; }
   .batch-toolbar-library { bottom: max(20px, env(safe-area-inset-bottom)); }
   .auth-gate { padding: max(22px, env(safe-area-inset-top)) 22px; }
 }
+.catalog-model-picker { display: flex; gap: 8px; min-width: 0; }
+.catalog-model-picker select { flex: 1; min-width: 0; width: 100%; }

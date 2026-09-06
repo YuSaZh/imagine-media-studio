@@ -1,6 +1,7 @@
 export * from './app.js';
 export * from './generation.js';
 export * from './provider-protocols.js';
+export * from './model-names.js';
 export * from './model-parameters.js';
 export * from './internal-api.js';
 export * from './base64-envelope.js';

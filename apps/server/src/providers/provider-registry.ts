@@ -198,7 +198,7 @@ function createAdapter(providerType: string, mockAdapter: ProviderAdapter): Prov
     case 'openai':
     case 'gemini':
     case 'xai':
-      return new FamilyProvider(providerType, new Map(MODEL_PROTOCOLS.filter(profile => profile.family === providerType).map(profile => [profile.value, createAdapter(profile.value, mockAdapter)!])));
+      return new FamilyProvider(providerType, new Map(MODEL_PROTOCOLS.map(profile => [profile.value, createAdapter(profile.value, mockAdapter)!])));
     case 'mock':
       return mockAdapter;
     case 'openai-images-v1':

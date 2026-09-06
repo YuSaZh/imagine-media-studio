@@ -9,6 +9,8 @@ import {
   resolveModelProfile,
   NativeProviderProfileSchema,
   providerFamily,
+  modelDisplayName,
+  RemoteModelCatalogSchema,
   type CustomAdapterRef,
   type JsonObject,
   type ModelCapabilities,
@@ -373,6 +375,46 @@ export class ProviderService {
     return provider ? toProviderDto(provider) : null;
   }
 
+  public async discoverModels(providerId: string) {
+    const registration = await Promise.resolve(this.registry.resolve(providerId));
+    const family = providerFamily(registration.adapter.type);
+    if (!family || !registration.http) return { models: this.models.listForProvider(providerId).map(model => ({ id: model.modelId, displayName: model.displayName })) };
+    const defaults = { openai: 'https://api.openai.com/v1', xai: 'https://api.x.ai/v1', gemini: 'https://generativelanguage.googleapis.com/v1beta' };
+    const base = registration.baseUrl ?? defaults[family];
+    const url = new URL(`${base.replace(/\/$/, '')}/models`);
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(registration.secrets)) if (name.startsWith('header:')) headers[name.slice(7).toLowerCase()] = value;
+    headers.accept = 'application/json';
+    if (registration.secrets.apiKey) headers[family === 'gemini' ? 'x-goog-api-key' : 'authorization'] = family === 'gemini' ? registration.secrets.apiKey : `Bearer ${registration.secrets.apiKey}`;
+    const models = new Map<string, { id: string; displayName: string }>();
+    const pages = new Set<string>();
+    for (let page = 0; page < 100; page++) {
+      const response = await registration.http.request({ method: 'GET', url: url.href, headers, headersTimeoutMs: 15000, bodyTimeoutMs: 30000, maxResponseBodyBytes: 4 * 1024 * 1024 });
+      try {
+        if (response.statusCode < 200 || response.statusCode >= 300) throw new Error('Catalog request failed');
+        const body: unknown = response.json ?? JSON.parse(response.text ?? '{}');
+        if (!body || typeof body !== 'object') throw new Error('Invalid catalog');
+        const payload = body as Record<string, unknown>;
+        const entries = family === 'gemini' ? payload.models : payload.data;
+        if (!Array.isArray(entries) || entries.length > 4096) throw new Error('Invalid catalog');
+        for (const entry of entries) {
+          const raw = typeof entry === 'string' ? entry : entry && typeof entry === 'object' ? (entry as Record<string, unknown>)[family === 'gemini' ? 'name' : 'id'] : undefined;
+          if (typeof raw !== 'string') continue;
+          const id = family === 'gemini' ? raw.replace(/^models\//, '') : raw;
+          const parsed = RemoteModelCatalogSchema.shape.models.element.safeParse({ id, displayName: modelDisplayName(id) });
+          if (parsed.success) models.set(id, parsed.data);
+        }
+        if (models.size > 4096) throw new Error('Catalog exceeds model limit');
+        const next = family === 'gemini' ? payload.nextPageToken : payload.has_more === true ? payload.last_id : undefined;
+        if (!next) return RemoteModelCatalogSchema.parse({ models: [...models.values()] });
+        if (typeof next !== 'string' || next.length > 2048 || pages.has(next)) throw new Error('Invalid catalog pagination');
+        pages.add(next);
+        url.searchParams.set(family === 'gemini' ? 'pageToken' : 'after', next);
+      } finally { await response.dispose(); }
+    }
+    throw new ModelCatalogServiceError('model_catalog_unavailable', '模型目录分页超出限制');
+  }
+
   public page(request: ProviderPageRequest = {}): CursorPage<ProviderDto> {
     const page = this.providers.page(request);
     return { items: page.items.map(toProviderDto), nextCursor: page.nextCursor };
@@ -600,7 +642,7 @@ export class ProviderService {
         providerId,
         capabilities.models.map((model) => ({
           modelId: model.id,
-          displayName: model.displayName,
+          displayName: customKind === null && providerFamily(provider.type) ? modelDisplayName(model.id) : model.displayName,
           capabilities: { ...model.capabilities },
           capabilitySource: source,
         })),
