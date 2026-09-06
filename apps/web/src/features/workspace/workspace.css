@@ -160,7 +160,7 @@ svg { flex-shrink: 0; }
 .choice-copy strong { font-size: 12px; font-weight: 500; }
 .choice-copy small { font-size: 10px; color: #6a746b; }
 .model-letter { display: grid; place-items: center; width: 28px; height: 28px; color: #5d7062; border: 1px solid #e4e9e4; border-radius: 6px; font-size: 12px; }
-.ratio-options { display: flex; gap: 2px; }
+.ratio-options { display: flex; flex-wrap: wrap; gap: 2px; max-width: 300px; }
 .ratio-options .choice { flex-direction: column; justify-content: end; width: 48px; height: 66px; gap: 7px; padding: 6px 4px; font-size: 10px; }
 .ratio-options i { width: 21px; max-height: 29px; border: 1.4px solid #7f8d83; border-radius: 2px; }
 .setting-line { display: flex; justify-content: space-between; align-items: center; gap: 22px; min-height: 58px; margin: 0 10px; border-bottom: 1px solid #eef0ed; font-size: 12px; }
@@ -272,15 +272,19 @@ svg { flex-shrink: 0; }
   .creation-controls { gap: 5px; }
   .creation-controls > .tool { width: 36px; flex-basis: 36px; height: 40px; }
   .segments button { min-height: 31px; font-size: 12px; padding: 0 10px; }
-  .mode-segments button:not([aria-pressed='true']) span { display: none; }
+  .mode-segments button span { display: none; }
   .creation-controls .model-trigger { display: none; }
   .creation-controls .desktop-control { display: none; }
   .creation-controls .option-trigger { height: 40px; width: 38px; }
+  .creation-controls .ratio-trigger { width: 88px; min-width: 0; flex: 0 0 88px; padding: 0 3px; gap: 4px; }
+  .ratio-trigger span { overflow: hidden; text-overflow: ellipsis; }
+  .ratio-trigger svg { flex-shrink: 0; }
   .generate-button { width: 40px; height: 40px; }
-  .mobile-model-status { display: flex; justify-content: space-between; gap: 10px; padding: 7px 6px 1px; font-size: 10px; color: #6a756c; }
+  .mobile-model-status { display: flex; justify-content: space-between; gap: 10px; height: 22px; padding: 7px 6px 1px; font-size: 10px; line-height: 14px; color: #6a756c; }
   .mobile-control { display: flex; }
   .mobile-control select { max-width: 185px; }
-  .mobile-model-status > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-model-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-model-status > span:last-child { flex-shrink: 0; max-width: 45%; }
   .library-area { padding: 13px 12px 35px; }
   .section-create .library-area { padding-bottom: calc(var(--composer-size) + var(--keyboard-lift) + 42px + env(safe-area-inset-bottom)); }
   .section-library .library-area, .section-saved .library-area, .section-projects .library-area { margin-top: 14px; }
@@ -355,6 +359,7 @@ svg { flex-shrink: 0; }
 .offline-banner { padding: 12px 26px; color: #78512d; background: #f8efdf; font-size: 12px; }
 .feedback-toast.is-error { color: #a13e3e; border-color: #ecd0d0; }
 .video-input-row { flex-shrink: 0; }
+.video-input-row:empty { display: none; }
 .video-input-choices { width: max-content; margin: 0; }
 .creation-controls .model-trigger { min-width: 0; max-width: 240px; }
 .model-trigger > span:not(.model-dot) { overflow: hidden; text-overflow: ellipsis; }
@@ -367,25 +372,22 @@ svg { flex-shrink: 0; }
   body { position: fixed; inset: 0; }
   input, select, textarea { font-size: 16px !important; }
   .creation-composer { display: flex; flex-direction: column; container-type: inline-size; }
-  .creation-controls { flex-wrap: nowrap; }
-  .video-input-row { margin: 0; }
+  .creation-controls { flex-wrap: wrap; }
+  .creation-controls > .tool, .creation-controls > .option-trigger:not(.ratio-trigger):not(.model-trigger) { width: 36px; min-width: 36px; flex: 0 0 36px; height: 40px; padding: 0; }
+  .mode-segments { width: 78px; height: 40px; }
+  .mode-segments button span { display: none; }
+  .mode-segments button { width: 36px; height: 34px; padding: 0; }
+  .video-input-row { order: -1; flex: 0 0 100%; height: 34px; margin: 0; display: flex; justify-content: center; }
+  .video-input-choices { height: 34px; }
   .mobile-model-status { order: 4; }
   .generation-settings-trigger { margin-left: auto; }
   .composer-spacer { display: none; }
   .card-bookmark, .card-bookmark:not(.is-saved) { display: grid; right: 81px; top: 9px; width: 30px; height: 30px; }
   .card-reference, .card-more { display: grid; opacity: 1; }
 }
-@container (max-width: 440px) {
-  .creation-controls:has(.video-input-row) { gap: 4px; }
-  .creation-controls:has(.video-input-row) .mode-segments span { display: none; }
-  .creation-controls:has(.video-input-row) .segments button { padding: 0 7px; font-size: 11px; }
-  .creation-controls:has(.video-input-row) > .tool, .creation-controls:has(.video-input-row) > .option-trigger { width: 30px; min-width: 30px; flex: 0 0 30px; padding: 0; }
-  .creation-controls:has(.video-input-row) .generate-button { width: 36px; height: 36px; }
-}
 @container (max-width: 300px) {
-  .creation-controls .mode-segments span { display: none; }
-  .creation-controls:has(.video-input-row) { gap: 2px; }
-  .creation-controls:has(.video-input-row) .segments button { padding: 0 5px; font-size: 10px; }
+  .creation-controls { gap: 2px; }
+  .creation-controls .ratio-trigger { width: 76px; flex-basis: 76px; }
 }
 @media (hover: none) { .tip { display: none; } }
 .upload-retry { position: absolute; inset: 15px 20px 20px; color: white; background: #723b3bcc; border-radius: 50%; padding: 0; }

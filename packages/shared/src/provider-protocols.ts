@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { matchModelProtocol } from './model-names.js';
 
 export const NativeProviderProfileSchema = z.enum([
-  'openai-images-v1', 'openai-responses-image-v1', 'openai-videos-v1-compatible',
+  'openai-images-v1', 'openai-responses-image-v1', 'openai-chat-image-v1', 'openai-videos-v1-compatible',
   'gemini-generate-content-image-v1', 'gemini-interactions-image-v1', 'gemini-veo-operation-v1', 'gemini-omni-interactions-video-v1',
   'xai-imagine-image-v1', 'xai-imagine-video-v1',
 ]);
@@ -17,6 +17,7 @@ export const PROVIDER_FAMILIES = [
 export const MODEL_PROTOCOLS: ReadonlyArray<{ value: NativeProviderProfile; family: ProviderFamily; kind: 'image' | 'video'; label: string }> = [
   { value: 'openai-images-v1', family: 'openai', kind: 'image', label: 'Images API' },
   { value: 'openai-responses-image-v1', family: 'openai', kind: 'image', label: 'Responses Image Tool' },
+  { value: 'openai-chat-image-v1', family: 'openai', kind: 'image', label: 'Chat Completions Image' },
   { value: 'openai-videos-v1-compatible', family: 'openai', kind: 'video', label: 'Videos API' },
   { value: 'gemini-generate-content-image-v1', family: 'gemini', kind: 'image', label: 'Generate Content' },
   { value: 'gemini-interactions-image-v1', family: 'gemini', kind: 'image', label: 'Interactions Image' },

@@ -906,6 +906,7 @@ export const ProviderTypeSchema = z.enum([
   'xai',
   'openai-images-v1',
   'openai-responses-image-v1',
+  'openai-chat-image-v1',
   'openai-videos-v1-compatible',
   'gemini-interactions-image-v1',
   'gemini-generate-content-image-v1',

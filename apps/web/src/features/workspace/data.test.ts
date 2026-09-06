@@ -35,6 +35,13 @@ describe('workspace API contracts', () => {
     expect(operationFor('image', 'text', [{ role: 'source', asset: {} as never }])).toBe('image.edit');
     expect(operationFor('video', 'first_frame', [])).toBe('video.image_to_video');
   });
+  it('preserves aspect ratio with named image resolutions for chat and native image protocols', () => {
+    const raw = model('chat', 'first');
+    raw.capabilities.profile = 'openai-chat-image-v1';
+    raw.capabilities.resolutions = ['1K', '2K'];
+    const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: '3:2', resolution: '2K', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false };
+    expect(generationRequest(input)).toMatchObject({ aspectRatio: '3:2', resolution: '2K' });
+  });
   it('maps xAI quality to its native request field instead of unsupported extra fields', () => {
     const raw = model('xai', 'first');
     raw.capabilities.profile = 'xai-imagine-image-v1';

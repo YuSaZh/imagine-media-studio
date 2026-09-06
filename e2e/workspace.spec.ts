@@ -318,7 +318,7 @@ test('custom generation parameters reach the job request from the bottom compose
     expect(added.status()).toBe(201);
     await open(page);
     await page.getByRole('button', { name: '生成设置', exact: true }).click();
-    await page.getByLabel('画幅', { exact: true }).fill('4:3');
+    await page.getByLabel('画幅', { exact: true }).selectOption('4:3');
     await page.getByLabel('分辨率', { exact: true }).selectOption('custom');
     await page.getByLabel('像素宽度', { exact: true }).fill('1920');
     await page.getByLabel('像素高度', { exact: true }).fill('1080');
@@ -333,6 +333,49 @@ test('custom generation parameters reach the job request from the bottom compose
     await page.getByRole('button', { name: '开始生成', exact: true }).click();
     expect((await sent).postDataJSON()).toMatchObject({ resolution: '1920x1080', count: 2, extra: { quality: 'high', output_format: 'jpeg' } });
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
+});
+
+test('aspect ratio stays selectable with managed rules and mode controls keep stable geometry', async ({ page, request }) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Ratio ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    for (const kind of ['image', 'video']) {
+      expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: `ratio-${kind}`, displayName: `Ratio ${kind}`, enabled: true, capabilities: {
+        operations: kind === 'image' ? ['image.generate'] : ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
+        aspectRatios: ['1:1', '16:9'], maxReferenceImages: kind === 'image' ? 0 : 3,
+        parameters: [{ path: 'aspectRatio', label: '画幅', type: 'select', options: ['1:1', '16:9', '21:9'], allowCustom: true, defaultValue: '1:1' }],
+      } } })).status()).toBe(201);
+    }
+    await open(page);
+    const ratio = page.getByRole('button', { name: '选择画幅', exact: true });
+    await expect(ratio).toBeVisible();
+    await ratio.click();
+    await page.getByRole('button', { name: '21:9', exact: true }).click();
+    await expect(ratio).toContainText('21:9');
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: '画幅', exact: true })).toHaveValue('21:9');
+    await expect(page.getByRole('textbox', { name: '画幅', exact: true })).toHaveCount(0);
+    await page.getByRole('combobox', { name: '画幅', exact: true }).selectOption('16:9');
+    await page.keyboard.press('Escape');
+    await expect(ratio).toContainText('16:9');
+    if (page.viewportSize()!.width <= 760) {
+      const buttons = ['添加参考图', '生成设置', '开始生成'];
+      const before = await Promise.all(buttons.map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
+      await expect(page.locator('.mode-segments span').first()).toBeHidden();
+      await page.screenshot({ path: `/tmp/imagine-ratio-image-${page.viewportSize()!.width}.png` });
+      await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+      const after = await Promise.all(buttons.map(name => page.getByRole('button', { name, exact: true }).boundingBox()));
+      for (let i = 0; i < before.length; i++) expect(after[i]).toEqual(before[i]);
+      await expect(ratio).toBeVisible();
+      await page.screenshot({ path: `/tmp/imagine-ratio-video-${page.viewportSize()!.width}.png` });
+    }
+    const boxes = await page.locator('.creation-controls > button:not([hidden]), .mode-segments').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).display !== 'none').map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, bottom: box.bottom }; }));
+    const composer = (await page.locator('.creation-composer').boundingBox())!;
+    for (const box of boxes) { expect(box.x).toBeGreaterThanOrEqual(composer.x); expect(box.right).toBeLessThanOrEqual(composer.x + composer.width); }
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]!, b = boxes[j]!;
+      expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y).toBe(true);
+    }
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
 test('shared connection model management saves rules and renders them in the composer', async ({ page, request }) => {
@@ -466,11 +509,10 @@ test('card references, video parameter memory and responsive video controls', as
   const controls = await page.locator('.creation-controls').boundingBox();
   if (page.viewportSize()!.width <= 760) {
     expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(6);
-    const modeSwitch = await page.getByRole('group', { name: '创作类型' }).boundingBox();
-    expect(modes!.x).toBeGreaterThanOrEqual(modeSwitch!.x + modeSwitch!.width);
     const settings = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
     const submit = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
-    expect(modes!.x + modes!.width).toBeLessThanOrEqual(settings!.x);
+    expect(modes!.y + modes!.height).toBeLessThanOrEqual(settings!.y);
+    expect(modes!.x + modes!.width).toBeLessThanOrEqual(controls!.x + controls!.width);
     expect(submit!.x - settings!.x).toBeLessThan(60);
     await expect(page.locator('.mode-segments span').first()).toBeHidden();
     await expect(page.locator('.mode-segments span').last()).toBeHidden();

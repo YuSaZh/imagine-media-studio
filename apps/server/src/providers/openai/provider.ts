@@ -21,8 +21,10 @@ import {
   imageRequestOptions,
   normalizeImageResponse,
   RESPONSES_EXTRA_KEYS,
+  type OpenAiImageRequestOptions,
 } from './protocol.js';
 import { parseOpenAiImageStream } from './stream.js';
+import { buildChatImagePayload, normalizeChatImageResponse, validateChatImageOptions } from './chat.js';
 import {
   OpenAiHttpError,
   OpenAiResponseError,
@@ -44,6 +46,7 @@ import {
 
 const IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'] as const;
 const RESPONSES_MODELS = ['gpt-5.6'] as const;
+const CHAT_IMAGE_MODELS = ['gemini-3.1-flash-image', 'gemini-3-pro-image-preview', 'gemini-2.5-flash-image'] as const;
 const OPENAI_IMAGE_MODEL_PATTERN = /(?:^|[-_.])images?(?:$|[-_.])/iu;
 const MAX_DYNAMIC_MODEL_COUNT = 200;
 const MAX_MODEL_ID_CHARS = 255;
@@ -199,10 +202,11 @@ function modelIds(options: OpenAiProviderOptions, context: OpenAiRuntimeContext)
       ? (configured as string[]).filter((model) => !/^dall-e(?:-|$)/i.test(model))
       : configured as string[];
   }
-  return options.profile === 'openai-images-v1' ? IMAGE_MODELS : RESPONSES_MODELS;
+  return options.profile === 'openai-images-v1' ? IMAGE_MODELS : options.profile === 'openai-chat-image-v1' ? CHAT_IMAGE_MODELS : RESPONSES_MODELS;
 }
 
 function displayName(profile: OpenAiProfile, model: string): string {
+  if (profile === 'openai-chat-image-v1') return `Chat Image (${model})`;
   return profile === 'openai-images-v1' ? `OpenAI Images (${model})` : `OpenAI Responses Image (${model})`;
 }
 
@@ -217,6 +221,7 @@ function isKnownResponsesModel(modelId: string): boolean {
 }
 
 function isCompatibleImageModel(profile: OpenAiProfile, modelId: string): boolean {
+  if (profile === 'openai-chat-image-v1') return OPENAI_IMAGE_MODEL_PATTERN.test(modelId);
   if (profile === 'openai-images-v1') {
     return imageModelId(modelId) !== undefined || OPENAI_IMAGE_MODEL_PATTERN.test(modelId);
   }
@@ -228,6 +233,12 @@ function imageCapabilities(
   modelId?: string,
   conservative = false,
 ): ModelCapabilities {
+  if (profile === 'openai-chat-image-v1') return {
+    operations: ['image.generate', 'image.edit'], aspectRatios: ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'],
+    resolutions: ['auto', '512', '1K', '2K', '4K'], maxReferenceImages: 4, supportsMask: false,
+    supportsBatchCount: false, maxBatchCount: 1,
+    customFields: { type: 'object', properties: { stream: { type: 'boolean' } }, additionalProperties: false },
+  };
   // Responses image_generation intentionally has no mask or Files API path in PR4;
   // mask editing is provided by the Images multipart profile below.
   const imageModel = profile === 'openai-images-v1' ? imageModelId(modelId ?? '') : undefined;
@@ -345,6 +356,7 @@ function validateInputs(request: GenerationRequest, profile: OpenAiProfile): voi
 }
 
 function modelAllowed(model: string, configured: readonly string[], profile: OpenAiProfile): boolean {
+  if (profile === 'openai-chat-image-v1') return configured.includes(model) || OPENAI_IMAGE_MODEL_PATTERN.test(model);
   if (profile === 'openai-images-v1') {
     if (/^dall-e(?:-|$)/i.test(model)) return false;
     return configured.includes(model) || isCompatibleImageModel(profile, model);
@@ -391,6 +403,7 @@ function validateRequest(request: GenerationRequest, context: OpenAiRuntimeConte
     throw requestOperationError(request.operation);
   }
   validateInputs(request, profile);
+  if (profile === 'openai-chat-image-v1') { validateChatImageOptions(request); return; }
   if (profile === 'openai-responses-image-v1' && request.count !== undefined && request.count !== 1) {
     throw new OpenAiValidationError('unsupported_option', 'Responses image_generation creates one image per call.');
   }
@@ -778,7 +791,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
     const runtime = asRuntimeContext(context);
     await this.validate(request, runtime);
     const inputs = await resolveInputs(request, runtime, this.resolver);
-    const options = imageRequestOptions(
+    const options: OpenAiImageRequestOptions = this.options.profile === 'openai-chat-image-v1' ? { model: request.modelId, prompt: request.prompt } : imageRequestOptions(
       request,
       this.options.profile === 'openai-images-v1' ? undefined : RESPONSES_EXTRA_KEYS,
       requestPolicy(this.options.profile, request.modelId),
@@ -789,7 +802,11 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
     let path: string;
     const isImagesEdit = this.options.profile === 'openai-images-v1' &&
       (request.operation === 'image.edit' || inputs.length > 0);
-    if (this.options.profile === 'openai-images-v1' && isImagesEdit) {
+    if (this.options.profile === 'openai-chat-image-v1') {
+      body = JSON.stringify(buildChatImagePayload(request, inputs));
+      contentType = 'application/json';
+      path = '/chat/completions';
+    } else if (this.options.profile === 'openai-images-v1' && isImagesEdit) {
       const multipart = buildImageEditMultipart(options, inputs);
       body = multipart.body;
       contentType = multipart.contentType;
@@ -829,6 +846,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
       ...(typeof body === 'string' ? {} : { bodyBytes: body }),
       ...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
     } satisfies OpenAiHttpRequest;
+    runtime.signal?.throwIfAborted();
     const response = typeof http === 'function'
       ? await http(httpRequest)
       : await http.request(httpRequest);
@@ -849,6 +867,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
         );
       }
       const payload = await responsePayload(response);
+      if (this.options.profile === 'openai-chat-image-v1') return { state: 'completed', assets: normalizeChatImageResponse(payload, maxAssets) };
       if (typeof payload === 'string' && /(?:^|\n)(?:data|event):/.test(payload)) {
         const raw = payload;
         const outputFormat = options.outputFormat === 'jpeg' || options.outputFormat === 'webp' || options.outputFormat === 'png'

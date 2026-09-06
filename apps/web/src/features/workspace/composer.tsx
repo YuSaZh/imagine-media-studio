@@ -48,6 +48,9 @@ export function Composer(props: ComposerProps) {
   const [extra, setExtra] = useState<JsonObject>({});
   const [parameters, setParameters] = useState<JsonObject>({});
   const rules = managedParameters(model);
+  const ratioRule = rules?.find(rule => rule.path === 'aspectRatio' && rule.enabled && rule.visible);
+  const ratioOptions = rules ? ratioRule?.options?.map(String) ?? [] : ['auto', ...model?.capabilities.aspectRatios.filter(value => value !== 'auto') ?? []];
+  const selectedRatio = ratioRule ? String(ratioRule.locked ? ratioRule.defaultValue ?? 'auto' : parameters.aspectRatio ?? ratioRule.defaultValue ?? 'auto') : ratio;
   const [count, setCount] = useState(1);
   const [duration, setDuration] = useState(5);
   const [negativePrompt, setNegativePrompt] = useState('');
@@ -92,7 +95,7 @@ export function Composer(props: ComposerProps) {
       ?? (props.projectId === null ? savedSettings.data.settings[`model.${model.key}`] : undefined);
     const saved: JsonObject = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as JsonObject : {};
     const object = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
-    setRatio(typeof saved.ratio === 'string' && (saved.ratio === 'auto' || allowsCustomSize(model) || model.capabilities.aspectRatios.includes(saved.ratio)) ? saved.ratio : 'auto');
+    setRatio(typeof saved.ratio === 'string' && (saved.ratio === 'auto' || model.capabilities.aspectRatios.includes(saved.ratio)) ? saved.ratio : 'auto');
     setResolution(typeof saved.resolution === 'string' && (model.capabilities.resolutions.includes(saved.resolution) || saved.resolution === 'custom' && allowsCustomSize(model)) ? saved.resolution : '');
     setCount(typeof saved.count === 'number' ? Math.max(1, Math.min(saved.count, 32)) : 1);
     const range = model.capabilities.durationRange;
@@ -100,7 +103,10 @@ export function Composer(props: ComposerProps) {
     setDuration(range ? Math.max(range.min, Math.min(range.max, duration)) : model.capabilities.durations.includes(duration) ? duration : model.capabilities.durations[0] ?? 5);
     setCustomWidth(typeof saved.customWidth === 'number' ? saved.customWidth : 1024);
     setCustomHeight(typeof saved.customHeight === 'number' ? saved.customHeight : 1024);
-    setExtra(object(saved.extra)); setParameters(object(saved.parameters));
+    const savedParameters = { ...object(saved.parameters) };
+    const aspectRule = managedParameters(model)?.find(rule => rule.path === 'aspectRatio');
+    if (aspectRule && !aspectRule.options?.includes(String(savedParameters.aspectRatio))) delete savedParameters.aspectRatio;
+    setExtra(object(saved.extra)); setParameters(savedParameters);
     setNegativePrompt(typeof saved.negativePrompt === 'string' ? saved.negativePrompt : '');
     setSeed(typeof saved.seed === 'string' ? saved.seed : ''); setAudio(saved.audio === true);
     setHydrated(true);
@@ -143,7 +149,11 @@ export function Composer(props: ComposerProps) {
     props.onCreate({ model, operation, prompt, inputs: references, ratio, resolution: resolution === 'custom' ? `${customWidth}x${customHeight}` : resolution, count, duration, negativePrompt, seed, audio, extra, parameters });
   };
   const modelOptions = props.models.filter(candidate => candidate.capabilities.operations.includes(operation));
-  const sizeLabel = mode === 'video' ? [rules ? parameters.aspectRatio ?? rules.find(rule => rule.path === 'aspectRatio')?.defaultValue ?? 'auto' : ratio, rules ? parameters.resolution ?? rules.find(rule => rule.path === 'resolution')?.defaultValue : resolution].filter(Boolean).join(' · ') : resolution === 'custom' ? `${customWidth}×${customHeight}` : resolution || ratio;
+  const sizeLabel = rules ? selectedRatio : resolution === 'custom' ? `${customWidth}×${customHeight}` : resolution || ratio;
+  const chooseRatio = (value: string) => {
+    if (ratioRule) { if (!ratioRule.locked) setParameters({ ...parameters, aspectRatio: value }); }
+    else { setRatio(value); if (mode === 'image' && (resolution === 'custom' || /^\d+x\d+$/.test(resolution))) setResolution(''); }
+  };
   const videoModes = [
     { key: 'text' as const, label: '文字', operation: 'video.generate' as const },
     { key: 'first_frame' as const, label: '首帧', operation: 'video.image_to_video' as const },
@@ -178,15 +188,14 @@ export function Composer(props: ComposerProps) {
       <input ref={inputRef} hidden type="file" aria-label="上传参考图" accept="image/*" multiple onChange={event => { props.onFiles([...event.target.files ?? []]); event.target.value = ''; }} />
       {uploadAllowed ? <Options label="添加参考图" trigger={<Plus size={20} />}><Choice active={false} onClick={() => inputRef.current?.click()}><Upload size={16} />上传新图片</Choice><Choice active={false} onClick={props.onLibrary}><ImageIcon size={16} />从资源库选择</Choice></Options> : <Tool label="添加参考图" disabled><Plus size={20} /></Tool>}
       <div className="segments mode-segments" role="group" aria-label="创作类型"><button type="button" aria-label="图片" aria-pressed={mode === 'image'} onClick={() => props.onMode('image')}><ImageIcon size={15} /><span>图片</span></button><button type="button" aria-label="视频" aria-pressed={mode === 'video'} onClick={() => props.onMode('video')}><Video size={16} /><span>视频</span></button></div>
-    {mode === 'video' && videoModes.length > 1 && <div className="video-input-row"><div className="video-input-choices segments" aria-label="视频输入方式" role="group">{videoModes.map(option => <button type="button" key={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div></div>}
+      <div className="video-input-row">{mode === 'video' && videoModes.length > 1 && <div className="video-input-choices segments" aria-label="视频输入方式" role="group">{videoModes.map(option => <button type="button" key={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div>}</div>
       <Options label="选择生成模型" className="model-trigger" trigger={<><span className="model-dot" /><span>{model?.name ?? '选择模型'}</span><ChevronDown size={13} /></>}><div className="option-heading">模型与服务</div>{modelOptions.map(option => <Choice key={option.key} active={model?.key === option.key} onClick={() => props.onModel(option.key)}><span className="choice-copy"><strong>{option.name}</strong><small>{option.providerName}</small></span>{model?.key === option.key && <Check size={15} />}</Choice>)}</Options>
-      {!rules && model && model.capabilities.aspectRatios.length > 0 && <Options label="选择画幅" className="desktop-control" trigger={<><Ratio size={15} /><span>{sizeLabel}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div><div className="ratio-options"><Choice active={ratio === 'auto'} onClick={() => { setRatio('auto'); if (mode === 'image') setResolution(''); }}>auto</Choice>{model.capabilities.aspectRatios.filter(value => value !== 'auto').map(value => <Choice key={value} active={ratio === value} onClick={() => { setRatio(value); if (mode === 'image') setResolution(''); }}><i style={{ aspectRatio: value.replace(':', '/') }} /><span>{value}</span></Choice>)}</div></Options>}
-      {mode === 'video' && rules && <Options label="选择画幅" className="desktop-control" trigger={<><Ratio size={15} /><span>{sizeLabel}</span><ChevronDown size={12} /></>}><ManagedParameters rules={rules.filter(rule => ['aspectRatio', 'resolution'].includes(rule.path))} values={parameters} onChange={setParameters} /></Options>}
+      {model && ratioOptions.length > 0 && <Options label="选择画幅" className="ratio-trigger" trigger={<><Ratio size={15} /><span>{selectedRatio}</span><ChevronDown size={12} /></>}><div className="option-heading">画幅</div>{ratioRule?.locked ? <ManagedParameters rules={[ratioRule]} values={parameters} onChange={setParameters} /> : <div className="ratio-options">{ratioOptions.map(value => <Choice key={value} active={selectedRatio === value} onClick={() => chooseRatio(value)}>{value !== 'auto' && <i style={{ aspectRatio: value.replace(':', '/') }} />}<span>{value}</span></Choice>)}</div>}</Options>}
       <Options label="生成设置" className="generation-settings-trigger" trigger={<SlidersHorizontal size={18} />}>
         <div className="option-heading">生成设置</div>
-        {rules ? <ManagedParameters rules={rules} values={parameters} onChange={setParameters} /> : <>
         <label className="setting-line mobile-control"><span>模型与服务</span><select aria-label="模型与服务" value={model?.key ?? ''} onChange={event => props.onModel(event.target.value)}>{modelOptions.map(option => <option key={option.key} value={option.key}>{option.providerName} · {option.name}</option>)}</select></label>
-        {allowsCustomSize(model) ? <label className="setting-line"><span>画幅</span><input aria-label="画幅" list="creation-ratios" value={ratio} placeholder="16:9" onChange={event => { setRatio(event.target.value); if (mode === 'image') setResolution(''); }} /><datalist id="creation-ratios">{['auto', ...model?.capabilities.aspectRatios.filter(value => value !== 'auto') ?? []].map(value => <option key={value} value={value} />)}</datalist></label> : <label className="setting-line"><span>画幅</span><select aria-label="画幅" value={ratio} onChange={event => { setRatio(event.target.value); if (mode === 'image') setResolution(''); }}>{['auto', ...model?.capabilities.aspectRatios.filter(value => value !== 'auto') ?? []].map(value => <option key={value}>{value}</option>)}</select></label>}
+        {rules ? <ManagedParameters rules={rules} values={parameters} onChange={setParameters} /> : <>
+        <label className="setting-line"><span>画幅</span><select aria-label="画幅" value={ratio} onChange={event => chooseRatio(event.target.value)}>{!ratioOptions.includes(ratio) && <option value={ratio} disabled>{ratio}</option>}{ratioOptions.map(value => <option key={value}>{value}</option>)}</select></label>
         {<label className="setting-line"><span>生成数量</span><select aria-label="生成数量" value={count} onChange={event => setCount(Number(event.target.value))}>{Array.from({ length: 32 }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value} {mode === 'image' ? '张' : '个'}</option>)}</select></label>}
         {!!model?.capabilities.resolutions.length && <label className="setting-line"><span>分辨率</span><select aria-label="分辨率" value={resolution} onChange={event => setResolution(event.target.value)}><option value="">跟随画幅</option>{model.capabilities.resolutions.map(value => <option key={value}>{value}</option>)}{allowsCustomSize(model) && <option value="custom">自定义尺寸</option>}</select></label>}
         {resolution === 'custom' && <div className="custom-dimensions"><label>宽度<input type="number" aria-label="像素宽度" min={1} max={16384} value={customWidth} onChange={event => setCustomWidth(Number(event.target.value))} /></label><span>×</span><label>高度<input type="number" aria-label="像素高度" min={1} max={16384} value={customHeight} onChange={event => setCustomHeight(Number(event.target.value))} /></label></div>}
@@ -200,6 +209,6 @@ export function Composer(props: ComposerProps) {
       <span className="composer-spacer" />
       <button type="submit" className="generate-button" aria-label="开始生成" disabled={!canSubmit}>{props.submitting ? <LoaderCircle className="spin" size={20} /> : <ArrowUp size={21} strokeWidth={2.5} />}</button>
     </div>
-    <div className="mobile-model-status"><span>{model ? `${model.providerName} · ${model.name}` : props.loading ? '正在加载模型' : '尚未配置模型'}</span><span>{rules && mode !== 'video' ? '模型参数' : <>{sizeLabel}{mode === 'image' ? ` · ${count} 张` : ''}</>}</span></div>
+    <div className="mobile-model-status"><span>{model ? `${model.providerName} · ${model.name}` : props.loading ? '正在加载模型' : '尚未配置模型'}</span><span>{sizeLabel}{mode === 'image' ? ` · ${rules ? parameters.count ?? rules.find(rule => rule.path === 'count')?.defaultValue ?? 1 : count} 张` : ''}</span></div>
   </form>;
 }

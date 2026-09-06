@@ -21,6 +21,7 @@ import {
   createOpenAiImagesProvider,
   createOpenAiResponsesImageProvider,
   createOpenAiVideosProvider,
+  OpenAiProviderAdapter,
 } from './openai/index.js';
 import {
   DeclarativeHttpAdapter,
@@ -205,6 +206,8 @@ function createAdapter(providerType: string, mockAdapter: ProviderAdapter): Prov
       return createOpenAiImagesProvider();
     case 'openai-responses-image-v1':
       return createOpenAiResponsesImageProvider();
+    case 'openai-chat-image-v1':
+      return new OpenAiProviderAdapter('openai-chat-image-v1');
     case 'openai-videos-v1-compatible':
       return createOpenAiVideosProvider();
     case 'gemini-generate-content-image-v1':

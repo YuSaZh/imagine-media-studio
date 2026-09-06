@@ -5,7 +5,7 @@ import type {
   SubmittedAsset,
 } from '@imagine/provider-contract';
 
-export type OpenAiProfile = 'openai-images-v1' | 'openai-responses-image-v1';
+export type OpenAiProfile = 'openai-images-v1' | 'openai-responses-image-v1' | 'openai-chat-image-v1';
 export type OpenAiVideoProfile = 'openai-videos-v1-compatible';
 
 export const OPENAI_IMAGES_PROFILE = 'openai-images-v1' as const;

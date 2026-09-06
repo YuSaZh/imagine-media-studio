@@ -3,7 +3,12 @@ import type { WorkspaceModel } from './data';
 
 export function managedParameters(model: WorkspaceModel | undefined): ModelParameter[] | undefined {
   const parsed = ModelParametersSchema.safeParse(model?.raw.capabilities.parameters);
-  return parsed.success ? parsed.data : undefined;
+  return parsed.success ? parsed.data.map(rule => {
+    if (rule.path !== 'aspectRatio') return rule;
+    const options = [...new Set(['auto', ...(rule.options?.length ? rule.options : model?.capabilities.aspectRatios ?? []), rule.defaultValue]
+      .filter((value): value is string => typeof value === 'string' && /^(auto|[1-9]\d*:[1-9]\d*)$/.test(value)))];
+    return { ...rule, type: 'select' as const, allowCustom: false, options };
+  }) : undefined;
 }
 
 export function ManagedParameters({ rules, values, onChange }: { rules: ModelParameter[]; values: JsonObject; onChange: (values: JsonObject) => void }) {

@@ -9,6 +9,12 @@ class RoutedError extends Error {
   constructor(readonly normalized: ProviderError) { super(normalized.message); }
 }
 
+function protocolMismatch(error: ProviderError): boolean {
+  if ([404, 405, 415, 501].includes(error.statusCode ?? 0)) return true;
+  return [400, 422, 500, 502].includes(error.statusCode ?? 0) &&
+    /(?:unsupported|not supported|not support|only .+ supported).*(?:endpoint|protocol|image generation|imagen|model)|(?:endpoint|protocol|model).*(?:unsupported|not supported|not support)/i.test(error.message);
+}
+
 /** A connection owns credentials; each model selects its wire protocol. */
 export class FamilyProvider implements ProviderAdapter {
   constructor(readonly type: ProviderFamily, private readonly adapters: ReadonlyMap<string, CatalogAdapter>) {}
@@ -25,7 +31,7 @@ export class FamilyProvider implements ProviderAdapter {
   }
 
   private async catalog(context: ProviderContext, live: boolean): Promise<ProviderCapabilities> {
-    const primary = [...this.adapters.values()].filter(adapter => providerFamily(adapter.type) === this.type && !adapter.type.includes('responses') && !adapter.type.includes('interactions'));
+    const primary = [...this.adapters.values()].filter(adapter => providerFamily(adapter.type) === this.type && !adapter.type.includes('responses') && !adapter.type.includes('interactions') && !adapter.type.includes('chat'));
     const results = await Promise.allSettled(primary.map(adapter => this.call(adapter, async () => {
       const result = live && adapter.getLiveCapabilities ? await adapter.getLiveCapabilities(context) : await adapter.getCapabilities(context);
       return result.models.map(model => ({ ...model, capabilities: { ...model.capabilities, profile: adapter.type as NativeProviderProfile } }));
@@ -64,7 +70,28 @@ export class FamilyProvider implements ProviderAdapter {
   async submit(request: GenerationRequest, context: ProviderContext) {
     const { profile, ...nativeRequest } = request;
     const adapter = this.adapter(profile, request.modelId, request.operation);
-    return this.call(adapter, () => adapter.submit(nativeRequest, context));
+    let failure: RoutedError;
+    try { return await this.call(adapter, () => adapter.submit(nativeRequest, context)); }
+    catch (error) {
+      if (!(error instanceof RoutedError) || !request.operation.startsWith('image.') || !protocolMismatch(error.normalized)) throw error;
+      failure = error;
+    }
+    const candidates = /gemini/i.test(request.modelId)
+      ? ['openai-chat-image-v1', 'gemini-generate-content-image-v1', 'openai-images-v1', 'openai-responses-image-v1']
+      : ['openai-images-v1', 'openai-chat-image-v1', 'openai-responses-image-v1'];
+    for (const type of candidates) {
+      const candidate = this.adapters.get(type);
+      if (!candidate || candidate === adapter) continue;
+      context.signal?.throwIfAborted();
+      // Validate without dropping options or inputs that a different protocol cannot represent.
+      try { await candidate.validate(nativeRequest, context); } catch { continue; }
+      try { return await this.call(candidate, () => candidate.submit(nativeRequest, context)); }
+      catch (error) {
+        if (!(error instanceof RoutedError) || !protocolMismatch(error.normalized)) throw error;
+        failure = error;
+      }
+    }
+    throw failure;
   }
   poll(remoteJobId: string, context: ProviderContext) {
     const adapter = this.adapter(context.profile, context.modelId);

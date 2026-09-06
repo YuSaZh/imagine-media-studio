@@ -193,7 +193,7 @@ export function generationRequest(input: Creation): GenerationRequest {
   return GenerationRequestSchema.parse({
     operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(),
     inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })),
-    ...(input.ratio && (video || !resolution) ? { aspectRatio: input.ratio } : {}),
+    ...(input.ratio && (video || !/^\d+x\d+$/.test(resolution)) ? { aspectRatio: input.ratio } : {}),
     ...(resolution ? { resolution } : {}),
     ...(Object.keys(extra).length ? { extra } : {}),
     ...(quality !== undefined ? { quality } : {}),
