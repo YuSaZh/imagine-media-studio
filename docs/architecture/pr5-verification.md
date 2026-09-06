@@ -2,7 +2,12 @@
 
 Status: **passed**
 
-PR 5 completes the video task boundary described in [PLAN.MD](../../PLAN.MD). The implementation is verified with deterministic Mock video workflows, fixed Provider protocol fixtures, injected HTTP transports, browser checks, and the single-container runtime. No production Provider credential or live external Provider endpoint was used, so credentialed external acceptance remains open in [Hold.md](../../Hold.md).
+This historical PR 5 record covers the original video task milestone; current
+guidance is indexed in [docs/README.md](../README.md). The implementation was
+verified with deterministic Mock video workflows, fixed Provider protocol fixtures,
+injected HTTP transports, browser checks, and the single-container runtime. No
+production Provider credential or live external Provider endpoint was used in
+that acceptance. See [Hold.md](../../Hold.md) for recorded external-test limits.
 
 ## Delivered Scope
 

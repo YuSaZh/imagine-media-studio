@@ -1,5 +1,9 @@
 # PR 2 Application Runtime
 
+Historical runtime record. Its single-user and Mock-only scope describes PR 2,
+not the current application. Read the [current architecture](./overview.md) for
+maintained boundaries and [RELEASE.md](../../RELEASE.md) for deployment.
+
 ## Scope
 
 PR 2 turns the PR 1 interface shell into a persistent single-user application while preserving the original runtime boundary: one Node.js process, one SQLite database, one HTTP port, and one `/data` volume. The Mock Provider remains the only executable Provider adapter. Real Provider HTTP integrations begin in PR 4.

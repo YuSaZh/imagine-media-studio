@@ -2,7 +2,11 @@
 
 Status: **passed**
 
-PR 4 completes the real image Provider boundary described in [PLAN.MD](../../PLAN.MD). The implementation is verified against fixed protocol fixtures and injected HTTP transports. No production Provider credential or live external Provider endpoint was used, so credentialed external acceptance remains open in [Hold.md](../../Hold.md).
+This historical PR 4 record covers the original real image Provider milestone;
+current guidance is indexed in [docs/README.md](../README.md). The implementation
+was verified against fixed protocol fixtures and injected HTTP transports. No
+production Provider credential or live external Provider endpoint was used in
+that acceptance. See [Hold.md](../../Hold.md) for recorded external-test limits.
 
 ## Delivered Scope
 

@@ -1,35 +1,91 @@
-# Imagine Media Studio Agent Rules
+# Imagine Media Studio Agent Guide
 
-`PLAN.MD` is the authoritative product and delivery plan. Read the relevant PR section before changing code.
+These are shared repository instructions for coding agents and maintainers.
+They apply throughout this repository; directory guides add scoped requirements.
+Follow the current task and higher-priority instructions. If a conflict affects
+the requested behavior or a security boundary, explain it before proceeding.
 
-## Phase Gates
+## Start Here
 
-- Implement only the currently approved PR phase.
-- PR 0 is infrastructure only: use a neutral placeholder UI, Mock Provider, SQLite, an in-process JobRunner, and one Docker service.
-- Do not implement real providers or PR 1 UI during PR 0.
-- Grok Imagine is the only UI/UX reference for PR 1 and later UI work.
-- Never reuse the donor projects' App Shell, pages, Composer, Gallery, Viewer, CSS tokens, responsive layout, or page-level store.
+1. Inspect the current branch and worktree changes. Preserve work from other
+   contributors; do not reset, overwrite, or stage unrelated changes.
+2. Read this file, [CONTRIBUTING.md](./CONTRIBUTING.md), and the directory guides
+   for every area you will edit. Before entering another area, read its guide.
+   Do not assume the agent tool automatically loads every nested guide.
+3. Read the relevant current specification through [docs/README.md](./docs/README.md).
+   Early PR records are historical evidence, not instructions to resume a phase.
+4. Identify the smallest coherent change and its verification requirements.
+   Coordinate shared files when contributors work concurrently.
+5. Report the resulting behavior, checks actually run, and remaining limitations.
 
-## Runtime Boundaries
+## Directory Rules
 
-- Keep one Node.js application process, one SQLite database, one port, and one `/data` volume.
-- Do not add PostgreSQL, Redis, MinIO, Nginx, a worker container, or another business service.
-- Never expose API keys to the browser, logs, PWA cache, or exported configuration.
+| Area | Read before editing |
+| --- | --- |
+| Frontend, UI, browser state, PWA | [apps/web/AGENTS.md](./apps/web/AGENTS.md) |
+| Server, database, jobs, media, Providers | [apps/server/AGENTS.md](./apps/server/AGENTS.md) |
+| Shared schemas, Provider contracts, testkit | [packages/AGENTS.md](./packages/AGENTS.md) |
+| Browser tests, fixtures, screenshot baselines | [e2e/AGENTS.md](./e2e/AGENTS.md) |
+| CI, test images, releases | [.github/AGENTS.md](./.github/AGENTS.md) |
 
-## Host Safety
+For changes spanning areas, apply all relevant guides. Root configuration,
+Docker files, and dependency changes also follow the affected runtime guides.
+Directory guides must not weaken the runtime and secret boundaries below.
 
-- Do not stop, restart, rename, inspect secrets from, or otherwise alter existing host services and containers.
-- Local application, Playwright, Compose, Docker build, and smoke tests are allowed when they are isolated from existing host services: use task-owned temporary data, a unique Compose project/resource namespace, and a task-owned non-conflicting port.
-- Local runtime tests must create, inspect, restart, and remove only this task's explicitly isolated resources. Never target pre-existing containers, volumes, networks, ports, data directories, or processes.
-- Local dependency installation, lint, typecheck, unit tests, production builds, isolated application tests, Playwright, and Docker smoke are allowed. GitHub Actions remains the authoritative remote acceptance gate after local verification.
-- When the local environment can run a relevant acceptance gate safely, run it locally before pushing; do not defer locally available validation to GitHub Actions alone.
+## Product and Runtime Boundaries
 
-## Delivery
+- Build a lightweight self-hosted image/video workspace using user-provided
+  external APIs. Do not introduce model inference, GPU scheduling, billing,
+  or a general-purpose API gateway as incidental work.
+- Keep one Node.js application process, one SQLite database, one application
+  port, one business container, and one `/data` volume. Jobs run in-process.
+  Bounded media subprocesses and trusted adapter worker threads are allowed.
+- Do not add PostgreSQL, Redis, MinIO, Nginx, a worker container, or another
+  business service. An operator's existing reverse proxy is outside this topology.
+- Keep Provider credentials encrypted on the server. Never expose keys or
+  secret headers through browser DTOs, logs, previews, PWA caches, or exports.
+- Preserve account ownership checks and project/model settings isolation.
+- Model capabilities and stored parameter policies govern generation controls
+  and server validation. Keep vendor wire protocols out of React components.
+- Grok Imagine is the visual and interaction reference, subject to this project's
+  approved UI specifications. Do not copy donor App Shells, pages, Composer,
+  Gallery, Viewer, CSS tokens, responsive layouts, or page-level stores.
 
-- Use `YuSaZh <aimescc@icloud.com>` for commits.
-- Keep dependency versions exact and update them in dedicated changes.
-- Record third-party review or reuse in `docs/third-party/reuse-audit.md` before copying code.
-- The primary agent owns commits, pushes, releases, and cross-area integration. Sub-agents must not commit or push.
-- The user grants the primary agent standing authorization to use `git`, `gh`, and Git-over-SSH for this repository; stage accepted project changes; create commits; and push them directly to `origin/main` after each verified milestone. This authorization persists across turns, context compaction, session recovery, and subsequent approved phases. Do not ask the user to reconfirm it.
-- After a milestone passes its required local and/or GitHub Actions acceptance gates, the primary agent must commit and push it, then continue with the approved plan unless the user has explicitly requested a pause at that point.
-- A tool or sandbox approval prompt is an execution-platform requirement, not a request for product-level Git authorization. Reuse narrow approved Git/GitHub command rules, or issue the required narrow platform escalation directly, without pausing to ask the user whether Git operations are allowed.
+## Implementation and Verification
+
+- Use the Node and exact pnpm/dependency versions declared in `package.json`
+  and `pnpm-workspace.yaml`. Keep dependency upgrades in dedicated changes.
+- Follow existing module boundaries, shared schemas, helpers, and test patterns.
+  Avoid unrelated refactors, generated-file churn, or dependencies for small tasks.
+- Use the [verification matrix](./CONTRIBUTING.md#verification) for local checks.
+  Run relevant available gates before pushing; GitHub Actions remains the remote
+  acceptance gate. Do not equate fixtures with live Provider acceptance.
+- Keep Chinese and English READMEs consistent when changing public behavior,
+  deployment commands, configuration, or documentation links.
+- Update current specifications with behavior changes. Keep dated test results
+  and historical records explicitly tied to their original scope.
+- Before copying or adapting third-party code, record the revision, license,
+  files, local targets, and tests in [reuse-audit.md](./docs/third-party/reuse-audit.md).
+  Preserve required notices in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
+## Host and Collaboration Safety
+
+- Do not stop, restart, rename, extract secrets from, or alter pre-existing host
+  services or containers. Read-only diagnostics must stay within the task scope
+  and exclude credentials and private payloads from output.
+- Runtime tests use task-owned temporary data, a non-conflicting port, and a
+  unique Compose/resource namespace. Create, restart, and remove only those
+  resources. Never aim destructive fixtures at an existing deployment.
+- Track temporary processes/resources and clean them up after validation, unless
+  the user requests an ongoing preview. Avoid global prune or cleanup commands.
+- Use the contributor's configured Git identity; do not hardcode another person's
+  name/email or change global Git configuration.
+- Contributions normally use a branch and PR. Existing explicit maintainer
+  authorization for commits or direct pushes remains valid within its scope;
+  do not ask for the same authorization again. This file grants no blanket
+  permission to publish images, deploy, or push for every contributor.
+- Stage only reviewed task changes. Never force-push shared history without an
+  explicit request. When agents are delegated work, the integrating agent owns
+  commits, pushes, and cross-area integration unless the maintainer says otherwise.
+- Keep personal tool settings, machine paths, SSH aliases, and credentials out
+  of shared instructions. A new checkout must not depend on a maintainer's memory.

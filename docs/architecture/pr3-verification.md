@@ -2,7 +2,9 @@
 
 ## Delivered Scope
 
-PR 3 completes the selective image-input and editing boundary described in `PLAN.MD`:
+This historical PR 3 record covers the selective image-input and editing boundary
+of the original delivery plan. Current guidance is indexed in [docs/README.md](../README.md).
+The milestone covered:
 
 - drag/drop, file picker, clipboard, directory rejection, duplicate detection, count limits, and aggregate byte limits;
 - orientation-aware browser decoding, bounded downscaling, metadata-stripping re-encode, first-frame normalization, and Provider MIME/dimension policy checks;

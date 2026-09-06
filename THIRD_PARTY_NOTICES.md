@@ -58,7 +58,7 @@ Imagine Media Studio uses third-party packages installed from the exact versions
 
 Before a release artifact is published, the release process must derive a complete production dependency inventory from the frozen lockfile and retain each applicable package copyright and full license text in the distributed notices. Transitive dependencies are included by that release inventory even though this source-level summary lists only direct browser dependencies. Package metadata and the license files shipped in the installed package remain authoritative.
 
-The Lucide icons used by the interface are imported from `lucide-react` and are covered by its ISC license; they are not copied from Grok or a reviewed donor project. PR 1 Mock media is project-authored and documented separately in [`docs/third-party/pr1-asset-provenance.md`](docs/third-party/pr1-asset-provenance.md).
+The Lucide icons used by the interface are imported from `lucide-react` and are covered by its ISC license; they are not copied from Grok or a reviewed donor project. The original project-authored PR 1 Mock media was retired with the production workspace replacement. Current test-photo sources are recorded in the [workspace test-media inventory](docs/design-spec/workspace.md#test-media).
 
 ### PR 2 server media dependencies
 

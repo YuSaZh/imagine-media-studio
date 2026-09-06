@@ -2,8 +2,9 @@
 
 Status: **Local and GitHub Actions acceptance passed.**
 
-PR 6 implementation is complete for the custom Provider boundary described in
-[`PLAN.MD`](../../PLAN.MD). This record covers declarative HTTP adapters,
+This historical PR 6 record covers the original custom Provider milestone.
+Current guidance is indexed in [docs/README.md](../README.md).
+This record covers declarative HTTP adapters,
 administrator-installed Trusted JavaScript adapters, their examples, and the
 security limits around both paths.
 
@@ -39,7 +40,7 @@ non-conflicting port; no existing host service or container was altered.
 | S-06 | Trusted network and secrets | Worker code receives only necessary Provider data; network is an RPC through SafeHttpPort; manifest hosts and required secret names are explicit | `worker-host.test.ts`, adapter runtime README, Trusted JS example |
 | S-07 | Trusted execution limits | `worker_threads`, timeout, message/output/log limits, and bounded input files are enforced; dynamic imports/package installation and direct network globals are not allowed by source policy | `worker-host.test.ts`, `fixture.test.ts`, Trusted JS example |
 | S-08 | Management authorization and lifecycle | Trusted install/list/bind/remove operations require administrator authorization and preserve immutable references/tombstones | `trusted-adapter-service.test.ts`, `routes/adapters.test.ts` |
-| S-09 | Runtime topology | Custom adapters stay in the one Node process, one SQLite database, one port, and one `/data` volume boundary | [`PLAN.MD`](../../PLAN.MD), PR6 runtime tests |
+| S-09 | Runtime topology | Custom adapters stay in the one Node process, one SQLite database, one port, and one `/data` volume boundary | PR6 runtime tests; retained boundary: [current architecture](./overview.md) |
 
 ## Local acceptance
 

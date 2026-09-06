@@ -1,5 +1,9 @@
 # Third-party reuse audit
 
+## 2026-09-07 bilingual README presentation reference
+
+Reviewed [CookSleep/gpt_image_playground README](https://github.com/CookSleep/gpt_image_playground/blob/574c41e6263016c4f1d987b4746b2767cae1c5cf/README.md) at commit `574c41e6263016c4f1d987b4746b2767cae1c5cf` (MIT) for documentation structure: project introduction, badges, expandable screenshots, feature groups, deployment instructions, and FAQ. The Chinese and English Imagine Media Studio READMEs are independently written from this repository's implementation and operator guides. No donor prose, screenshots, sponsor content, deployment configuration, or application UI was copied. Preview images reference this repository's existing regression screenshots.
+
 ## CPA and sub2api image response compatibility
 
 Chat image protocol review: CLIProxyAPI `internal/translator/gemini/openai/chat-completions/gemini_openai_request.go` and `gemini_openai_response.go` (MIT, upstream main reviewed 2026-09-06). Verified the `modalities`, `image_config`, and `choices[].message.images` / `delta.images` wire shapes. The implementation and tests are original; no upstream code or UI was copied. Read-only deployment diagnostics confirmed CPA Interactions HTTP 404 and an Images model/protocol rejection; credentials and image contents were excluded from diagnostic output.
@@ -22,11 +26,11 @@ Status: **PR 3 selective reuse completed for two pure algorithm subsets**. Only 
 
 ## Policy and scope
 
-`PLAN.MD` makes Grok Imagine the sole UI/UX reference. The repositories in this audit must not supply this project's App Shell, page layout, navigation, Composer, gallery, Viewer, CSS, design tokens, responsive structure, page-level state, or global store.
+[AGENTS.md](../../AGENTS.md) and the [workspace specification](../design-spec/workspace.md) retain Grok Imagine as the visual and interaction reference. The repositories in this audit must not supply this project's App Shell, page layout, navigation, Composer, gallery, Viewer, CSS, design tokens, responsive structure, page-level state, or global store.
 
 - `CookSleep/gpt_image_playground` may be considered later as a donor for narrowly scoped, non-visual image logic.
-- `lidge-jun/ima2-gen` and `alasano/sora-2-playground` are architecture and behavior references only. Their source is not a migration candidate under the current plan.
-- PR 0 performed inspection only; PR 3 implemented only the two approved pure subsets, while later Provider/video reuse remains gated.
+- `lidge-jun/ima2-gen` and `alasano/sora-2-playground` are architecture and behavior references only. This audit does not authorize importing their source.
+- PR 0 performed inspection only; PR 3 implemented only the two approved pure subsets. These are historical decisions; new reuse requires a scoped review under the current contribution rules.
 - A future migration must pin the reviewed SHA, retain required MIT notices, adapt the logic to local contracts, and add local tests before merge.
 
 ## Verified upstream revisions and licenses
@@ -41,7 +45,7 @@ The branch names and HEAD SHAs were verified using Git's advertised `HEAD`; lice
 
 ## Donor audit: `gpt_image_playground`
 
-The following rows are candidates, not reuse decisions. `Target` is deliberately `TBD` because PR 0 must not import source.
+The following rows record the original PR 0 candidates, not current reuse decisions. `Target` was deliberately `TBD` because that milestone did not authorize source imports.
 
 | Candidate | Upstream files at reviewed SHA | Mode | Target | Expected adaptation | Required tests | Keep copyright notice? |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -107,7 +111,7 @@ credential. The donor repositories listed above remain reference-only for PR
 
 No source migration is authorized. The following files identify architecture worth comparing with local designs:
 
-| Allowed reference topic from `PLAN.MD` | Representative upstream files | Local decision/test burden |
+| Audited reference topic | Representative upstream files | Local decision/test burden |
 | --- | --- | --- |
 | Provider registry and capabilities | `lib/providers/registry.ts`, `lib/providers/types.ts`, `lib/capabilities.ts`, `lib/mcp/providerRegistry.ts`, `lib/mcp/modelCapabilities.ts` | Define a smaller local registry; test capability filtering, unsupported options, stable IDs, and provider isolation |
 | Unified image/video job concepts | `lib/jobStatus.ts`, `lib/jobs/envelope.ts`, `lib/jobs/idempotency.ts`, `lib/inflight.ts` | Keep local job state authoritative; test state transitions, idempotency, cancellation, restart recovery, and concurrent updates |
@@ -115,13 +119,13 @@ No source migration is authorized. The following files identify architecture wor
 | Async video lifecycle | `lib/videoGenerationRequest.ts`, `lib/grokVideoPoll.ts`, `lib/videoArtifactPersistence.ts` | Keep provider-neutral remote IDs; test polling backoff, terminal failure, expired jobs, restart recovery, and durable artifact commit |
 | Local media metadata | `lib/imageMetadata.ts`, `lib/imageMetadataStore.ts` | Define local SQLite schema and provenance; test malformed metadata, migration, deduplication, and missing files |
 
-Risks: the upstream repository is much broader than this product and includes OAuth, CLI, MCP, node workflows, agent features, and a large UI. Those areas are excluded by `PLAN.MD`. Its provider-specific abstractions may also encode assumptions about its own storage and process model. Use it to challenge local contracts, not to import its product architecture.
+Risks: the upstream repository is much broader than this product and includes OAuth, CLI, MCP, node workflows, agent features, and a large UI. Those areas are outside this audit's permitted reference scope. Its provider-specific abstractions may also encode assumptions about its own storage and process model. Use it to challenge local contracts, not to import its product architecture.
 
 ## Reference audit: `sora-2-playground`
 
 No source migration is authorized. The permitted reference surface is narrow:
 
-| Allowed reference topic from `PLAN.MD` | Representative upstream files | Local decision/test burden |
+| Audited reference topic | Representative upstream files | Local decision/test burden |
 | --- | --- | --- |
 | Async video submission and remote task IDs | `src/lib/video-service.ts`, `src/lib/openai-client.ts`, `src/types/video.ts`, `src/app/api/videos/route.ts`, `src/app/api/videos/[id]/route.ts` | Adapt only behavior to the provider contract; test submit validation, remote ID persistence, status mapping, cancellation, and provider errors |
 | Queue/history/failure and refresh behavior | `src/lib/db.ts`, `src/lib/errors.ts`, `src/lib/video-service.ts` | Use local SQLite/JobRunner design; test multiple queued jobs, crash/restart, stale remote jobs, failure details, and history ordering |

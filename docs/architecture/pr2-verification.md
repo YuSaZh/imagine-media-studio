@@ -2,7 +2,9 @@
 
 ## Delivered Scope
 
-PR 2 completes the persistent application boundary described in `PLAN.MD`:
+This historical PR 2 record covers the persistent application boundary of the
+original delivery plan. Current guidance is indexed in [docs/README.md](../README.md).
+The milestone covered:
 
 - strict settings, Provider, model, Job, Asset, Collection, and event contracts;
 - SQLite migration `0001_pr2_core.sql` with cursor pagination, revision CAS, retry lineage, stable output slots, and a durable change-event outbox;

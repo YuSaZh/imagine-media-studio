@@ -1,5 +1,8 @@
 # PR 0 Runtime Architecture
 
+Historical infrastructure record. For the maintained topology, account model,
+and Provider boundaries, read the [current architecture](./overview.md).
+
 ## Purpose
 
 PR 0 establishes the smallest deployable application skeleton. It proves that the Web app, internal API, SQLite persistence, and recoverable Mock jobs can run together without introducing platform infrastructure or a real generation integration.

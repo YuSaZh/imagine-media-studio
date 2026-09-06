@@ -1,12 +1,15 @@
 # PR 0 Verification
 
+Historical milestone record. Current rules and verification guidance are indexed
+in [docs/README.md](../README.md); the deferred work below describes PR 0 only.
+
 Status: **passed**
 
 PR 0 was verified at commit `55f4d2bc5f1a7a51ce4a24d1597b8c84062e5e8e` by [GitHub Actions run 32770343331](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32770343331).
 
 ## Acceptance Matrix
 
-| PLAN.MD requirement | Result | Evidence |
+| Original milestone requirement | Result | Evidence |
 |---|---|---|
 | Clean pnpm workspace with the five planned packages | Pass | `pnpm-workspace.yaml` contains `apps/*` and `packages/*`; the expected web, server, shared, provider-contract, and testkit workspaces are present. |
 | React/Vite placeholder and Fastify app server | Pass | The neutral PR 0 App Shell is served by the same Fastify application that exposes `/internal/**`. |
@@ -59,5 +62,5 @@ These images document the neutral PR 0 App Shell. They are not a PR 1 Grok Imagi
 
 - The Grok Imagine-referenced UI shell begins only after a private reference package is frozen for PR 1.
 - Real image/video providers, secret encryption, authentication, and remote media downloading are later phases.
-- Full PWA installation guidance, mobile keyboard refinement, gallery/task restoration, and application-level runtime caching remain assigned to later PRs in `PLAN.MD`.
+- Full PWA installation guidance, mobile keyboard refinement, gallery/task restoration, and application-level runtime caching were assigned to later milestones in the retired development plan.
 - Branch protection and full commit-SHA pinning for Actions are repository hardening work, not PR 0 runtime requirements.

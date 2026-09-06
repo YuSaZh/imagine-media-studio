@@ -1,5 +1,10 @@
 # PR 8 Security Hardening
 
+Historical security milestone. The optional-password interstitial described
+below predates the current account authentication. Use the
+[current architecture](./overview.md) and [RELEASE.md](../../RELEASE.md) for
+current access and deployment guidance.
+
 Status: **Local and GitHub Actions acceptance passed.**
 
 This record covers the first PR 8 security-hardening milestone. It does not

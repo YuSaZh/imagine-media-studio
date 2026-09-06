@@ -4,8 +4,9 @@ Status: **Implementation and automated acceptance passed.** Real-platform PWA
 installation, device safe-area/keyboard evidence, and strict authenticated Grok
 visual comparison remain external evidence in [`Hold.md`](../../Hold.md).
 
-PR 7 completes the PWA and mobile-polish boundary described in
-[`PLAN.MD`](../../PLAN.MD). It extends the installable shell introduced in PR 0;
+This historical PR 7 record covers the original PWA and mobile-polish milestone.
+Current guidance is indexed in [docs/README.md](../README.md).
+It extends the installable shell introduced in PR 0;
 it does not add another process, database, port, volume, or business service.
 
 ## Feature matrix
