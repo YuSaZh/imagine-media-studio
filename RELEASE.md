@@ -255,6 +255,24 @@ and lock-cleanup race windows remain outside the atomicity guarantee.
 
 ## Future release procedure
 
+### Test images
+
+After the current `main` commit passes CI, run:
+
+```bash
+gh workflow run test-image.yml --ref main
+```
+
+The Test Image workflow builds AMD64 and ARM64 candidates, attests the digest,
+and runs the isolated release smoke before publishing `test` and
+`test-sha-<full-commit>` tags. It does not update stable tags or create a GitHub
+Release. Use the verified digest from its summary for a reproducible deployment.
+Keep the existing Compose project, environment file, and data mount when
+switching images. Test builds retain the base application version; their OCI
+version and revision labels identify the exact test commit.
+
+### Stable releases
+
 1. Require the release-preparation commit and normal CI on `main` to pass.
 2. Confirm the root, server, web, and app-info versions match the intended
    stable tag; ensure `CHANGELOG.md` has one non-empty matching version section

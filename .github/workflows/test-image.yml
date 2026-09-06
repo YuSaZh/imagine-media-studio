@@ -1,0 +1,151 @@
+name: Test Image
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: test-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/yusazh/imagine-media-studio
+
+jobs:
+  publish:
+    name: Publish multi-arch test candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Require successful CI for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          count=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --status success --json databaseId --jq 'length')
+          test "$count" -gt 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract test candidate metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: type=raw,value=test-candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.version=test-${{ github.sha }}
+
+      - name: Build and push test candidate
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OCI_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            OCI_REVISION=${{ github.sha }}
+            OCI_VERSION=test-${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=test-image
+          cache-to: type=gha,mode=max,scope=test-image
+
+      - name: Attest test candidate
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  smoke:
+    name: Verify test candidate digest
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    env:
+      RELEASE_DIGEST: ${{ needs.publish.outputs.digest }}
+      RELEASE_IMAGE: ghcr.io/yusazh/imagine-media-studio@${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Check out smoke scripts
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run isolated digest and persistence smoke
+        run: bash .github/scripts/release-smoke.sh
+
+  promote:
+    name: Publish verified test tags
+    needs: [publish, smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      packages: write
+    env:
+      RELEASE_DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attach test tags to the verified digest
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          docker buildx imagetools create \
+            --tag "$IMAGE:test" \
+            --tag "$IMAGE:test-sha-$GITHUB_SHA" \
+            "$IMAGE@$RELEASE_DIGEST"
+          actual=$(docker buildx imagetools inspect "$IMAGE:test-sha-$GITHUB_SHA" --format '{{.Manifest.Digest}}')
+          test "$actual" = "$RELEASE_DIGEST"
+          printf 'Verified test image: `%s@%s`\n' "$IMAGE" "$RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

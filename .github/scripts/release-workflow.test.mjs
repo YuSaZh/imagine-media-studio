@@ -593,4 +593,36 @@ exit 91
   await rm(negativeRoot, { force: true, recursive: true });
 }
 
+const testImageDocument = parseDocument(await readFile(new URL('../workflows/test-image.yml', import.meta.url), 'utf8'), { uniqueKeys: true });
+assert.deepEqual(testImageDocument.errors, []);
+const testImage = testImageDocument.toJS();
+assert.deepEqual(Object.keys(testImage.on), ['workflow_dispatch']);
+assert.deepEqual(testImage.permissions, {});
+assert.equal(testImage.jobs.publish.if, "github.ref == 'refs/heads/main'");
+assert.equal(testImage.jobs.publish.permissions.actions, 'read');
+assert.ok(testImage.jobs.publish.steps.some(step => step.run?.includes('--commit "$GITHUB_SHA" --status success')));
+const testBuild = testImage.jobs.publish.steps.find(step => step.id === 'push');
+assert.equal(testBuild.with.platforms, 'linux/amd64,linux/arm64');
+assert.equal(testBuild.with.sbom, true);
+assert.equal(testBuild.with.provenance, 'mode=max');
+assert.equal(testImage.jobs.smoke.needs, 'publish');
+assert.equal(testImage.jobs.smoke.env.RELEASE_DIGEST, '${{ needs.publish.outputs.digest }}');
+assert.ok(testImage.jobs.smoke.steps.some(step => step.run === 'bash .github/scripts/release-smoke.sh'));
+assert.deepEqual(testImage.jobs.promote.needs, ['publish', 'smoke']);
+const testPromotion = testImage.jobs.promote.steps.find(step => step.run?.includes('imagetools create')).run;
+assert.ok(testPromotion.includes('--tag "$IMAGE:test"'));
+assert.ok(testPromotion.includes('--tag "$IMAGE:test-sha-$GITHUB_SHA"'));
+assert.doesNotMatch(testPromotion, /latest|RELEASE_VERSION|gh release/u);
+assert.deepEqual(Object.keys(testImage.jobs), ['publish', 'smoke', 'promote']);
+for (const job of Object.values(testImage.jobs)) {
+  assert.notEqual(job.permissions.contents, 'write');
+  for (const step of job.steps) {
+    if (step.uses) assert.match(step.uses, /^[\w/-]+@[a-f0-9]{40}$/u);
+    if (step.run) {
+      const checked = spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8' });
+      assert.equal(checked.status, 0, checked.stderr);
+    }
+  }
+}
+
 process.stdout.write('release workflow structure and release guard checks passed\n');
