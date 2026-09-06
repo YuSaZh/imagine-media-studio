@@ -166,13 +166,14 @@ svg { flex-shrink: 0; }
 .choice-copy strong { font-size: 12px; font-weight: 500; }
 .choice-copy small { font-size: 10px; color: #6a746b; }
 .model-letter { display: grid; place-items: center; width: 28px; height: 28px; color: #5d7062; border: 1px solid #e4e9e4; border-radius: 6px; font-size: 12px; }
-.ratio-options { display: flex; flex-wrap: wrap; gap: 2px; max-width: 300px; }
-.ratio-options .choice { flex-direction: column; justify-content: end; width: 48px; height: 66px; gap: 7px; padding: 6px 4px; font-size: 10px; }
+.ratio-options { display: grid; gap: 4px; max-width: calc(100vw - 44px); }
+.ratio-options .choice { flex-direction: column; justify-content: end; width: 100%; height: 70px; gap: 7px; padding: 6px 4px; font-size: 10px; }
 .ratio-options i { width: 21px; max-height: 29px; border: 1.4px solid #7f8d83; border-radius: 2px; }
 .ratio-auto { color: #7f8d83; }
 .setting-line { display: flex; justify-content: space-between; align-items: center; gap: 22px; min-height: 58px; margin: 0 10px; border-bottom: 1px solid #eef0ed; font-size: 12px; }
 .setting-line:last-child { border-bottom: 0; }
 .setting-line select { height: 32px; padding: 0 8px; background: #f4f6f3; border: 0; border-radius: 4px; font-size: 12px; }
+.composer-generation-settings select { appearance: none; }
 .panel-backdrop { position: fixed; inset: 0; background: #111c1640; z-index: 50; backdrop-filter: blur(3px); animation: surface-in 150ms ease-out; }
 .panel { position: fixed; z-index: 55; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; border: 1px solid #e2e7e1; border-radius: 8px; background: white; box-shadow: 0 20px 80px #10201822; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 17px 19px 17px 24px; border-bottom: 1px solid var(--line); }

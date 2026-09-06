@@ -48,6 +48,7 @@ Screenshots come from this project's automated workspace checks and show uploade
 - Text-to-image generation, reference-image editing, and masked editing, with file upload, clipboard paste, and drag and drop.
 - A built-in mask canvas with brush, eraser, undo, and redo.
 - Model-aware aspect ratio, resolution, count, and quality controls; compatible models support custom pixel dimensions.
+- Desktop image controls include count and 1K / 2K / 4K / custom resolution shortcuts; aspect-ratio choices balance their rows by option count on both layouts.
 - Reuse a result as a reference for the next creation, inspect original images, and download originals.
 
 ### Video Creation

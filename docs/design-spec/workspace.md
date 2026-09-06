@@ -27,6 +27,8 @@ changes must preserve the other layout's behavior.
 - Desktop keeps the header, gallery heading/search/filter controls, and Composer
   outside the masonry scroll area. Virtualization and pagination use the inner
   `.gallery-scroll` element rather than the page scroll position.
+  Its scrollbar tracks are hidden; wheel, touchpad and pagination remain active.
+  Desktop generation settings also scroll without visible scrollbar tracks.
 - Desktop video input modes occupy a separate row beneath the prompt, aligned
   above the add-reference button. The main toolbar retains a stable add-button
   position across image/video modes and supported/unsupported upload states.
@@ -35,6 +37,14 @@ changes must preserve the other layout's behavior.
 - Desktop retains the aspect-ratio shortcut. Its `auto` option has a dashed-square
   marker. Mobile exposes aspect ratio through generation settings, without a
   separate toolbar shortcut; video input modes remain in the compact control area.
+- Model and aspect-ratio buttons and generation-setting selects have no downward chevrons on either layout.
+  Both layouts use a ratio grid whose column count follows the available options,
+  balanced across rows with up to six columns (eight options use two rows of four).
+- Desktop image shortcuts place resolution directly after aspect ratio, followed
+  by an icon and count. Resolution offers 1K, 2K, 4K and custom pixel dimensions;
+  native size names take priority, otherwise supported pixel sizes follow the
+  selected ratio with the preset as the longest edge. Model rules, locks and
+  custom-size limits apply; shortcuts share the saved generation settings.
 - Desktop video shortcuts offer resolution presets 480p, 720p, 1080p, and custom;
   duration presets 6s, 10s, 15s, and custom. Unsupported values are disabled or
   rejected according to the model's policy, including custom values and locks.
