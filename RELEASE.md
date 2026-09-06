@@ -1,10 +1,12 @@
-# Imagine Media Studio v0.1.0 Release Guide
+# Imagine Media Studio v0.1.2 Release Guide
 
-Imagine Media Studio `v0.1.0` is published from tag commit `967b350`. The
-release workflow passed candidate publication, exact-digest smoke, stable-tag
-promotion, and GitHub Release publication. Use the immutable digest recorded in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.0),
-not a mutable tag, for deployment and verification.
+Imagine Media Studio `v0.1.2` includes the connected workspace, isolated accounts,
+project-specific generation memory, and model-specific provider protocols.
+The release workflow publishes a candidate, verifies its exact digest, and then
+promotes stable tags and creates the GitHub Release. Use the immutable digest in
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.2)
+for deployment and verification. Replace `<digest-from-release>` below with its
+64-character SHA-256 digest.
 
 ## Deployment boundary
 
@@ -36,17 +38,17 @@ MOCK_PROVIDER_ENABLED=false
 in database backups or full-data archives; losing or changing it makes existing
 Provider credentials undecryptable. Initial credentials default to `admin` /
 `admin`; `ADMIN_USERNAME` and `ADMIN_PASSWORD` override them only on first start.
-After initialization, change credentials in Settings -> Preferences. Docker
+After initialization, change credentials in Settings -> Account Management. Docker
 administrators can inspect container environment values, so Docker daemon access
 remains an administrator trust boundary.
 
 ## Install the released image
 
-For `v0.1.0`, take the exact digest from the GitHub Release or release workflow
+For `v0.1.2`, take the exact digest from the GitHub Release or release workflow
 summary:
 
 ```bash
-IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018'
+IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:<digest-from-release>'
 docker pull "$IMAGE"
 docker run --detach \
   --name imagine-media \
@@ -150,11 +152,11 @@ docker run --rm \
   --entrypoint node "$IMAGE" \
   dist/maintenance/data-archive-cli.js restore \
   --bundle /recovery/live/backups/<id>.bundle \
-  --target /recovery/restored-v0.1.0
+  --target /recovery/restored-v0.1.2
 ```
 
 Inspect the restored tree, recreate the application container with
-`imagine-state/restored-v0.1.0` bound to `/data`, and keep the same
+`imagine-state/restored-v0.1.2` bound to `/data`, and keep the same
 `APP_SECRET`. A container-only rollback may reuse the live database only when
 the older application is known to support its schema. Otherwise restore the
 verified pre-upgrade archive to a new root and switch the bind mount. The CLI
@@ -162,15 +164,15 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
-Use the digest, not `0.1.0`, `0.1`, or `latest`, as the verification subject:
+Use the digest, not `0.1.2`, `0.1`, or `latest`, as the verification subject:
 
-Run these commands from a verified `v0.1.0` source checkout. GitHub CLI must be
+Run these commands from a verified `v0.1.2` source checkout. GitHub CLI must be
 authenticated with `gh auth login` or a `GH_TOKEN` that can read this repository;
 keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.
 
 ```bash
-IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018'
+IMAGE='ghcr.io/yusazh/imagine-media-studio@sha256:<digest-from-release>'
 
 gh auth status
 docker buildx imagetools inspect "$IMAGE"

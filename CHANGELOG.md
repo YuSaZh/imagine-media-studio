@@ -4,8 +4,21 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-06
+
+### Added
+
+- Connected Imagine workspace with responsive generation controls, library
+  references, project-scoped assets, and inline generation previews.
+- Isolated user accounts with administrator account management, configurable
+  public domain, and explicit support for trusted HTTPS reverse proxies.
+- Shared provider connections with model-specific protocols and editable
+  generation parameter policies.
+
 ### Fixed
 
+- Stabilize mobile navigation gestures, scroll boundaries, and video controls.
+- Correct image MIME inference, custom dimensions, and provider catalog errors.
 - Remember image/video model selections and per-model generation parameters
   independently for each project, saving changes before submission.
 - Give account management its own settings category.

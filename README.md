@@ -17,7 +17,7 @@ Real generation requires user-configured external APIs. Mock exercises workflows
 
 ## Verification
 
-Run `pnpm run ci` and `E2E_PORT=<unused-task-port> pnpm test:e2e --update-snapshots=none`. CI checks eight viewport sizes, live workflows, accessibility, visual baselines and the isolated single-container Docker smoke. Backend acceptance and release history remain in `docs/architecture/` and Git history; their earlier page screenshots and selectors do not describe this UI. The published v0.1.0 image predates this redesign; build current source for the new workspace.
+Run `pnpm run ci` and `E2E_PORT=<unused-task-port> pnpm test:e2e --update-snapshots=none`. CI checks eight viewport sizes, live workflows, accessibility, visual baselines and the isolated single-container Docker smoke. Backend acceptance and release history remain in `docs/architecture/` and Git history; their earlier page screenshots and selectors do not describe this UI. The v0.1.2 release includes this workspace, isolated accounts, and project-specific generation memory.
 
 ## Local Safety
 
@@ -39,7 +39,7 @@ Docker operator sequence is documented in
 
 ## Release and upgrade
 
-The release history and known v0.1.0 boundaries are in
+The release history and v0.1.2 changes are in
 [`CHANGELOG.md`](./CHANGELOG.md). Digest-pinned installation, secret handling,
 online and full-data backup, migration, restore, rollback, GHCR attestation,
 SBOM, and provenance instructions are in [`RELEASE.md`](./RELEASE.md). Treat the
