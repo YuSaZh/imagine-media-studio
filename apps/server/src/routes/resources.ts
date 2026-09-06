@@ -285,6 +285,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
     try {
       await registration.adapter.validate(providerGenerationRequest(input), {
         providerId: input.providerId,
+        modelId: input.modelId,
         ...(registration.baseUrl ? { baseUrl: registration.baseUrl } : {}),
         config: registration.config ?? {},
         ...(registration.http ? { http: registration.http } : {}),

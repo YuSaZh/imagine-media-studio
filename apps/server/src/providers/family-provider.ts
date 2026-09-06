@@ -1,5 +1,5 @@
 import type { ProviderAdapter, ProviderCapabilities, ProviderContext, ProviderError, ProviderAssetReference } from '@imagine/provider-contract';
-import { providerFamily, resolveModelProfile, type GenerationRequest, type NativeProviderProfile, type ProviderFamily } from '@imagine/shared';
+import { matchModelProtocol, providerFamily, resolveModelProfile, type GenerationRequest, type NativeProviderProfile, type ProviderFamily } from '@imagine/shared';
 
 interface CatalogAdapter extends ProviderAdapter {
   getLiveCapabilities?(context: ProviderContext): Promise<ProviderCapabilities>;
@@ -36,7 +36,18 @@ export class FamilyProvider implements ProviderAdapter {
       const failure = results.find(result => result.status === 'rejected');
       if (failure?.status === 'rejected') throw failure.reason;
     }
-    return { providerType: this.type, models: [...models.values()] };
+    const defaults = new Map<string, Promise<ProviderCapabilities>>();
+    const matchedModels = await Promise.all([...models.values()].map(async model => {
+      const profile = matchModelProtocol(model.id);
+      const adapter = profile && this.adapters.get(profile);
+      if (!adapter || profile === model.capabilities.profile) return model;
+      let catalog = defaults.get(adapter.type);
+      if (!catalog) { catalog = adapter.getCapabilities(context); defaults.set(adapter.type, catalog); }
+      const capabilities = (await catalog).models;
+      const preset = capabilities.find(candidate => candidate.id === model.id.replace(/^models\//, '')) ?? capabilities[0];
+      return preset ? { ...model, capabilities: { ...preset.capabilities, profile } } : model;
+    }));
+    return { providerType: this.type, models: matchedModels };
   }
 
   getCapabilities(context: ProviderContext) { return this.catalog(context, false); }

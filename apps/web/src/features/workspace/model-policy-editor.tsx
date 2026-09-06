@@ -1,4 +1,4 @@
-import { MODEL_PROTOCOLS, MediaOperationSchema, ModelParametersSchema, PARAMETER_KEYS, providerFamily, type ModelParameter, type JsonObject } from '@imagine/shared';
+import { matchModelProtocol, MODEL_PROTOCOLS, MediaOperationSchema, ModelParametersSchema, PARAMETER_KEYS, providerFamily, type ModelParameter, type JsonObject } from '@imagine/shared';
 import { Plus, Trash2 } from 'lucide-react';
 import { Tool } from './ui';
 
@@ -28,7 +28,7 @@ export function parameterPresets(capabilities: JsonObject, providerType = ''): M
   return ModelParametersSchema.parse(rules);
 }
 
-export function ModelPolicyEditor({ value, onChange, providerType }: { value: string; onChange: (value: string) => void; providerType: string }) {
+export function ModelPolicyEditor({ value, onChange, providerType, modelId = '' }: { value: string; onChange: (value: string) => void; providerType: string; modelId?: string }) {
   let capabilities: JsonObject;
   try {
     const parsed: unknown = JSON.parse(value);
@@ -41,9 +41,10 @@ export function ModelPolicyEditor({ value, onChange, providerType }: { value: st
   const setRules = (next: ModelParameter[]) => update({ ...capabilities, parameters: next });
   const changeRule = (index: number, next: Partial<ModelParameter>) => setRules((rules ?? []).map((rule, i) => i === index ? { ...rule, ...next } : rule));
   const family = providerFamily(providerType);
+  const matched = MODEL_PROTOCOLS.find(profile => profile.value === matchModelProtocol(modelId));
   const operations = Array.isArray(capabilities.operations) ? capabilities.operations as string[] : [];
   return <div className="model-policy-editor">
-    {family && <label><span>模型调用协议</span><select aria-label="模型调用协议" value={typeof capabilities.profile === 'string' ? capabilities.profile : ''} onChange={event => { const next = { ...capabilities }; if (event.target.value) next.profile = event.target.value; else delete next.profile; update(next); }}><option value="">跟随提供商默认接口（{{ openai: 'OpenAI', xai: 'xAI', gemini: 'Gemini' }[family]}）</option>{[...MODEL_PROTOCOLS].sort((a, b) => Number(b.family === family) - Number(a.family === family)).map(profile => <option key={profile.value} value={profile.value}>{{ openai: 'OpenAI', xai: 'xAI', gemini: 'Gemini' }[profile.family]} · {profile.label}{profile.family === family ? '（默认接口）' : ''}</option>)}</select></label>}
+    {family && <label><span>模型调用协议</span><select aria-label="模型调用协议" value={typeof capabilities.profile === 'string' ? capabilities.profile : ''} onChange={event => { const next = { ...capabilities }; if (event.target.value) next.profile = event.target.value; else delete next.profile; update(next); }}><option value="">{matched ? `自动匹配（${{ openai: "OpenAI", xai: "xAI", gemini: "Gemini" }[matched.family]} · ${matched.label}）` : `提供商默认（${{ openai: "OpenAI", xai: "xAI", gemini: "Gemini" }[family]}）`}</option>{[...MODEL_PROTOCOLS].sort((a, b) => Number(b.family === family) - Number(a.family === family)).map(profile => <option key={profile.value} value={profile.value}>{{ openai: 'OpenAI', xai: 'xAI', gemini: 'Gemini' }[profile.family]} · {profile.label}{profile.family === family ? '（默认接口）' : ''}</option>)}</select></label>}
     <fieldset className="capability-operations"><legend>支持的操作</legend>{MediaOperationSchema.options.map(operation => <label className="check-line" key={operation}><input type="checkbox" checked={operations.includes(operation)} onChange={event => update({ ...capabilities, operations: event.target.checked ? [...operations, operation] : operations.filter(item => item !== operation) })} />{({ 'image.generate': '文生图', 'image.edit': '图片编辑', 'video.generate': '文生视频', 'video.image_to_video': '首帧视频', 'video.reference_to_video': '参考图视频', 'video.edit': '视频编辑', 'video.extend': '视频续写' })[operation]}</label>)}</fieldset>
     <div className="form-columns"><label><span>最大参考图数量</span><input aria-label="最大参考图数量" type="number" min={0} value={Number(capabilities.maxReferenceImages ?? 0)} onChange={event => update({ ...capabilities, maxReferenceImages: Number(event.target.value) })} /></label><label className="check-line"><input type="checkbox" checked={capabilities.supportsMask === true} onChange={event => update({ ...capabilities, supportsMask: event.target.checked })} />支持蒙版</label></div>
     <div className="parameter-heading"><h3>生成参数</h3><button type="button" className="quiet-command" onClick={() => setRules(parameterPresets(capabilities, providerType))}>从模型能力载入</button></div>

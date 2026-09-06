@@ -10,6 +10,7 @@ import {
   NativeProviderProfileSchema,
   providerFamily,
   modelDisplayName,
+  matchModelProtocol,
   RemoteModelCatalogSchema,
   type CustomAdapterRef,
   type JsonObject,
@@ -510,7 +511,8 @@ export class ProviderService {
       try { for (const operation of capabilities.operations) resolveModelProfile(provider.type, operation, input.modelId, capabilities.profile); }
       catch { throw new ManualModelServiceError('invalid_model', '模型调用协议与连接或支持的操作不匹配。'); }
       const family = providerFamily(provider.type);
-      if (capabilities.profile && family && provider.type !== family) this.update(provider.id, { type: family });
+      const matched = matchModelProtocol(input.modelId);
+      if ((capabilities.profile || matched && matched !== provider.type) && family && provider.type !== family) this.update(provider.id, { type: family });
       return this.models.saveManual(input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {
@@ -544,7 +546,8 @@ export class ProviderService {
       try { if (provider) for (const operation of capabilities.operations) resolveModelProfile(provider.type, operation, input.modelId ?? current.modelId, capabilities.profile); }
       catch { throw new ManualModelServiceError('invalid_model', '模型调用协议与连接或支持的操作不匹配。'); }
       const family = provider && providerFamily(provider.type);
-      if (capabilities.profile && provider && family && provider.type !== family) this.update(provider.id, { type: family });
+      const matched = matchModelProtocol(input.modelId ?? current.modelId);
+      if ((capabilities.profile || matched && matched !== provider?.type) && provider && family && provider.type !== family) this.update(provider.id, { type: family });
       updated = this.models.updateManual(id, input);
     } catch (error) {
       if (error instanceof ModelRepositoryError) {

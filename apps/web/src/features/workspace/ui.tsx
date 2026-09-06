@@ -8,8 +8,8 @@ export function Tool({ label, children, className = '', ...props }: ButtonHTMLAt
   return <Tooltip.Root><Tooltip.Trigger asChild><button type="button" aria-label={label} className={`tool ${className}`} {...props}>{children}</button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="tip" sideOffset={8}>{label}<Tooltip.Arrow /></Tooltip.Content></Tooltip.Portal></Tooltip.Root>;
 }
 
-export function Panel({ title, open, onClose, children, className = '' }: { title: string; open: boolean; onClose: () => void; children: ReactNode; className?: string }) {
-  return <Dialog.Root open={open} onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="panel-backdrop" /><Dialog.Content className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label="关闭面板"><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
+export function Panel({ title, open, onClose, children, className = '', onEscapeKeyDown }: { title: string; open: boolean; onClose: () => void; children: ReactNode; className?: string; onEscapeKeyDown?: (event: KeyboardEvent) => void }) {
+  return <Dialog.Root open={open} onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="panel-backdrop" /><Dialog.Content {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})} className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label="关闭面板"><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 export function Options({ label, trigger, children, className = '' }: { label: string; trigger: ReactNode; children: ReactNode; className?: string }) {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { matchModelProtocol } from './model-names.js';
 
 export const NativeProviderProfileSchema = z.enum([
   'openai-images-v1', 'openai-responses-image-v1', 'openai-videos-v1-compatible',
@@ -40,6 +41,8 @@ export function resolveModelProfile(providerType: string, operation: string, mod
     if (!profile || profile.kind !== kind) throw new Error('模型调用协议与创作类型不匹配');
     return declared;
   }
+  const matched = MODEL_PROTOCOLS.find(profile => profile.value === matchModelProtocol(modelId));
+  if (matched?.kind === kind) return matched.value;
   const legacy = MODEL_PROTOCOLS.find(profile => profile.value === providerType);
   if (legacy) return legacy.value;
   if (family === 'openai') return kind === 'video' ? 'openai-videos-v1-compatible' : 'openai-images-v1';

@@ -588,4 +588,16 @@ svg { flex-shrink: 0; }
   .auth-gate { padding: max(22px, env(safe-area-inset-top)) 22px; }
 }
 .catalog-model-picker { display: flex; gap: 8px; min-width: 0; }
-.catalog-model-picker select { flex: 1; min-width: 0; width: 100%; }
+.catalog-field { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: #5a6c60; }
+.catalog-search { position: relative; flex: 1; min-width: 0; }
+.catalog-search-input { display: flex; align-items: center; position: relative; }
+.connection-form .catalog-search-input input { padding-right: 38px; }
+.catalog-search-input button { position: absolute; right: 1px; width: 36px; height: 36px; display: grid; place-items: center; }
+.catalog-search-popup { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; right: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 24px #202c231c; }
+.catalog-search-results { position: relative; max-height: 260px; overflow: auto; overscroll-behavior: contain; }
+.catalog-search-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 42px; padding: 9px 11px; color: var(--ink); cursor: pointer; }
+.catalog-search-option[aria-selected='true'], .catalog-search-option:hover { background: var(--subtle); }
+.catalog-search-option span { min-width: 0; overflow-wrap: anywhere; }
+.catalog-search-option strong, .catalog-search-option small { display: block; }
+.catalog-search-option strong { font-size: 13px; font-weight: 500; }
+.catalog-search-option small { margin-top: 3px; font-size: 11px; color: var(--muted); }

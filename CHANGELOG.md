@@ -4,6 +4,15 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Match known model families to their default image/video protocol, retaining
+  explicit model overrides and falling back to the connection for unknown IDs.
+- Allow server-validated custom model IDs through OpenAI-compatible protocols,
+  including Gemini aliases on explicitly configured Responses endpoints.
+- Search the remote model picker by display name or model ID with keyboard
+  navigation and clear empty results.
+
 ## [0.1.2] - 2026-09-06
 
 ### Added

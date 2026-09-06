@@ -32,6 +32,19 @@ const IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42m
 const context: OpenAiProviderContext = { providerId: 'openai', secrets: { apiKey: 'sk-test-only' } };
 
 describe('CPA and sub2api response compatibility', () => {
+  it('accepts a server-bound Gemini alias through Responses streaming without relaxing unbound validation', async () => {
+    const transport = new FixtureTransport(sseResponse(readFileSync(new URL('../../../../../fixtures/providers/openai/openai-responses-image-v1/stream.sse', import.meta.url), 'utf8')));
+    const provider = new OpenAiResponsesImageProvider({ http: transport });
+    const input = request({ modelId: 'gemini-3.1-flash-image', extra: { stream: true } });
+    await expect(provider.validate(input, context)).rejects.toMatchObject({ code: 'openai_model_not_supported' });
+    await expect(provider.validate(input, { ...context, modelId: 'different-model' })).rejects.toMatchObject({ code: 'openai_model_not_supported' });
+    const bound = { ...context, modelId: input.modelId, baseUrl: 'https://compatible.example/v1' };
+    await expect(provider.validate(input, bound)).resolves.toBeUndefined();
+    await expect(provider.submit(input, bound)).resolves.toMatchObject({ state: 'completed', assets: [{ resultId: 'ig_fixture_1' }] });
+    expect(transport.requests[0]?.url).toBe('https://compatible.example/v1/responses');
+    expect(JSON.parse(String(transport.requests[0]?.body))).toMatchObject({ model: input.modelId, stream: true, tools: [{ type: 'image_generation' }] });
+    await expect(new OpenAiImagesProvider().validate(request({ modelId: 'dall-e-3' }), { ...context, modelId: 'dall-e-3' })).rejects.toMatchObject({ code: 'openai_model_not_supported' });
+  });
   it('accepts base64 carried in a url field and retains its encoding', () => {
     expect(normalizeImageResponse({ data: [{ url: `data:image/png;base64,${IMAGE_BASE64}` }] })[0]).toMatchObject({ source: 'base64', base64: IMAGE_BASE64, mimeType: 'image/png' });
   });

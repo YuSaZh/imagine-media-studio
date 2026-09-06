@@ -379,7 +379,9 @@ function validateRequest(request: GenerationRequest, context: OpenAiRuntimeConte
   if (request.providerId !== context.providerId) {
     throw new OpenAiValidationError('provider_mismatch', 'Generation request providerId does not match ProviderContext.');
   }
-  if (!modelAllowed(request.modelId, configuredModels, profile)) {
+  // The server sets modelId only after resolving an enabled stored model.
+  const storedModel = context.modelId === request.modelId && !(profile === 'openai-images-v1' && /^dall-e(?:-|$)/i.test(request.modelId));
+  if (!storedModel && !modelAllowed(request.modelId, configuredModels, profile)) {
     throw new OpenAiValidationError('model_not_supported', `OpenAI model ${request.modelId} is not enabled for this profile.`);
   }
   if (request.prompt.trim().length === 0 || request.prompt.length > MAX_PROMPT_CHARS) {

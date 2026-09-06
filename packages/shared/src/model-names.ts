@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { NativeProviderProfile } from './provider-protocols.js';
 
 export const RemoteModelCatalogSchema = z.object({ models: z.array(z.object({
   id: z.string().min(1).max(255).refine(value => ![...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)),
@@ -30,4 +31,16 @@ const MODEL_NAMES: Readonly<Record<string, string>> = {
 export function modelDisplayName(modelId: string): string {
   const id = modelId.replace(/^models\//, '');
   return Object.hasOwn(MODEL_NAMES, id) ? MODEL_NAMES[id]! : modelId;
+}
+
+export function matchModelProtocol(modelId: string): NativeProviderProfile | undefined {
+  const id = modelId.trim().replace(/^models\//i, '').toLowerCase();
+  if (/^(gpt-image-|dall-e-)/.test(id)) return 'openai-images-v1';
+  if (/^(gpt-|o[134](?:-|$))/.test(id)) return 'openai-responses-image-v1';
+  if (/^sora(?:-|$)/.test(id)) return 'openai-videos-v1-compatible';
+  if (/^(grok|xai)(?:-|$)/.test(id)) return /(?:^|-)video(?:-|$)/.test(id) ? 'xai-imagine-video-v1' : 'xai-imagine-image-v1';
+  if (/^gemini-.*omni/.test(id)) return 'gemini-omni-interactions-video-v1';
+  if (/^gemini-.*-image(?:-|$)/.test(id)) return 'gemini-generate-content-image-v1';
+  if (/^veo(?:-|$)/.test(id)) return 'gemini-veo-operation-v1';
+  return undefined;
 }

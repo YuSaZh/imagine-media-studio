@@ -91,6 +91,20 @@ async function createHarness(
 }
 
 describe('provider family migration', () => {
+  it('matches native protocols and capabilities when an OpenAI catalog contains other families', async () => {
+    const { service } = await createHarness(undefined, { http: { request: async () => ({ status: 200, statusCode: 200, headers: { 'content-type': 'application/json' }, json: { data: [{ id: 'gpt-image-2' }, { id: 'gemini-3.1-flash-image' }, { id: 'grok-imagine-image' }] }, dispose: async () => {} }) } });
+    const provider = service.create({ name: 'Mixed catalog', type: 'openai', apiKey: 'fixture-only', baseUrl: 'https://example.com/v1' });
+    const models = await service.refreshModels(provider.id);
+    expect(models.find(model => model.modelId === 'gpt-image-2')?.capabilities.profile).toBe('openai-images-v1');
+    expect(models.find(model => model.modelId === 'gemini-3.1-flash-image')?.capabilities).toMatchObject({ profile: 'gemini-generate-content-image-v1', resolutions: ['512', '1K', '2K', '4K'] });
+    expect(models.find(model => model.modelId === 'grok-imagine-image')?.capabilities.profile).toBe('xai-imagine-image-v1');
+  });
+  it('upgrades a legacy connection when automatic model matching selects a different family', async () => {
+    const { service } = await createHarness();
+    const provider = service.create({ name: 'Legacy mixed', type: 'openai-images-v1' });
+    service.saveManualModel({ providerId: provider.id, modelId: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2', capabilities: { operations: ['image.generate'] }, enabled: true });
+    expect(service.get(provider.id)?.type).toBe('openai');
+  });
   it('lists the complete paginated remote catalog without importing or filtering unknown models', async () => {
     const urls: string[] = [];
     const dispose = vi.fn();

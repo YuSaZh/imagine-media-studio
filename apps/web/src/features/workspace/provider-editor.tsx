@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { modelDisplayName, type ModelDto, type ProviderDto } from '@imagine/shared';
+import { matchModelProtocol, MODEL_PROTOCOLS, modelDisplayName, type ModelDto, type ProviderDto } from '@imagine/shared';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import { internalClient } from '../../api/internal-client';
 import { buildManualModelWriteInput, buildProviderWriteInput, modelToForm, providerToForm, PROVIDER_PROFILE_OPTIONS, type ProviderFormState } from '../settings/model/provider-form';
 import { Panel } from './ui';
 import { ModelPolicyEditor } from './model-policy-editor';
+import { ModelCatalogPicker } from './model-catalog-picker';
 
 export function ProviderApiKeyField({ hasStoredKey, onChange, value }: { hasStoredKey: boolean; onChange: (value: string) => void; value: string }) {
   return <label><span>API Key</span><input aria-label="API Key" autoComplete="new-password" type="password" value={value} onChange={event => onChange(event.target.value)} placeholder={hasStoredKey ? '留空保留已存储的密钥' : '输入 API Key'} /></label>;
@@ -55,9 +56,20 @@ export function ProviderEditor({ provider, onClose, onSaved }: { provider: Provi
 export function ModelEditor({ model, providerId, providerType = '', onClose, onSaved }: { model: ModelDto | null; providerId: string; providerType?: string; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState(() => modelToForm(model, providerId));
   const remoteModels = useQuery({ queryKey: ['provider-model-catalog', providerId], queryFn: () => internalClient.discoverProviderModels(providerId), enabled: !model, staleTime: 60000, retry: false });
+  const selectModel = (id: string, fromCatalog = true) => setForm(current => {
+    const matched = MODEL_PROTOCOLS.find(profile => profile.value === matchModelProtocol(id));
+    let capabilitiesJson = current.capabilitiesJson;
+    try {
+      const capabilities = JSON.parse(capabilitiesJson);
+      if (matched && !capabilities.profile && Array.isArray(capabilities.operations) && !capabilities.operations.every((operation: string) => operation.startsWith(`${matched.kind}.`))) {
+        capabilitiesJson = JSON.stringify({ ...capabilities, operations: [`${matched.kind}.generate`] }, null, 2);
+      }
+    } catch { /* Keep incomplete advanced configuration editable. */ }
+    return { ...current, modelId: id, displayName: fromCatalog || !current.displayName || current.displayName === modelDisplayName(current.modelId) ? modelDisplayName(id) : current.displayName, capabilitiesJson };
+  });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  return <Panel title={model ? '编辑模型' : '添加模型'} open onClose={() => !saving && onClose()} className="connection-editor"><form className="connection-form" onSubmit={event => {
+  return <Panel title={model ? '编辑模型' : '添加模型'} open onEscapeKeyDown={event => { const target = event.target; if (target instanceof HTMLElement && target.getAttribute("role") === "combobox" && target.getAttribute("aria-expanded") === "true") event.preventDefault(); }} onClose={() => !saving && onClose()} className="connection-editor"><form className="connection-form" onSubmit={event => {
     event.preventDefault(); setSaving(true); setError('');
     void (async () => {
       try {
@@ -68,5 +80,5 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
       } catch (failure) { setError(failure instanceof Error ? failure.message : '模型保存失败'); }
       finally { setSaving(false); }
     })();
-  }}>{!model && <label><span>远端模型目录</span><div className="catalog-model-picker"><select aria-label="远端模型目录" value={remoteModels.data?.models.some(item => item.id === form.modelId) ? form.modelId : ""} disabled={remoteModels.isPending} onChange={event => { const id = event.target.value; if (id) setForm(current => ({ ...current, modelId: id, displayName: modelDisplayName(id) })); }}><option value="">{remoteModels.isPending ? "正在拉取模型…" : "选择模型"}</option>{remoteModels.data?.models.map(item => <option key={item.id} value={item.id}>{item.displayName === item.id ? item.id : `${item.displayName} · ${item.id}`}</option>)}</select><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !remoteModels.data.models.length && <span>没有可用的远端模型</span>}</label>}<div className="form-columns"><label><span>模型 ID</span><input aria-label="模型 ID" required value={form.modelId} onChange={event => setForm(current => ({ ...current, modelId: event.target.value, ...(!current.displayName || current.displayName === modelDisplayName(current.modelId) ? { displayName: modelDisplayName(event.target.value) } : {}) }))} /></label><label><span>显示名称</span><input aria-label="模型显示名称" required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div><ModelPolicyEditor providerType={providerType} value={form.capabilitiesJson} onChange={value => setForm(current => ({ ...current, capabilitiesJson: value }))} /><label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />启用模型</label>{error && <p className="error-state" role="alert">{error}</p>}<div className="form-footer"><button type="button" className="quiet-command" disabled={saving} onClick={onClose}>取消</button><button className="primary-command" type="submit" disabled={saving}>{saving ? '正在保存' : '保存模型'}</button></div></form></Panel>;
+  }}>{!model && <div className="catalog-field"><span>远端模型目录</span><div className="catalog-model-picker"><ModelCatalogPicker models={remoteModels.data?.models ?? []} value={form.modelId} loading={remoteModels.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !remoteModels.data.models.length && <span>没有可用的远端模型</span>}</div>}<div className="form-columns"><label><span>模型 ID</span><input aria-label="模型 ID" required value={form.modelId} onChange={event => selectModel(event.target.value, false)} /></label><label><span>显示名称</span><input aria-label="模型显示名称" required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div><ModelPolicyEditor modelId={form.modelId} providerType={providerType} value={form.capabilitiesJson} onChange={value => setForm(current => ({ ...current, capabilitiesJson: value }))} /><label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />启用模型</label>{error && <p className="error-state" role="alert">{error}</p>}<div className="form-footer"><button type="button" className="quiet-command" disabled={saving} onClick={onClose}>取消</button><button className="primary-command" type="submit" disabled={saving}>{saving ? '正在保存' : '保存模型'}</button></div></form></Panel>;
 }

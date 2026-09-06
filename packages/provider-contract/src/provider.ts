@@ -106,7 +106,7 @@ export interface ProviderContext {
   profile?: NativeProviderProfile;
   providerId: string;
   jobId?: string;
-  /** Original request model, available to durable poll/recovery operations. */
+  /** Server-validated stored model, also available to durable recovery operations. */
   modelId?: string;
   idempotencyKey?: string;
   attempt?: number;
