@@ -1,4 +1,5 @@
 .git
+AGENTS.override.md
 .github
 .design-reference
 artifacts

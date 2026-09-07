@@ -194,7 +194,7 @@ function registryAdapterError(
   return new ProviderRegistryError(code, message);
 }
 
-function createAdapter(providerType: string, mockAdapter: ProviderAdapter): ProviderAdapter | null {
+export function createAdapter(providerType: string, mockAdapter: ProviderAdapter): ProviderAdapter | null {
   switch (providerType) {
     case 'openai':
     case 'gemini':

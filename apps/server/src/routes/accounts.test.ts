@@ -20,6 +20,19 @@ describe('account boundaries', () => {
     expect(result.statusCode).toBe(200);
     return { cookie: String(result.headers['set-cookie']).split(';')[0]!, origin: 'http://localhost:80' };
   }
+  it('fans out the requested task count despite absent, disabled or locked model batch rules', async () => {
+    await setup();
+    const admin = await login('admin');
+    for (const parameters of [[], [{ path: 'count', label: 'Count', type: 'number', enabled: false }], [{ path: 'count', label: 'Count', type: 'number', defaultValue: 1, min: 1, max: 1, locked: true }]]) {
+      server.providers.saveManualModel({ providerId: 'mock', modelId: 'mock-image-v1', displayName: 'Single image', enabled: true, capabilities: { operations: ['image.generate'], supportsBatchCount: false, maxBatchCount: 1, parameters } });
+      const created = await server.app.inject({ method: 'POST', url: '/internal/jobs', headers: admin, payload: createMockGenerationRequest({ count: 3 }) });
+      expect(created.statusCode).toBe(202);
+      expect(created.json().jobs).toHaveLength(3);
+      for (const job of created.json().jobs) expect(server.jobs.get(job.id)?.request.count).toBe(1);
+    }
+    const rejected = await server.app.inject({ method: 'POST', url: '/internal/jobs', headers: admin, payload: createMockGenerationRequest({ count: 33 }) });
+    expect(rejected.statusCode).toBe(400);
+  });
   it('isolates resources, input references, jobs, collections and settings in both directions', async () => {
     await setup();
     const admin = await login('admin');
@@ -67,6 +80,7 @@ describe('account boundaries', () => {
     expect((await server.app.inject({ url: '/internal/settings', headers: alice })).json().settings['model.saved']).toEqual(setting.values['model.saved']);
     for (const path of ['accounts', 'adapters', 'maintenance/integrity', 'providers/mock/adapter']) expect((await server.app.inject({ url: `/internal/${path}`, headers: alice })).statusCode).toBe(403);
     expect((await server.app.inject({ method: 'PATCH', url: '/internal/providers/mock', headers: alice, payload: { enabled: false } })).statusCode).toBe(403);
+    expect((await server.app.inject({ method: 'DELETE', url: '/internal/models/catalog-model', headers: alice })).statusCode).toBe(403);
     for (const url of ['/internal/%70roviders/mock', '/%69nternal/providers/mock']) expect((await server.app.inject({ method: 'PATCH', url, headers: alice, payload: { enabled: false } })).statusCode).toBeGreaterThanOrEqual(400);
     expect((await server.app.inject({ method: 'PATCH', url: '/internal/settings', headers: alice, payload: { values: { public_base_url: 'https://evil.example' } } })).statusCode).toBe(403);
     expect((await server.app.inject({ method: 'PATCH', url: '/internal/settings', headers: admin, payload: { values: { public_base_url: 'http://plain.example' } } })).statusCode).toBe(400);

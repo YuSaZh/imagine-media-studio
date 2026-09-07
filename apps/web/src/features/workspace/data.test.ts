@@ -6,6 +6,15 @@ const provider = (id: string) => ({ id, enabled: true, name: id, isDefault: fals
 const model = (id: string, providerId: string): ModelDto => ({ id, providerId, modelId: 'same-model', displayName: id, enabled: true, capabilitySource: 'manual', createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z', capabilities: { operations: ['image.generate'], aspectRatios: ['1:1', '3:2'], maxBatchCount: 4, supportsBatchCount: true } });
 
 describe('workspace API contracts', () => {
+  it('submits application count with managed models and ignores stale saved count parameters', () => {
+    const raw = model('managed', 'first');
+    for (const parameters of [[], [{ path: 'count', label: 'Count', type: 'number', defaultValue: 1, locked: true }]]) {
+      raw.capabilities.parameters = parameters;
+      const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: '', resolution: '', count: 8, duration: 5, negativePrompt: '', seed: '', audio: false, parameters: { count: 2 } };
+      expect(generationRequest(input).count).toBe(8);
+      expect(() => generationRequest({ ...input, count: 33 })).toThrow('1 到 32');
+    }
+  });
   it('selects identical model IDs from different providers without confusing their identities', () => {
     const models = mapModels([model('a', 'first'), model('b', 'second')], [provider('first'), provider('second')]);
     expect(models.map(item => item.key)).toEqual(['a', 'b']);

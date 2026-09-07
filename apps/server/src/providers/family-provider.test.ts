@@ -8,6 +8,13 @@ import { GeminiInteractionsImageProvider } from './gemini/index.js';
 describe('shared provider connections', () => {
   const request = { providerId: 'cpa', modelId: 'gemini-3.1-flash-image', operation: 'image.generate' as const, prompt: 'test', inputs: [] };
   const context = { providerId: 'cpa', modelId: request.modelId, baseUrl: 'https://cpa.example/v1', secrets: { apiKey: 'fixture-key' } };
+  it('distinguishes unavailable protocols from internal processing errors without leaking details', async () => {
+    const family = new FamilyProvider('xai', new Map());
+    const missing = await family.validate({ ...request, profile: 'openai-chat-image-v1' }, context).catch(error => error);
+    expect(family.normalizeError(missing)).toMatchObject({ code: 'model_protocol_invalid', kind: 'rejected', retryable: false });
+    expect(family.normalizeError(new RangeError('Maximum call stack size exceeded: private diagnostic'))).toEqual({ code: 'provider_internal_error', kind: 'unknown', message: '生成任务处理发生内部错误。', retryable: false });
+    expect(family.normalizeError(new DOMException('private diagnostic', 'AbortError'))).toMatchObject({ code: 'request_aborted', kind: 'expired', retryable: false });
+  });
   function fallbackFixture(status: number, message = 'Not found') {
     const calls: string[] = [];
     const dispose = vi.fn();

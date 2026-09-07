@@ -156,11 +156,12 @@ export function generationRequest(input: Creation): GenerationRequest {
     input = { ...input, inputs: input.inputs.map((item, index) => index === first ? { ...item, role: 'source' as const } : item) };
   }
   const { model } = input;
+  if (input.count > 32 || input.count < 1 || !Number.isInteger(input.count)) throw new Error('生成数量应为 1 到 32');
   const video = input.operation.startsWith('video.');
   if (!model.capabilities.operations.includes(input.operation)) throw new Error('当前模型不支持这项操作');
   const rules = managedParameters(model);
   if (rules !== undefined) {
-    const request: Record<string, unknown> = { operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(), inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })) };
+    const request: Record<string, unknown> = { operation: input.operation, providerId: model.providerId, modelId: model.id, count: input.count, prompt: input.prompt.trim(), inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })) };
     const extra: JsonObject = {};
     for (const rule of rules) {
       const value = input.parameters?.[rule.path];
@@ -180,7 +181,6 @@ export function generationRequest(input: Creation): GenerationRequest {
     const dimensions = /^([1-9]\d{0,4})x([1-9]\d{0,4})$/.exec(resolution);
     if (!customSize || !dimensions || Number(dimensions[1]) > 16384 || Number(dimensions[2]) > 16384 || Number(dimensions[1]) * Number(dimensions[2]) > 100_000_000) throw new Error('分辨率须为有效像素尺寸，单边不超过 16384，总像素不超过 1 亿');
   }
-  if (input.count > 32 || input.count < 1 || !Number.isInteger(input.count)) throw new Error('生成数量应为 1 到 32');
   if (video && model.capabilities.durations.length && !model.capabilities.durations.includes(input.duration)) throw new Error('当前模型不支持所选时长');
   const durationRange = model.capabilities.durationRange;
   if (video && durationRange && (input.duration < durationRange.min || input.duration > durationRange.max)) throw new Error('视频时长超出模型范围');

@@ -784,6 +784,25 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(unsafeBaseUrl.statusCode).toBe(400);
   });
 
+  it('loads cross-family model capability presets without changing saved models', async () => {
+    const server = await createTestServer();
+    const created = await server.app.inject({ method: 'POST', url: '/internal/providers', payload: { name: 'CPA fixture', type: 'xai', enabled: true } });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().provider.id;
+    const saved = await server.app.inject({ method: 'POST', url: '/internal/models', payload: { providerId: id, modelId: 'gemini-3.1-flash-image', displayName: 'Pinned name', enabled: false, capabilities: { operations: ['image.generate'], parameters: [] } } });
+    expect(saved.statusCode).toBe(201);
+    const before = (await server.app.inject({ url: '/internal/models' })).json();
+    const result = await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=gemini-3.1-flash-image` });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({ capabilities: { profile: 'gemini-generate-content-image-v1', maxReferenceImages: 14, resolutions: ['512', '1K', '2K', '4K'] } });
+    const chat = await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=gemini-3.1-flash-image&profile=openai-chat-image-v1` });
+    expect(chat.statusCode).toBe(200);
+    expect(chat.json().capabilities.profile).toBe('openai-chat-image-v1');
+    expect((await server.app.inject({ url: '/internal/models' })).json()).toEqual(before);
+    expect((await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=unknown` })).statusCode).toBe(400);
+    expect((await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=gemini-3.1-flash-image&profile=bad` })).statusCode).toBe(400);
+  });
+
   it('supports strict manual model CRUD while preserving overrides on refresh', async () => {
     const server = await createTestServer();
     const capabilities = {
@@ -834,6 +853,8 @@ describe('Imagine server PR 0 skeleton', () => {
     });
     expect(providerEdit.statusCode).toBe(409);
     expect(providerEdit.json<{ error: string }>().error).toBe('model_not_manual');
+    const providerDelete = await server.app.inject({ method: 'DELETE', url: `/internal/models/${providerModel.id}` });
+    expect(providerDelete.statusCode).toBe(204);
 
     const refreshed = await server.app.inject({
       method: 'POST',

@@ -15,6 +15,7 @@ import {
   type CustomAdapterRef,
   type JsonObject,
   type ModelCapabilities,
+  type ModelCapabilityPresetQuery,
   type ProviderDto,
 } from '@imagine/shared';
 import type {
@@ -40,7 +41,7 @@ import {
   type ProviderStorageRecord,
 } from '../database/providers.js';
 import type { SecretVault } from '../security/secret-vault.js';
-import { MOCK_PROVIDER_ID } from './provider-registry.js';
+import { createAdapter, MOCK_PROVIDER_ID } from './provider-registry.js';
 import type { ProviderRegistry } from './provider-registry.js';
 
 export interface CreateProviderServiceInput {
@@ -416,6 +417,20 @@ export class ProviderService {
     throw new ModelCatalogServiceError('model_catalog_unavailable', '模型目录分页超出限制');
   }
 
+  public async modelCapabilityPreset(providerId: string, query: ModelCapabilityPresetQuery) {
+    const provider = this.providers.get(providerId);
+    if (!provider) throw new ManualModelServiceError('provider_not_found', 'Provider was not found.');
+    if (customKindForProviderType(provider.type) !== null) throw new ManualModelServiceError('invalid_model', 'Custom Provider models are managed by the adapter definition.');
+    const registration = await Promise.resolve(this.registry.resolve(providerId));
+    const profile = resolveModelProfile(provider.type, query.operation, query.modelId, query.profile);
+    const adapter = createAdapter(profile ?? provider.type, registration.adapter);
+    const catalog = await adapter?.getCapabilities({ providerId, secrets: {} });
+    const modelId = query.modelId.replace(/^models\//, '');
+    const model = catalog?.models.find(model => model.id === modelId || model.id === modelId.replace(/-(preview|latest)$/, ''));
+    if (!model) throw new ManualModelServiceError('invalid_model', '没有找到该模型的内置能力，请手动配置。');
+    return { capabilities: ModelCapabilitiesSchema.parse({ ...model.capabilities, ...(profile ? { profile } : {}) }) };
+  }
+
   public page(request: ProviderPageRequest = {}): CursorPage<ProviderDto> {
     const page = this.providers.page(request);
     return { items: page.items.map(toProviderDto), nextCursor: page.nextCursor };
@@ -559,18 +574,19 @@ export class ProviderService {
     return updated;
   }
 
-  public deleteManualModel(id: string): void {
+  public deleteModel(id: string): void {
     const current = this.models.get(id);
     if (!current) {
       throw new ManualModelServiceError('model_not_found', `Model ${id} was not found.`);
     }
-    if (current.capabilitySource !== 'manual') {
+    const provider = this.providers.get(current.providerId);
+    if (provider && customKindForProviderType(provider.type) !== null) {
       throw new ManualModelServiceError(
         'model_not_manual',
-        `Model ${id} is managed by its Provider and cannot be deleted manually.`,
+        'Custom Provider models are managed by the adapter definition.',
       );
     }
-    if (!this.models.deleteManual(id)) {
+    if (!this.models.delete(id)) {
       throw new ManualModelServiceError('model_not_found', `Model ${id} was not found.`);
     }
   }

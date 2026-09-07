@@ -809,9 +809,6 @@ describe('ProviderService', () => {
 
     expect(() => service.updateManualModel(providerOnly.id, { displayName: 'Nope' }))
       .toThrowError(expect.objectContaining({ code: 'model_not_manual' }));
-    expect(() => service.deleteManualModel(providerOnly.id)).toThrowError(
-      expect.objectContaining({ code: 'model_not_manual' }),
-    );
 
     const refreshed = await service.refreshModels(MOCK_PROVIDER_ID);
     expect(refreshed).toEqual(expect.arrayContaining([
@@ -824,6 +821,8 @@ describe('ProviderService', () => {
       }),
       expect.objectContaining({ id: providerOnly.id, enabled: false }),
     ]));
+    service.deleteModel(providerOnly.id);
+    expect(models.get(providerOnly.id)).toBeNull();
   });
 
   it('maps refresh adapter failures to a safe catalog error', async () => {
@@ -1254,6 +1253,9 @@ describe('ProviderService', () => {
       displayName: 'Spoofed model',
       capabilities: { operations: ['video.generate'] },
     })).toThrowError(expect.objectContaining({ code: 'invalid_model' }));
+    const [model] = await service.refreshModels(provider.id);
+    expect(model).toBeDefined();
+    expect(() => service.deleteModel(model!.id)).toThrowError(expect.objectContaining({ code: 'model_not_manual' }));
   });
 });
 

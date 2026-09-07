@@ -1,3 +1,4 @@
+import { Select, SelectItem } from './select';
 import { useState } from 'react';
 import type { JobDto } from '@imagine/shared';
 import { ArrowUpRight, Check, Clock3, LoaderCircle, RefreshCw, X } from 'lucide-react';
@@ -10,7 +11,7 @@ export function Jobs({ online, busy, onCancel, onRetry, onView }: { online: bool
   const query = useWorkspaceJobs(status || undefined);
   const jobs = query.data?.pages.flatMap(page => page.items) ?? [];
   return <div className="task-content">
-    <label className="task-filter"><span>任务状态</span><select aria-label="任务状态" value={status} onChange={event => setStatus(event.target.value)}><option value="">全部任务</option>{Object.entries(JOB_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+    <label className="task-filter"><span>任务状态</span><Select aria-label="任务状态" value={status} onChange={event => setStatus(event.target.value)}><SelectItem value="">全部任务</SelectItem>{Object.entries(JOB_LABELS).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</Select></label>
     {query.isPending && <p className="loading-state" role="status">正在加载任务…</p>}
     {query.isError && <p className="error-state" role="alert">任务加载失败<button className="quiet-command" onClick={() => void query.refetch()}>重试</button></p>}
     {!query.isPending && !query.isError && !jobs.length && <div className="empty-state"><Clock3 size={30} /><h3>没有符合条件的任务</h3></div>}

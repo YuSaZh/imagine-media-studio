@@ -309,13 +309,13 @@ export class ModelRepository {
     });
   }
 
-  public deleteManual(id: string): boolean {
+  public delete(id: string): boolean {
     return this.database.transaction((transaction) => {
       const existing = transaction.select().from(models).where(eq(models.id, id)).get();
-      if (!existing || existing.capabilitySource !== 'manual') return false;
+      if (!existing) return false;
       const deleted = transaction
         .delete(models)
-        .where(and(eq(models.id, id), eq(models.capabilitySource, 'manual')))
+        .where(eq(models.id, id))
         .run();
       if (deleted.changes === 0) return false;
       transaction
@@ -323,7 +323,7 @@ export class ModelRepository {
         .values(toChangeEventValues({
           aggregateType: 'model',
           aggregateId: existing.id,
-          eventType: 'model.manual_deleted',
+          eventType: 'model.deleted',
           payload: { providerId: existing.providerId, modelId: existing.modelId },
         }))
         .run();

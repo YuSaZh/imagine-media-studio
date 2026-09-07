@@ -47,8 +47,15 @@ Screenshots come from this project's automated workspace checks and show uploade
 
 - Text-to-image generation, reference-image editing, and masked editing, with file upload, clipboard paste, and drag and drop.
 - A built-in mask canvas with brush, eraser, undo, and redo.
-- Model-aware aspect ratio, resolution, count, and quality controls; compatible models support custom pixel dimensions.
-- Desktop image controls include count and 1K / 2K / 4K / custom resolution shortcuts; aspect-ratio choices balance their rows by option count on both layouts.
+- Model-aware aspect ratio, resolution, and quality controls; compatible models support custom pixel dimensions.
+- Both layouts offer count presets 1 / 2 / 4 / 8 and a plus button for custom counts (1–32). Count creates independent single-output jobs, unaffected by model batch capabilities or parameter rules; the server queue controls execution concurrency.
+- Both layouts offer auto / 1K / 2K / 4K / custom image resolution popovers. Unlocking the aspect ratio switches it to auto while retaining the custom dimensions. Dimensions align to the nearest multiple of 16 on blur or apply; auto aspect ratio keeps the edges independent.
+- Selection controls throughout the app use consistent rounded popovers; aspect-ratio choices balance their rows by option count on both layouts.
+- Mobile generation settings offer auto / 1K / 2K / 4K / custom resolution, sharing desktop aspect-ratio mapping and model limits.
+- Mobile image mode places desktop-style aspect-ratio, resolution and count shortcuts beside the image/video switch, synchronized with generation settings.
+- Connection settings no longer bulk-refresh models. Discovered models can be deleted directly; adding models uses a read-only catalog, and capability loading fills protocol presets while preserving edited parameters.
+- Channels supporting resolution presets receive them directly; pixel-only models map the selected ratio and preset to dimensions, such as 16:9 + 4K to 3840x2160. Chat adapters also translate representable legacy pixel dimensions; actual output dimensions depend on the model.
+- Chat image generation supports CPA structured images and New API Markdown inline images, including streaming responses, and maps image settings to each gateway's parameter locations.
 - Reuse a result as a reference for the next creation, inspect original images, and download originals.
 
 ### Video Creation

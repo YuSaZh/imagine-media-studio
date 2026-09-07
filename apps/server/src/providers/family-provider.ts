@@ -9,6 +9,8 @@ class RoutedError extends Error {
   constructor(readonly normalized: ProviderError) { super(normalized.message); }
 }
 
+class ModelProtocolError extends Error {}
+
 function protocolMismatch(error: ProviderError): boolean {
   if ([404, 405, 415, 501].includes(error.statusCode ?? 0)) return true;
   return [400, 422, 500, 502].includes(error.statusCode ?? 0) &&
@@ -20,9 +22,11 @@ export class FamilyProvider implements ProviderAdapter {
   constructor(readonly type: ProviderFamily, private readonly adapters: ReadonlyMap<string, CatalogAdapter>) {}
 
   private adapter(profile?: NativeProviderProfile, modelId = '', operation = 'video.generate') {
-    const resolved = resolveModelProfile(this.type, operation, modelId, profile);
+    let resolved: NativeProviderProfile | undefined;
+    try { resolved = resolveModelProfile(this.type, operation, modelId, profile); }
+    catch { throw new ModelProtocolError('Model protocol is unavailable.'); }
     const adapter = resolved && this.adapters.get(resolved);
-    if (!adapter) throw new Error('Model protocol is unavailable.');
+    if (!adapter) throw new ModelProtocolError('Model protocol is unavailable.');
     return adapter;
   }
 
@@ -106,6 +110,9 @@ export class FamilyProvider implements ProviderAdapter {
     return this.call(adapter, () => { if (!adapter.resolveResult) throw new Error('Model protocol does not support result resolution.'); return adapter.resolveResult(asset, context); });
   }
   normalizeError(error: unknown): ProviderError {
-    return error instanceof RoutedError ? error.normalized : { code: 'model_protocol_invalid', kind: 'rejected', message: '模型调用协议不可用，请检查模型配置。', retryable: false };
+    if (error instanceof RoutedError) return error.normalized;
+    if (error instanceof ModelProtocolError) return { code: 'model_protocol_invalid', kind: 'rejected', message: '模型调用协议不可用，请检查模型配置。', retryable: false };
+    if (error instanceof Error && error.name === 'AbortError') return { code: 'request_aborted', kind: 'expired', message: '生成请求已中止。', retryable: false };
+    return { code: 'provider_internal_error', kind: 'unknown', message: '生成任务处理发生内部错误。', retryable: false };
   }
 }

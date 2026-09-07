@@ -1,5 +1,6 @@
 export * from './app.js';
 export * from './generation.js';
+export * from './image-resolution.js';
 export * from './provider-protocols.js';
 export * from './model-names.js';
 export * from './model-parameters.js';

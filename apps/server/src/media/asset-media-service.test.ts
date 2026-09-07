@@ -469,6 +469,22 @@ describe('AssetMediaService', () => {
     expect(await resumed.validateProviderOutputs('recoverable-job', [first])).toBe(true);
   });
 
+  it('materializes a 4K image over 10 MiB from bare Base64 and data URLs with intact originals', async () => {
+    const { paths, repository, service: limitedService } = await fixture();
+    const png = await sharp({ create: { width: 4096, height: 1024, channels: 3, background: '#387cbe' } }).png({ compressionLevel: 0 }).toBuffer();
+    expect(png.byteLength).toBeGreaterThan(10 * 1024 * 1024);
+    const service = new AssetMediaService({ imageProcessor: new SharpImageProcessor({ thumbnailSize: 32 }), maxImageBytes: 64 * 1024 * 1024, paths, repository, videoProcessor: new VideoProcessor() });
+    const base64 = png.toString('base64');
+    for (const [outputSlot, value] of [base64, `data:image/png;base64,${base64}`].entries()) {
+      const asset = await service.materializeProviderBase64({ base64: value, expectedKind: 'image', jobId: 'large-image-fixture', outputSlot });
+      expect(asset).toMatchObject({ width: 4096, height: 1024, fileSize: png.byteLength, mimeType: 'image/png', sha256: createHash('sha256').update(png).digest('hex') });
+      expect((await readFile(join(paths.root, asset.filePath))).equals(png)).toBe(true);
+      expect((await stat(join(paths.root, asset.thumbnailPath!))).size).toBeGreaterThan(0);
+    }
+    await expect(limitedService.materializeProviderBase64({ base64, expectedKind: 'image', jobId: 'oversized-image-fixture', outputSlot: 0 })).rejects.toBeInstanceOf(InvalidBase64MediaError);
+    await expect(service.materializeProviderBase64({ base64: base64.slice(0, -1) + '!', expectedKind: 'image', jobId: 'invalid-image-fixture', outputSlot: 0 })).rejects.toBeInstanceOf(InvalidBase64MediaError);
+  });
+
   it('materializes the fixed Mock MP4 with metadata, poster, and a reusable manifest', async () => {
     const { paths, repository } = await fixture();
     const posterBytes = await sharp({

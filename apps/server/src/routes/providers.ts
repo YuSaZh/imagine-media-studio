@@ -4,6 +4,7 @@ import {
   ManualModelPatchSchema,
   ProviderCreateSchema,
   ProviderPatchSchema,
+  ModelCapabilityPresetQuerySchema,
 } from '@imagine/shared';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -92,6 +93,13 @@ export async function registerProviderRoutes(
 
   app.get<{ Params: { id: string } }>('/internal/providers/:id/models/catalog', async (request, reply) => {
     try { return await options.providers.discoverModels(request.params.id); }
+    catch (error) { return providerError(reply, error); }
+  });
+
+  app.get<{ Params: { id: string } }>('/internal/providers/:id/models/capabilities', async (request, reply) => {
+    const query = ModelCapabilityPresetQuerySchema.safeParse(request.query);
+    if (!query.success) return invalidRequest(reply, query.error.issues);
+    try { return await options.providers.modelCapabilityPreset(request.params.id, query.data); }
     catch (error) { return providerError(reply, error); }
   });
 
@@ -225,7 +233,7 @@ export async function registerProviderRoutes(
 
   app.delete<{ Params: { id: string } }>('/internal/models/:id', async (request, reply) => {
     try {
-      await publishCommitted(options, () => options.providers.deleteManualModel(request.params.id));
+      await publishCommitted(options, () => options.providers.deleteModel(request.params.id));
       return reply.code(204).send();
     } catch (error) {
       return providerError(reply, error);

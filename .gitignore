@@ -27,6 +27,7 @@ data/*
 *.db-wal
 
 # Local configuration and logs
+/AGENTS.override.md
 .env
 .env.*
 !.env.example

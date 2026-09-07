@@ -1040,6 +1040,14 @@ export const ModelCapabilitiesSchema = z.object({
 
 export type ModelCapabilities = z.infer<typeof ModelCapabilitiesSchema>;
 
+export const ModelCapabilityPresetQuerySchema = z.object({
+  modelId: z.string().trim().min(1).max(255),
+  profile: NativeProviderProfileSchema.optional(),
+  operation: MediaOperationSchema.default('image.generate'),
+}).strict();
+export type ModelCapabilityPresetQuery = z.infer<typeof ModelCapabilityPresetQuerySchema>;
+export const ModelCapabilityPresetResponseSchema = z.object({ capabilities: ModelCapabilitiesSchema }).strict();
+
 // Keep the older name as an explicit alias for callers that only validate
 // request bodies. Both manual writes and stored model inputs use this schema.
 export const ModelCapabilitiesInputSchema = ModelCapabilitiesSchema;

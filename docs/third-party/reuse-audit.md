@@ -6,6 +6,16 @@ Reviewed [CookSleep/gpt_image_playground README](https://github.com/CookSleep/gp
 
 ## CPA and sub2api image response compatibility
 
+New API protocol review (2026-09-07): running Oracle image revision
+`0c76e4dae77a279e015329b7478e6f02d6b62edd`, QuantumNous/new-api,
+`relaykit/relayconvert/internal/gemini_chat/to_oai_chat_resp.go` and
+`relaykit/relayconvert/internal/oai_chat/to_gemini_chat_req.go`. The Gemini Chat
+bridge emits inline images as Markdown data URLs in message/delta content and
+reads image settings from `extra_body.google.image_config`. No source was copied;
+the local implementation in `apps/server/src/providers/openai/chat.ts` and its
+contract fixtures in `chat.test.ts` are original. Production request metadata
+confirmed HTTP 200 and Gemini conversion, but response bodies were not retained.
+
 Chat image protocol review: CLIProxyAPI `internal/translator/gemini/openai/chat-completions/gemini_openai_request.go` and `gemini_openai_response.go` (MIT, upstream main reviewed 2026-09-06). Verified the `modalities`, `image_config`, and `choices[].message.images` / `delta.images` wire shapes. The implementation and tests are original; no upstream code or UI was copied. Read-only deployment diagnostics confirmed CPA Interactions HTTP 404 and an Images model/protocol rejection; credentials and image contents were excluded from diagnostic output.
 
 Protocol-only review: CLIProxyAPI `5208aec703b5ce7e3445f6e9d91cc13b3e78003a` (MIT), `internal/runtime/executor/codex_openai_images.go`; sub2api `deff3123ded1d14e51df1fd1286e3d43ed9ec9bd` (LGPL-3.0, matching the HPServer sub2api1 image revision), `backend/internal/service/openai_images_responses.go`. Both can put base64 data URLs in `data[].url` and image SSE events. Local CPA response logs were inspected through a field-shape-only filter that excludes credentials and image contents. No upstream code or UI was copied; fixtures and normalization changes are independently implemented. xAI polling was checked against the official REST video result example, which omits a repeated request ID.

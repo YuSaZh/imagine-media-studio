@@ -54,7 +54,6 @@ describe('ModelRepository manual catalog', () => {
     if (!providerModel) throw new Error('Expected provider model.');
 
     expect(models.updateManual(providerModel.id, { displayName: 'Nope' })).toBeNull();
-    expect(models.deleteManual(providerModel.id)).toBe(false);
 
     expect(() => models.saveManual({
       providerId: provider.id,
@@ -94,11 +93,11 @@ describe('ModelRepository manual catalog', () => {
       aggregateId: manual.id,
       eventType: 'model.manual_updated',
     });
-    expect(models.deleteManual(manual.id)).toBe(true);
+    expect(models.delete(manual.id)).toBe(true);
     expect(events.replay().at(-1)).toMatchObject({
       aggregateType: 'model',
       aggregateId: manual.id,
-      eventType: 'model.manual_deleted',
+      eventType: 'model.deleted',
     });
     expect(models.get(manual.id)).toBeNull();
   });

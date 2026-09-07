@@ -35,21 +35,78 @@ changes must preserve the other layout's behavior.
 - Desktop image/video switching shows an icon and label for the selected mode,
   and only an icon for the inactive mode. Mobile shows icons for both modes.
 - Desktop retains the aspect-ratio shortcut. Its `auto` option has a dashed-square
-  marker. Mobile exposes aspect ratio through generation settings, without a
-  separate toolbar shortcut; video input modes remain in the compact control area.
-- Model and aspect-ratio buttons and generation-setting selects have no downward chevrons on either layout.
+  marker. Mobile image mode exposes aspect ratio in its shortcut row and in
+  generation settings. Mobile video keeps aspect ratio in generation settings;
+  video input modes remain in the compact control area.
+- Model and aspect-ratio shortcut buttons have no downward chevrons on either layout.
+  All former native selects use shared rounded Radix popovers, including generation
+  settings, model/connection administration, preferences, adapter formats and job
+  filters. Lists expose selected/disabled states, wrap long options, scroll within
+  viewport bounds, and support arrows, Home/End, typeahead, Enter and Escape.
   Both layouts use a ratio grid whose column count follows the available options,
   balanced across rows with up to six columns (eight options use two rows of four).
 - Desktop image shortcuts place resolution directly after aspect ratio, followed
-  by an icon and count. Resolution offers 1K, 2K, 4K and custom pixel dimensions;
-  native size names take priority, otherwise supported pixel sizes follow the
-  selected ratio with the preset as the longest edge. Model rules, locks and
+  by an icon and count. Resolution offers auto, 1K, 2K, 4K and custom pixel dimensions;
+  native size names take priority when supported by the model protocol and policy.
+  Pixel-only models map presets by aspect ratio. For 16:9, presets
+  map to 1280x720, 2048x1152, and 3840x2160; portrait swaps the dimensions.
+  Other ratios use 1024, 2048, and 4096 as the longest edge. Chat adapters map
+  recognized pixel sizes to upstream aspect-ratio/size fields and reject
+  unrepresentable custom sizes; Images adapters retain pixel sizes. Actual
+  output dimensions remain subject to the upstream model. Model rules, locks and
   custom-size limits apply; shortcuts share the saved generation settings.
+- Mobile image generation settings offer exactly `auto`, `1K`, `2K`, `4K`, and
+  custom dimensions, using the same preset mapping as desktop. This applies to
+  both capability-based and managed parameter controls. Unsupported presets and
+  locked settings remain disabled. Changing aspect ratio retains the selected
+  preset and recalculates pixel dimensions; custom width/height inputs validate
+  before applying and remembered settings remain scoped to the current model.
+- Mobile image mode additionally exposes aspect ratio, resolution and count as
+  compact icon/value buttons alongside the image/video switch in the main
+  toolbar, using the desktop button appearance without filled tiles or a
+  separate row. Their popovers share the same state as generation settings;
+  resolution includes auto and custom dimensions. Each button has a 40px touch
+  height, resolution/ratio model locks still apply, and the row is absent in video mode.
+- Generation count is an application task count (1-32), independent of model
+  batch capabilities and count parameter rules, including legacy locked/hidden
+  rules. Both layouts and generation settings share a compact 1/2/4/8/+ popover;
+  plus opens a validated custom count input. Each job requests one output and
+  server queue limits bound actual execution concurrency. Count is remembered
+  per project, media type and model alongside the other generation choices.
+- Custom image dimensions use one editor in shortcuts and generation settings.
+  The central lock starts enabled; changing either edge derives the other from
+  the selected aspect ratio. Unlocking immediately switches the aspect ratio to
+  auto without clearing the draft or changing the saved resolution. This applies
+  to shortcuts and generation settings on both layouts. A model-fixed non-auto
+  ratio cannot be unlocked. Auto never couples the edges. The edited edge snaps
+  to the nearest multiple of 16 on blur/apply (ties round upward, minimum 16);
+  the derived edge is also rounded, so the ratio may differ by rounding error.
+  Both edges remain at most 16384, with at most 100 million pixels total.
+  Applying custom dimensions preserves the selected aspect ratio rather than
+  replacing it with a reduced width/height fraction. Native preset wire values
+  and model-specific custom-size restrictions remain in effect.
 - Desktop video shortcuts offer resolution presets 480p, 720p, 1080p, and custom;
   duration presets 6s, 10s, 15s, and custom. Unsupported values are disabled or
   rejected according to the model's policy, including custom values and locks.
 - Aspect ratios use selection controls, not arbitrary text entry. Custom pixel
   dimensions use separate numeric controls and take precedence in the request.
+
+Image resolution protocol review (2026-09-07): Gemini Generate Content uses
+`imageConfig.imageSize`, Interactions uses `image_size`, and CPA Chat uses
+`image_config.image_size` with native uppercase presets. xAI uses lowercase
+`resolution` values (`1k`, `2k`) and disables the unsupported 4K shortcut. OpenAI Images
+and Responses use pixel-valued `size`, subject to each model's size constraints.
+Sources: [Gemini](https://ai.google.dev/gemini-api/docs/image-generation),
+[xAI](https://docs.x.ai/developers/model-capabilities/images/generation),
+[OpenAI](https://developers.openai.com/api/docs/guides/image-generation), and
+[CPA translation](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/translator/gemini/openai/chat-completions/gemini_openai_request.go).
+This review and fixture coverage do not establish live Provider acceptance.
+
+The Chat image adapter also supplies New API's `extra_body.google.image_config`
+alongside CPA's top-level configuration, with identical values. It recognizes
+New API's Markdown inline image data URLs in message content and assembled SSE
+text chunks; ordinary text links are not downloaded. Existing image validation,
+result-count bounds and filtered/incomplete response rejection still apply.
 
 ## Data behavior
 
@@ -93,7 +150,16 @@ Icons use existing Lucide; dialogs/popovers/tooltips use existing Radix. No depe
 
 `/settings/providers` manages shared OpenAI, Gemini and xAI connections. One connection stores one endpoint and encrypted credentials for both image and video models. Existing individual protocol identifiers remain readable; editing a legacy connection upgrades it to its family while preserving existing model protocol bindings.
 
-`/settings/models` provides search, connection/type filters, model creation, editing, copying, enable/disable and manual-model deletion. The model editor selects an explicit wire protocol, including a different family for compatible gateways, supported operations, reference-image limits and parameter rules. Rules define paths, scalar control types, choices, ranges, defaults, visibility, required values and locked defaults. Common configuration needs no JSON; advanced capabilities remain editable.
+`/settings/models` provides search, connection/type filters, model creation, editing, copying, enable/disable and deletion of both manual and discovered models. Custom adapter models remain definition-managed. The model editor selects an explicit wire protocol, including a different family for compatible gateways, supported operations, reference-image limits and parameter rules. Rules define paths, scalar control types, choices, ranges, defaults, visibility, required values and locked defaults. Common configuration needs no JSON; advanced capabilities remain editable.
+
+Connection settings do not expose the bulk model refresh command. Adding models
+uses a read-only remote catalog and saves only the selected model. Loading model
+capabilities queries server-side built-in presets for the selected model and
+protocol, independently of the connection family. It fills missing capabilities
+and parameter rules while preserving existing edits, and only Save writes them
+to the database. Catalog lists alone do not establish upstream feature support.
+The legacy refresh API remains available for internal/custom-adapter workflows;
+its existing manual override protection is retained.
 
 When parameter rules are enabled, the Composer renders only enabled, visible controls. Empty defaults are omitted from requests. The server independently applies the stored policy, rejects undeclared parameters and overrides client values for locked parameters before persisting the job. The selected model protocol is server-derived and snapshotted for asynchronous recovery. Native adapters still validate their actual wire contracts; configuring a parameter cannot make an upstream API support it.
 

@@ -1,4 +1,4 @@
-import { AccountResponseSchema, AccountListSchema, RemoteModelCatalogSchema } from '@imagine/shared';
+import { AccountResponseSchema, AccountListSchema, RemoteModelCatalogSchema, ModelCapabilityPresetResponseSchema, type ModelCapabilityPresetQuery } from '@imagine/shared';
 import {
   AdapterDocumentFormatSchema,
   AdapterEmptyQuerySchema,
@@ -746,6 +746,8 @@ export const internalClient = {
     }),
   discoverProviderModels: async (providerId: string) =>
     requestJson(`/internal/providers/${encodeURIComponent(providerId)}/models/catalog`, RemoteModelCatalogSchema),
+  getModelCapabilityPreset: async (providerId: string, query: ModelCapabilityPresetQuery) =>
+    requestJson(`/internal/providers/${encodeURIComponent(providerId)}/models/capabilities?${new URLSearchParams({ modelId: query.modelId, operation: query.operation, ...(query.profile ? { profile: query.profile } : {}) })}`, ModelCapabilityPresetResponseSchema),
   listTrustedAdapters: async (options: InternalRequestOptions = {}) => {
     parseEmptyQuery();
     return requestJson('/internal/adapters', TrustedAdapterPageSchema, requestSignal(options));

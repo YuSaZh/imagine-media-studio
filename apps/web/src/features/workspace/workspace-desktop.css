@@ -18,11 +18,6 @@
 .composer-desktop .model-dot { flex-shrink: 0; }
 .composer-desktop .desktop-image-option { flex: 0 0 70px; width: 70px; padding: 0 5px; }
 .composer-desktop .ratio-trigger { flex-shrink: 0; }
-.desktop-image-options { min-width: 200px; }
-.desktop-image-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; width: 240px; }
-.desktop-image-counts .choice { justify-content: center; }
-.desktop-image-custom { padding: 8px 10px; }
-.desktop-image-custom p { font-size: 12px; color: #a13e3e; margin-top: 8px; }
 .desktop-video-options { min-width: 180px; }
 .desktop-video-custom { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
 .desktop-video-custom label { display: grid; flex: 1; gap: 8px; min-width: 0; font-size: 12px; }

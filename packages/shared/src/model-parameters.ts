@@ -43,10 +43,11 @@ export function applyModelParameters(request: GenerationRequest, rules: readonly
   const result: Record<string, unknown> = { ...request, extra: { ...request.extra } };
   const extras = result.extra as Record<string, unknown>;
   const paths = new Set(rules.filter(rule => rule.enabled).map(rule => rule.path));
-  for (const key of PARAMETER_KEYS) if (request[key] !== undefined && !paths.has(key)) throw new Error(`模型未启用参数 ${key}`);
+  // Count belongs to the application's job fan-out, not the model's batch policy.
+  for (const key of PARAMETER_KEYS) if (key !== 'count' && request[key] !== undefined && !paths.has(key)) throw new Error(`模型未启用参数 ${key}`);
   for (const key of Object.keys(extras)) if (!paths.has(`extra.${key}`)) throw new Error(`模型未启用参数 extra.${key}`);
   for (const rule of rules) {
-    if (!rule.enabled) continue;
+    if (!rule.enabled || rule.path === 'count') continue;
     const target = rule.path.startsWith('extra.') ? extras : result;
     const key = rule.path.startsWith('extra.') ? rule.path.slice(6) : rule.path;
     const value = rule.locked ? rule.defaultValue : target[key] ?? rule.defaultValue;

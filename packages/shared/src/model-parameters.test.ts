@@ -17,11 +17,19 @@ describe('model parameter policy', () => {
     expect(applyModelParameters(request, rules)).toMatchObject({ quality: 'high', seed: 42, audio: true });
   });
   it('rejects disabled, unknown, out of range and missing required parameters', () => {
-    const rules = ModelParametersSchema.parse([{ path: 'count', label: 'Count', type: 'number', min: 1, max: 4, step: 1, required: true }]);
-    expect(() => applyModelParameters(request, rules)).toThrow('Count');
-    expect(() => applyModelParameters({ ...request, count: 5 }, rules)).toThrow('Count');
-    expect(() => applyModelParameters({ ...request, count: 2, extra: { unexpected: 1 } }, rules)).toThrow('extra.unexpected');
+    const rules = ModelParametersSchema.parse([{ path: 'durationSeconds', label: 'Duration', type: 'number', min: 1, max: 4, step: 1, required: true }]);
+    expect(() => applyModelParameters(request, rules)).toThrow('Duration');
+    expect(() => applyModelParameters({ ...request, durationSeconds: 5 }, rules)).toThrow('Duration');
+    expect(() => applyModelParameters({ ...request, durationSeconds: 2, extra: { unexpected: 1 } }, rules)).toThrow('extra.unexpected');
     expect(() => applyModelParameters({ ...request, format: 'png' }, [])).toThrow('format');
+  });
+  it('keeps task count independent of missing, disabled, locked and bounded model count rules', () => {
+    for (const policy of [[], [{ path: 'count', label: 'Count', type: 'number', enabled: false }], [{ path: 'count', label: 'Count', type: 'number', min: 1, max: 2, required: true }], [{ path: 'count', label: 'Count', type: 'number', defaultValue: 2, locked: true }]]) {
+      const rules = ModelParametersSchema.parse(policy);
+      expect(applyModelParameters({ ...request, count: 8 }, rules).count).toBe(8);
+      expect(applyModelParameters(request, rules).count).toBeUndefined();
+      expect(() => applyModelParameters({ ...request, count: 33 }, rules)).toThrow();
+    }
   });
   it('validates safe paths, duplicate paths, fixed defaults and enum defaults on save', () => {
     for (const path of ['prompt', 'providerId', 'profile', 'extra.__proto__', 'extra.authorization', 'extra.apiKey']) expect(ModelParametersSchema.safeParse([{ path, label: 'bad', type: 'text' }]).success).toBe(false);

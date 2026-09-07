@@ -22,6 +22,22 @@ function seeded(seed: number): () => number {
 }
 
 describe('strict Base64 envelopes', () => {
+  it('validates large payloads and the 64 MiB limit without regex stack growth', () => {
+    const maximum = 64 * 1024 * 1024;
+    const payload = 'A'.repeat(Math.ceil(maximum / 3) * 4 - 2) + '==';
+    expect(estimateBase64DecodedBytes(payload)).toBe(maximum);
+    expect(parseBase64Envelope(`data:image/jpeg;base64,${payload}`, { maxDecodedBytes: maximum }).decodedBytes).toBe(maximum);
+    const oneByteOver = payload.slice(0, -2) + 'A=';
+    expect(() => parseBase64Envelope(`data:image/jpeg;base64,${oneByteOver}`, { maxDecodedBytes: maximum })).toThrowError(expect.objectContaining({ code: 'base64_too_large' }));
+  });
+
+  it('rejects invalid characters and padding in large payloads', () => {
+    const prefix = 'A'.repeat(4 * 1024 * 1024);
+    for (const suffix of ['AAA!', 'AAA_', 'AA A', 'AA=A', '====', 'A===', 'AR==', 'AAB=']) {
+      expect(() => estimateBase64DecodedBytes(prefix + suffix)).toThrowError(expect.objectContaining({ code: 'invalid_base64' }));
+    }
+  });
+
   it('parses a MIME-allowed canonical data URL without decoding it', () => {
     expect(parseBase64Envelope('data:IMAGE/PNG;base64,AQID', {
       allowedMimeTypes: ['image/png'],

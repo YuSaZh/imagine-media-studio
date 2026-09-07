@@ -23,6 +23,27 @@ async function chooseRatio(page: Page, value: string) {
   await page.getByRole('button', { name: value, exact: true }).click();
 }
 
+async function selectValue(page: Page, label: string, value: string | { label: string }) {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  if (typeof value === 'string') await page.getByRole('listbox', { name: label, exact: true }).locator(`[role="option"][value=${JSON.stringify(value)}]`).click();
+  else await page.getByRole('option', { name: value.label, exact: true }).click();
+}
+
+async function chooseResolution(page: Page, value: string) {
+  await page.getByRole('button', { name: '分辨率', exact: true }).click();
+  await page.getByRole('button', { name: value === 'custom' ? '自定义' : value, exact: true }).click();
+}
+
+async function chooseCount(page: Page, value: string) {
+  await page.getByRole('button', { name: '生成数量', exact: true }).click();
+  if (['1', '2', '4', '8'].includes(value)) await page.locator('.count-segments').getByRole('button', { name: value, exact: true }).click();
+  else {
+    await page.getByRole('button', { name: '自定义生成数量', exact: true }).click();
+    await page.getByLabel('自定义张数', { exact: true }).fill(value);
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+  }
+}
+
 async function savedModelOptions(request: APIRequestContext, providerId: string, name: string, mode: 'image' | 'video', options: object) {
   const { items } = await (await request.get('/internal/models?limit=100')).json();
   const model = (items as ModelDto[]).find(model => model.providerId === providerId && model.displayName === name)!;
@@ -55,7 +76,7 @@ test('generation memory separates projects modes and models before submission', 
     const choose = async (id: string) => {
       if (page.viewportSize()!.width < 600) {
         await page.getByRole('button', { name: '生成设置', exact: true }).click();
-        await page.getByLabel('模型与服务', { exact: true }).selectOption({ label: `${provider.name} · ${id}` });
+        await selectValue(page, '模型与服务', { label: `${provider.name} · ${id}` });
         await page.keyboard.press('Escape');
         return;
       }
@@ -64,10 +85,10 @@ test('generation memory separates projects modes and models before submission', 
     };
     const count = async (value?: string) => {
       await page.getByRole('button', { name: '生成设置', exact: true }).click();
-      if (value) await page.getByLabel('生成数量', { exact: true }).selectOption(value);
-      const result = await page.getByLabel('生成数量', { exact: true }).inputValue();
+      if (value) await chooseCount(page, value);
+      const result = await page.getByRole('button', { name: '生成数量', exact: true }).innerText();
       await page.keyboard.press('Escape');
-      return result;
+      return result.replace('×', '');
     };
     await choose('memory-a'); await count('3');
     await choose('memory-b'); expect(await count()).toBe('1'); await count('2');
@@ -110,12 +131,11 @@ test('model editor offers the complete catalog and cross-family protocols', asyn
     await page.screenshot({ path: `/tmp/imagine-catalog-search-${page.viewportSize()!.width}.png` });
     await picker.press('Enter');
     await expect(page.getByLabel('模型显示名称', { exact: true })).toHaveValue('Nano Banana 2');
-    await expect(page.getByLabel('模型调用协议', { exact: true })).toHaveValue('');
-    await expect(page.getByLabel('模型调用协议', { exact: true }).locator('option').first()).toContainText('自动匹配（Gemini · Generate Content）');
+        await expect(page.getByRole('combobox', { name: '模型调用协议', exact: true })).toContainText('自动匹配（Gemini · Generate Content）');
     await picker.click();
     await picker.fill('unknown');
     await page.getByRole('option', { name: 'unknown-model', exact: true }).click();
-    await expect(page.getByLabel('模型调用协议', { exact: true }).locator('option').first()).toContainText('提供商默认（OpenAI）');
+    await expect(page.getByRole('combobox', { name: '模型调用协议', exact: true })).toContainText('提供商默认（OpenAI）');
     await picker.click();
     await picker.fill('gemini-3.1');
     await picker.press('Escape');
@@ -123,7 +143,7 @@ test('model editor offers the complete catalog and cross-family protocols', asyn
     await picker.click();
     await picker.fill('gemini-3.1');
     await picker.press('Enter');
-    await page.getByLabel('模型调用协议', { exact: true }).selectOption('openai-responses-image-v1');
+    await selectValue(page, '模型调用协议', 'openai-responses-image-v1');
     await page.screenshot({ path: `/tmp/imagine-catalog-editor-${page.viewportSize()!.width}.png` });
     await page.getByRole('button', { name: '保存模型', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '添加模型', exact: true })).toHaveCount(0);
@@ -252,10 +272,10 @@ test('connections, persisted preferences and canonical legacy entry', async ({ p
   await page.getByRole('region', { name: '连接 Mock Provider', exact: true }).getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('连接测试通过');
   await open(page, '/settings');
-  await page.getByLabel('默认创作类型', { exact: true }).selectOption('video');
+  await selectValue(page, '默认创作类型', 'video');
   await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['composer.default_mode']).toBe('video');
   await page.reload();
-  await expect(page.getByLabel('默认创作类型', { exact: true })).toHaveValue('video');
+  await expect(page.getByRole('combobox', { name: '默认创作类型', exact: true })).toHaveText('视频');
   await open(page, '/interaction.html');
   await expect(page).toHaveURL(/\/imagine$/);
   await expect(page.locator('.creation-composer')).toBeVisible();
@@ -270,7 +290,7 @@ test('provider editor protects secrets and custom adapter management persists a 
   await open(page, '/settings/providers');
   await page.getByRole('button', { name: '添加连接', exact: true }).first().click();
   await page.getByLabel('连接名称', { exact: true }).fill('Workspace adapter');
-  await page.getByLabel('接口类型', { exact: true }).selectOption('custom-http-v1');
+  await selectValue(page, '接口类型', 'custom-http-v1');
   await page.getByLabel('Base URL', { exact: true }).fill('https://api.example.com');
   const secret = 'workspace-test-secret-not-production';
   await page.getByLabel('API Key', { exact: true }).fill(secret);
@@ -334,19 +354,21 @@ test('custom generation parameters reach the job request from the bottom compose
     await open(page);
     await page.getByRole('button', { name: '生成设置', exact: true }).click();
     await chooseRatio(page, '4:3');
-    await page.getByLabel('分辨率', { exact: true }).selectOption('custom');
-    await page.getByLabel('像素宽度', { exact: true }).fill('1920');
-    await page.getByLabel('像素高度', { exact: true }).fill('1080');
-    await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('16:9');
-    await page.getByLabel('生成数量', { exact: true }).selectOption('2');
-    await page.getByLabel('质量', { exact: true }).selectOption('high');
-    await page.getByLabel('输出格式', { exact: true }).selectOption('jpeg');
+    await chooseResolution(page, 'custom');
+    await page.getByRole('button', { name: '解锁画幅比例', exact: true }).click();
+    await page.getByLabel('自定义图片宽度', { exact: true }).fill('1920');
+    await page.getByLabel('自定义图片高度', { exact: true }).fill('1080');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('auto');
+    await chooseCount(page, '2');
+    await selectValue(page, '质量', 'high');
+    await selectValue(page, '输出格式', 'jpeg');
     await page.keyboard.press('Escape');
     await page.getByLabel('创作描述', { exact: true }).fill('parameter contract');
     const sent = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
     await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: { code: 'test_only', message: '参数捕获测试' } } }) : route.continue());
     await page.getByRole('button', { name: '开始生成', exact: true }).click();
-    expect((await sent).postDataJSON()).toMatchObject({ resolution: '1920x1080', count: 2, extra: { quality: 'high', output_format: 'jpeg' } });
+    expect((await sent).postDataJSON()).toMatchObject({ resolution: '1920x1088', count: 2, extra: { quality: 'high', output_format: 'jpeg' } });
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });
 
@@ -363,7 +385,7 @@ test('aspect ratio stays selectable with managed rules and mode controls keep st
     await open(page);
     const mobile = page.viewportSize()!.width <= 760;
     const ratio = page.getByRole('button', { name: '选择画幅', exact: true });
-    if (mobile) await expect(ratio).toBeHidden();
+    if (mobile) await expect(ratio).toBeVisible();
     else {
       await expect(ratio).toBeVisible();
       await ratio.click();
@@ -461,7 +483,7 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
     for (const name of ['Pixel image', 'Named image', 'Locked image']) {
       if (mobile) {
         await page.getByRole('button', { name: '生成设置', exact: true }).click();
-        await page.getByLabel('模型与服务', { exact: true }).selectOption({ label: `${provider.name} · ${name}` });
+        await selectValue(page, '模型与服务', { label: `${provider.name} · ${name}` });
         await page.keyboard.press('Escape');
       } else {
         await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
@@ -486,24 +508,58 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
       await page.getByRole('button', { name: '16:9', exact: true }).click();
       await page.keyboard.press('Escape');
       await expect(page.locator('.creation-controls .lucide-chevron-down')).toHaveCount(0);
-      if (mobile) { await expect(resolution).toHaveCount(0); await expect(count).toHaveCount(0); continue; }
-      if (name === 'Locked image') { await expect(resolution).toBeDisabled(); await expect(resolution).toContainText('2K'); await expect(count).toBeDisabled(); await expect(count).toContainText('×2'); continue; }
+      if (mobile) {
+        await expect(resolution).toBeVisible(); await expect(count).toBeVisible();
+        const shortcutBoxes = await page.getByRole('group', { name: '图片快捷设置' }).locator('button').evaluateAll(nodes => nodes.map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, height: box.height }; }));
+        expect(shortcutBoxes).toHaveLength(3);
+        expect(new Set(shortcutBoxes.map(box => box.y)).size).toBe(1);
+        const modeBox = (await page.getByRole('group', { name: '创作类型', exact: true }).boundingBox())!;
+        expect(Math.abs(shortcutBoxes[0]!.y + shortcutBoxes[0]!.height / 2 - modeBox.y - modeBox.height / 2)).toBeLessThan(1);
+        expect(shortcutBoxes[0]!.x).toBeGreaterThanOrEqual(modeBox.x + modeBox.width);
+        await page.mouse.move(0, 0);
+        await expect(resolution).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        for (const box of shortcutBoxes) { expect(box.height).toBeGreaterThanOrEqual(40); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.right).toBeLessThanOrEqual(page.viewportSize()!.width); }
+        await page.getByRole('button', { name: '生成设置', exact: true }).click();
+        const selector = page.getByLabel('分辨率', { exact: true });
+        if (name === 'Locked image') { await expect(selector).toBeDisabled(); await expect(selector).toContainText('2K'); }
+        else {
+          await chooseResolution(page, '4K');
+          await savedModelOptions(request, provider.id, name, 'image', { parameters: { resolution: name === 'Pixel image' ? '3840x2160' : '4K' } });
+          await chooseRatio(page, '9:16');
+          await expect(selector).toContainText('4K');
+          await savedModelOptions(request, provider.id, name, 'image', { parameters: { resolution: name === 'Pixel image' ? '2160x3840' : '4K' } });
+          await page.screenshot({ path: testInfo.outputPath(`${name}-mobile-resolution.png`), animations: 'disabled' });
+        }
+        await page.keyboard.press('Escape');
+        continue;
+      }
+      if (name === 'Locked image') { await expect(resolution).toBeDisabled(); await expect(resolution).toContainText('2K'); await expect(count).toBeEnabled(); await expect(count).toContainText('×1'); continue; }
       const ratioBox = (await page.getByRole('button', { name: '选择画幅', exact: true }).boundingBox())!;
       expect((await resolution.boundingBox())!.x).toBeGreaterThanOrEqual(ratioBox.x + ratioBox.width);
       await resolution.click();
-      await expect(page.locator('.desktop-image-options > .choice')).toHaveText(['1K', '2K', '4K', '自定义']);
+      await expect(page.locator('.image-resolution-options > .choice')).toHaveText(['auto', '1K', '2K', '4K', '自定义']);
       await page.getByRole('button', { name: '2K', exact: true }).click();
       await expect(resolution).toContainText('2K');
       await count.click();
-      await expect(page.locator('.desktop-image-counts .choice')).toHaveText(['×1', '×2', '×3', '×4']);
-      await page.getByRole('button', { name: '×2', exact: true }).click();
+      await expect(page.locator('.count-segments button')).toHaveText(['1', '2', '4', '8', '']);
+      await page.getByRole('button', { name: '2', exact: true }).click();
       if (name === 'Pixel image') {
+        await savedModelOptions(request, provider.id, name, 'image', { count: 2, parameters: { resolution: '2048x1152' } });
+        await resolution.click();
+        await page.getByRole('button', { name: '4K', exact: true }).click();
+        await savedModelOptions(request, provider.id, name, 'image', { count: 2, parameters: { resolution: '3840x2160' } });
+        await page.getByRole('button', { name: '选择画幅', exact: true }).click();
+        await page.getByRole('button', { name: '9:16', exact: true }).click();
+        await page.keyboard.press('Escape');
+        await expect(resolution).toContainText('4K');
+        await savedModelOptions(request, provider.id, name, 'image', { count: 2, parameters: { resolution: '2160x3840' } });
         await resolution.click();
         await page.getByRole('button', { name: '自定义', exact: true }).click();
         await page.getByLabel('自定义图片宽度').fill('0');
         await page.getByRole('button', { name: '应用', exact: true }).click();
         await expect(page.getByRole('alert').filter({ hasText: '图片尺寸超出' })).toBeVisible();
-        await page.getByLabel('自定义图片宽度').fill('1920');
+        await page.getByRole('button', { name: '解锁画幅比例', exact: true }).click();
+    await page.getByLabel('自定义图片宽度').fill('1920');
         await page.getByLabel('自定义图片高度').fill('1080');
         await page.getByRole('button', { name: '应用', exact: true }).click();
         await expect(resolution).toContainText('自定义');
@@ -516,13 +572,173 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
       await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: { code: 'captured', message: 'Captured locally' } } }) : route.continue());
       const submitted = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
       await page.getByRole('button', { name: '开始生成', exact: true }).click();
-      expect((await submitted).postDataJSON()).toMatchObject({ count: 2, resolution: name === 'Pixel image' ? '1920x1080' : '2K' });
-      await savedModelOptions(request, provider.id, name, 'image', { parameters: { count: 2, resolution: name === 'Pixel image' ? '1920x1080' : '2K' } });
+      expect((await submitted).postDataJSON()).toMatchObject({ count: 2, resolution: name === 'Pixel image' ? '1920x1088' : '2K' });
+      await savedModelOptions(request, provider.id, name, 'image', { count: 2, parameters: { resolution: name === 'Pixel image' ? '1920x1088' : '2K' } });
       await page.reload();
       await expect(count).toContainText('×2');
       await expect(resolution).toContainText(name === 'Pixel image' ? '自定义' : '2K');
       await page.screenshot({ path: testInfo.outputPath(`${name}-image-shortcuts.png`), animations: 'disabled' });
     }
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('mobile pixel resolution presets submit mapped dimensions and retain custom sizes', async ({ page, request }, testInfo) => {
+  test.skip(page.viewportSize()!.width > 760, 'Mobile generation settings');
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Mobile pixels ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'mobile-pixels', displayName: 'Mobile pixels', enabled: true, capabilities: {
+      operations: ['image.generate'], aspectRatios: ['1:1', '16:9', '9:16'], resolutions: ['auto', '1024x1024', '1920x1080'],
+      customFields: { type: 'object', properties: { size: { type: 'string' } } },
+    } } })).status()).toBe(201);
+    await open(page);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await selectValue(page, '模型与服务', { label: `${provider.name} · Mobile pixels` });
+    await chooseRatio(page, '16:9');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '选择图片分辨率', exact: true }).click();
+    await expect(page.locator('.image-resolution-options > .choice')).toHaveText(['auto', '1K', '2K', '4K', '自定义']);
+    await page.getByRole('button', { name: '4K', exact: true }).click();
+    await page.getByRole('button', { name: '选择图片生成数量', exact: true }).click();
+    await page.getByRole('button', { name: '2', exact: true }).click();
+    await page.screenshot({ path: testInfo.outputPath('mobile-image-shortcuts.png'), animations: 'disabled' });
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await expect(page.getByRole('button', { name: '生成数量', exact: true })).toHaveText('×2');
+    const resolution = page.getByLabel('分辨率', { exact: true });
+    await chooseResolution(page, '4K');
+    await chooseRatio(page, '9:16');
+    await savedModelOptions(request, provider.id, 'Mobile pixels', 'image', { resolution: 'custom', customWidth: 2160, customHeight: 3840 });
+    await page.keyboard.press('Escape');
+    await page.getByLabel('创作描述', { exact: true }).fill('mobile resolution fixture');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: { code: 'captured', message: 'Captured locally' } } }) : route.continue());
+    const submitted = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    expect((await submitted).postDataJSON()).toMatchObject({ resolution: '2160x3840' });
+    await page.reload();
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await expect(resolution).toContainText('4K');
+    await chooseResolution(page, 'custom');
+    await page.getByLabel('自定义图片宽度').fill('0');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: '图片尺寸超出' })).toBeVisible();
+    await page.getByRole('button', { name: '解锁画幅比例', exact: true }).click();
+    await page.getByLabel('自定义图片宽度').fill('1920');
+    await page.getByLabel('自定义图片高度').fill('1080');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await savedModelOptions(request, provider.id, 'Mobile pixels', 'image', { resolution: 'custom', customWidth: 1920, customHeight: 1088 });
+    await page.screenshot({ path: testInfo.outputPath('mobile-custom-resolution.png'), animations: 'disabled' });
+    await chooseResolution(page, 'auto');
+    await savedModelOptions(request, provider.id, 'Mobile pixels', 'image', { resolution: 'auto' });
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: '选择图片分辨率', exact: true })).toContainText('自动');
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await expect(page.getByRole('group', { name: '图片快捷设置' })).toHaveCount(0);
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('count presets custom count ratio lock and card selects work across layouts', async ({ page, request }, testInfo) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Independent count ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'independent-image', displayName: 'Independent image', enabled: true, capabilities: {
+      operations: ['image.generate'], supportsBatchCount: false, maxBatchCount: 1,
+      parameters: [
+        { path: 'count', label: '生成数量', type: 'number', max: 1, defaultValue: 1, locked: true, visible: false },
+        { path: 'aspectRatio', label: '画幅', type: 'select', options: ['auto', '16:9'], defaultValue: '16:9' },
+        { path: 'resolution', label: '分辨率', type: 'select', options: ['1K', '2K', '4K'], allowCustom: true, defaultValue: '1K' },
+        { path: 'quality', label: '质量', type: 'select', options: ['low', 'medium', 'high'], defaultValue: 'medium' },
+      ],
+    } } })).status()).toBe(201);
+    await open(page);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await selectValue(page, '模型与服务', { label: `${provider.name} · Independent image` });
+    await page.keyboard.press('Escape');
+    const count = page.getByRole('button', { name: '选择图片生成数量', exact: true });
+    await expect(count).toBeEnabled();
+    await count.click();
+    await expect(page.locator('.count-segments button')).toHaveText(['1', '2', '4', '8', '']);
+    await page.screenshot({ path: testInfo.outputPath('count-presets.png'), animations: 'disabled' });
+    await page.getByRole('button', { name: '8', exact: true }).click();
+    await expect(count).toContainText('×8');
+    await count.click();
+    await page.getByRole('button', { name: '自定义生成数量', exact: true }).click();
+    await page.getByLabel('自定义张数', { exact: true }).fill('33');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('1 到 32');
+    await page.getByLabel('自定义张数', { exact: true }).fill('13');
+    await page.getByLabel('自定义张数', { exact: true }).press('Enter');
+    await expect(count).toContainText('×13');
+    await page.getByRole('button', { name: '选择图片分辨率', exact: true }).click();
+    await page.getByRole('button', { name: '2K', exact: true }).click();
+    await page.getByRole('button', { name: '选择图片分辨率', exact: true }).click();
+    await page.getByRole('button', { name: '自定义', exact: true }).click();
+    const width = page.getByLabel('自定义图片宽度', { exact: true });
+    const height = page.getByLabel('自定义图片高度', { exact: true });
+    await width.fill('1919');
+    await height.focus();
+    await expect(width).toHaveValue('1920');
+    await expect(height).toHaveValue('1088');
+    await width.focus();
+    await expect(width).toHaveValue('1920');
+    await height.fill('1440');
+    await expect(width).toHaveValue('2560');
+    await page.screenshot({ path: testInfo.outputPath('resolution-ratio-lock.png'), animations: 'disabled' });
+    await page.getByRole('button', { name: '解锁画幅比例', exact: true }).click();
+    await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toContainText('auto');
+    await expect(width).toHaveValue('2560');
+    await expect(height).toHaveValue('1440');
+    await savedModelOptions(request, provider.id, 'Independent image', 'image', { parameters: { aspectRatio: 'auto', resolution: '2K' } });
+    await page.screenshot({ path: testInfo.outputPath('resolution-ratio-unlocked.png'), animations: 'disabled' });
+    await width.fill('1000');
+    await height.focus();
+    await expect(width).toHaveValue('1008');
+    await expect(height).toHaveValue('1440');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await expect(page.getByRole('button', { name: '生成数量', exact: true })).toHaveText('×13');
+    await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('auto');
+    await chooseResolution(page, 'custom');
+    await width.fill('2001');
+    await height.focus();
+    await expect(width).toHaveValue('2000');
+    await expect(height).toHaveValue('1440');
+    await page.getByRole('button', { name: '应用', exact: true }).click();
+    const quality = page.getByRole('combobox', { name: '质量', exact: true });
+    await quality.focus();
+    await quality.press('ArrowDown');
+    await expect(page.getByRole('option', { name: 'medium', exact: true })).toBeFocused();
+    await page.keyboard.press('End');
+    await expect(page.getByRole('option', { name: 'high', exact: true })).toBeFocused();
+    await page.keyboard.press('Home');
+    await page.keyboard.press('h');
+    await expect(page.getByRole('option', { name: 'high', exact: true })).toBeFocused();
+    expect((await new AxeBuilder({ page }).include('.select-options').analyze()).violations).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath('parameter-select.png'), animations: 'disabled' });
+    await page.keyboard.press('Enter');
+    await expect(quality).toBeFocused();
+    await expect(quality).toHaveText('high');
+    await quality.click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: '生成设置', exact: true })).toBeVisible();
+    await expect(page.locator('select')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.keyboard.press('Escape');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured' } }) : route.continue());
+    await page.getByLabel('创作描述', { exact: true }).fill('independent tasks');
+    const sent = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    const payload = (await sent).postDataJSON();
+    expect(payload).toMatchObject({ count: 13, resolution: '2000x1440', quality: 'high' });
+    expect(payload).not.toHaveProperty('aspectRatio');
+    await savedModelOptions(request, provider.id, 'Independent image', 'image', { count: 13, parameters: { resolution: '2000x1440', aspectRatio: 'auto' } });
+    await page.reload();
+    await expect(count).toContainText('×13');
+    await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toContainText('auto');
+    const { items } = await (await request.get(`/internal/models?providerId=${provider.id}`)).json();
+    const model = items.find((item: ModelDto) => item.displayName === 'Independent image');
+    expect((await request.patch(`/internal/models/${model.id}`, { data: { capabilities: { ...model.capabilities, parameters: model.capabilities.parameters.map((rule: { path: string }) => rule.path === 'aspectRatio' ? { ...rule, locked: true, defaultValue: '16:9' } : rule) } } })).ok()).toBeTruthy();
+    await page.reload();
+    await page.getByRole('button', { name: '选择图片分辨率', exact: true }).click();
+    await page.getByRole('button', { name: '自定义', exact: true }).click();
+    await expect(page.getByRole('button', { name: '模型固定画幅比例', exact: true })).toBeDisabled();
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
@@ -556,7 +772,8 @@ test('desktop video shortcuts preserve presets custom values and model rules', a
       await page.getByRole('button', { name: '15s', exact: true }).click();
       await expect(duration).toContainText('15s');
       await page.getByRole('button', { name: '生成设置', exact: true }).click();
-      await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('1080p');
+      if (name === 'Standard video') await expect(page.getByRole('combobox', { name: '分辨率', exact: true })).toHaveText('1080p');
+      else await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('1080p');
       await expect(page.getByLabel('视频时长', { exact: true })).toHaveValue('15');
       await page.keyboard.press('Escape');
       await resolution.click();
@@ -636,6 +853,42 @@ test('desktop gallery scroll keeps headers fixed and paginates in its own viewpo
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 });
 
+test('catalog models delete directly and capability loading preserves model edits', async ({ page, request }) => {
+  const refresh = await request.post('/internal/providers/mock/models/refresh');
+  expect(refresh.status()).toBe(200);
+  const discovered = (await refresh.json()).items.find((model: ModelDto) => model.capabilitySource !== 'manual') as ModelDto;
+  expect(discovered).toBeDefined();
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `CPA capability fixture ${randomUUID()}`, type: 'xai', enabled: true } })).json();
+  try {
+    const created = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'gemini-3.1-flash-image', displayName: 'Nano Banana fixture', capabilities: { operations: ['image.generate'], parameters: [] }, enabled: true } });
+    expect(created.status()).toBe(201);
+    const saved = (await created.json()).model;
+    await open(page, '/settings/providers');
+    await expect(page.getByRole('button', { name: '刷新模型', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: `删除模型 ${discovered.displayName}`, exact: true }).click();
+    await page.getByRole('button', { name: '确认删除', exact: true }).click();
+    await expect(page.getByRole('button', { name: `删除模型 ${discovered.displayName}`, exact: true })).toHaveCount(0);
+    expect((await (await request.get('/internal/models')).json()).items.some((model: ModelDto) => model.id === discovered.id)).toBe(false);
+    await page.getByRole('button', { name: '编辑模型 Nano Banana fixture', exact: true }).click();
+    await expect(page.getByLabel('参数路径 1', { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '从模型能力载入', exact: true }).click();
+    await expect(page.getByLabel('参数路径 1', { exact: true })).toHaveValue('aspectRatio');
+    await expect(page.getByLabel('参数路径 2', { exact: true })).toHaveValue('resolution');
+    expect((await (await request.get('/internal/models')).json()).items.find((model: ModelDto) => model.id === saved.id).capabilities).toEqual(saved.capabilities);
+    await page.getByLabel('参数默认值 1', { exact: true }).fill('16:9');
+    await page.getByLabel('模型显示名称', { exact: true }).fill('Pinned Nano Banana');
+    await page.getByRole('button', { name: '从模型能力载入', exact: true }).click();
+    await expect(page.getByRole('button', { name: '从模型能力载入', exact: true })).toBeEnabled();
+    await expect(page.getByLabel('参数默认值 1', { exact: true })).toHaveValue('16:9');
+    await page.getByRole('button', { name: '保存模型', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '编辑模型', exact: true })).toHaveCount(0);
+    const updated = (await (await request.get('/internal/models')).json()).items.find((model: ModelDto) => model.id === saved.id);
+    expect(updated).toMatchObject({ displayName: 'Pinned Nano Banana', capabilities: { resolutions: ['512', '1K', '2K', '4K'], parameters: expect.arrayContaining([expect.objectContaining({ path: 'aspectRatio', defaultValue: '16:9' })]) } });
+    await page.reload();
+    await expect(page.getByRole('button', { name: '删除模型 Pinned Nano Banana', exact: true })).toBeVisible();
+  } finally { await request.delete(`/internal/providers/${provider.id}`); await request.post('/internal/providers/mock/models/refresh'); }
+});
+
 test('shared connection model management saves rules and renders them in the composer', async ({ page, request }) => {
   const name = `Managed connection ${randomUUID()}`;
   const created = await request.post('/internal/providers', { data: { name, type: 'xai', baseUrl: 'https://api.example.com/v1', enabled: true, isDefault: true } });
@@ -643,33 +896,41 @@ test('shared connection model management saves rules and renders them in the com
   const { provider } = await created.json();
   try {
     for (const kind of ['image', 'video']) {
-      const response = await request.post('/internal/models', { data: { providerId: provider.id, modelId: `grok-imagine-${kind}-1.5`, displayName: `Managed ${kind}`, capabilities: { operations: [`${kind}.generate`], profile: `xai-imagine-${kind}-v1`, parameters: kind === 'image' ? [{ path: 'count', label: '生成数量', type: 'number', min: 1, max: 4, step: 1, defaultValue: 1 }] : [] }, enabled: true } });
+      const response = await request.post('/internal/models', { data: { providerId: provider.id, modelId: `grok-imagine-${kind}-1.5`, displayName: `Managed ${kind}`, capabilities: { operations: [`${kind}.generate`], profile: `xai-imagine-${kind}-v1`, parameters: kind === 'image' ? [{ path: 'quality', label: '质量', type: 'text', defaultValue: 'low' }] : [] }, enabled: true } });
       expect(response.status()).toBe(201);
     }
     await open(page, '/settings/providers');
     await page.getByRole('button', { name: `编辑连接 ${name}`, exact: true }).click();
     const types = page.getByLabel('接口类型', { exact: true });
-    await expect(types).toHaveValue('xai');
-    expect(await types.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['openai', 'gemini', 'xai', 'custom-http-v1', 'custom-js-v1']);
+    await expect(types).toHaveText('xAI');
+    await types.click();
+    expect(await page.getByRole('listbox', { name: '接口类型', exact: true }).getByRole('option').evaluateAll(options => options.map(option => (option as HTMLButtonElement).value))).toEqual(['openai', 'gemini', 'xai', 'custom-http-v1', 'custom-js-v1']);
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: '取消', exact: true }).click();
     await open(page, '/settings/models');
-    await page.getByLabel('筛选连接', { exact: true }).selectOption(provider.id);
+    await selectValue(page, '筛选连接', provider.id);
     await expect(page.locator('.model-table tbody tr')).toHaveCount(2);
     await page.getByRole('button', { name: '编辑模型 Managed image', exact: true }).click();
-    await expect(page.getByLabel('模型调用协议', { exact: true })).toHaveValue('xai-imagine-image-v1');
-    await page.getByLabel('参数默认值 1', { exact: true }).fill('2');
+    await expect(page.getByRole('combobox', { name: '模型调用协议', exact: true })).toContainText('xAI');
+    await page.getByRole('combobox', { name: '选择参数路径 1', exact: true }).click();
+    await expect(page.getByRole('option', { name: 'count', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: `/tmp/imagine-parameter-path-${page.viewportSize()!.width}.png` });
+    await page.getByRole('option', { name: 'quality', exact: true }).click();
+    await page.getByLabel('参数默认值 1', { exact: true }).fill('high');
     await page.getByLabel('固定默认值', { exact: true }).check();
     await page.screenshot({ path: `/tmp/imagine-model-editor-${page.viewportSize()!.width}.png`, fullPage: true });
     await page.getByRole('button', { name: '保存模型', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '编辑模型', exact: true })).toHaveCount(0);
     const models = (await (await request.get(`/internal/models?providerId=${provider.id}`)).json()).items;
-    expect(models.find((model: { displayName: string }) => model.displayName === 'Managed image').capabilities.parameters[0]).toMatchObject({ defaultValue: 2, locked: true });
+    expect(models.find((model: { displayName: string }) => model.displayName === 'Managed image').capabilities.parameters[0]).toMatchObject({ defaultValue: 'high', locked: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `/tmp/imagine-model-admin-${page.viewportSize()!.width}.png`, fullPage: true });
     await open(page);
     await page.getByRole('button', { name: '生成设置', exact: true }).click();
-    await expect(page.getByLabel('生成数量', { exact: true })).toHaveValue('2');
-    await expect(page.getByLabel('生成数量', { exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '生成数量', exact: true })).toBeEnabled();
+    await chooseCount(page, '2');
+    await expect(page.getByLabel('质量', { exact: true })).toHaveValue('high');
+    await expect(page.getByLabel('质量', { exact: true })).toBeDisabled();
     await expect(page.getByLabel('画幅', { exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await page.getByLabel('创作描述', { exact: true }).fill('managed parameters');
@@ -677,7 +938,7 @@ test('shared connection model management saves rules and renders them in the com
     const sent = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
     await page.getByRole('button', { name: '开始生成', exact: true }).click();
     const payload = (await sent).postDataJSON();
-    expect(payload).toMatchObject({ providerId: provider.id, count: 2 });
+    expect(payload).toMatchObject({ providerId: provider.id, count: 2, quality: 'high' });
     expect(payload).not.toHaveProperty('format');
     expect(payload).not.toHaveProperty('aspectRatio');
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
@@ -780,9 +1041,9 @@ test('card references, video parameter memory and responsive video controls', as
   }
   await page.screenshot({ path: `/tmp/imagine-inline-video-${page.viewportSize()!.width}.png` });
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
-  await page.getByLabel('分辨率', { exact: true }).selectOption('720p');
+  await selectValue(page, '分辨率', '720p');
   await chooseRatio(page, '9:16');
-  await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('720p');
+  await expect(page.getByRole('combobox', { name: '分辨率', exact: true })).toHaveText('720p');
   await page.keyboard.press('Escape');
   await page.getByLabel('创作描述', { exact: true }).fill('video remembers independent dimensions');
   const submitted = page.waitForRequest(request => request.url().endsWith('/internal/jobs') && request.method() === 'POST');
@@ -793,7 +1054,7 @@ test('card references, video parameter memory and responsive video controls', as
   await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('9:16');
-  await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('720p');
+  await expect(page.getByRole('combobox', { name: '分辨率', exact: true })).toHaveText('720p');
 });
 
 test('account category exposes administrator account management and live public domain', async ({ page, request }) => {

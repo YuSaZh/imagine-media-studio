@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { z } from 'zod';
 
-import { MaskTargetError } from '@imagine/shared';
+import { Base64EnvelopeError, estimateBase64DecodedBytes, MaskTargetError } from '@imagine/shared';
 
 import {
   commitStagedFile,
@@ -152,15 +152,21 @@ function parseBase64(input: string, maxBytes: number): { bytes: Buffer; claimedM
   }
   if (
     value.length === 0 ||
-    value.length > Math.ceil(maxBytes / 3) * 4 + 4 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+    value.length > Math.ceil(maxBytes / 3) * 4 + 4
   ) {
     throw new InvalidBase64MediaError('Media payload is not valid canonical Base64.');
   }
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) {
+  let decodedBytes: number;
+  try {
+    decodedBytes = estimateBase64DecodedBytes(value);
+  } catch (error) {
+    if (error instanceof Base64EnvelopeError) throw new InvalidBase64MediaError('Media payload is not valid canonical Base64.');
+    throw error;
+  }
+  if (decodedBytes === 0 || decodedBytes > maxBytes) {
     throw new InvalidBase64MediaError(`Media payload exceeds the ${maxBytes} byte limit.`);
   }
+  const bytes = Buffer.from(value, 'base64');
   return claimedMimeType === undefined ? { bytes } : { bytes, claimedMimeType };
 }
 

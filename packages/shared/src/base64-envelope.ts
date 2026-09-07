@@ -47,7 +47,6 @@ export interface DecodedBase64Envelope {
 }
 
 const DATA_URL = /^data:([A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i;
-const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 export const MAX_BASE64_DATA_URL_HEADER_CHARS = 256;
 
@@ -68,13 +67,20 @@ function assertCanonicalPadding(payload: string): void {
 export function estimateBase64DecodedBytes(payload: string): number {
   if (
     payload.length === 0 ||
-    payload.length % 4 !== 0 ||
-    !CANONICAL_BASE64.test(payload)
+    payload.length % 4 !== 0
   ) {
     throw new Base64EnvelopeError('invalid_base64', 'Base64 payload is not canonical.');
   }
-  assertCanonicalPadding(payload);
   const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+  // Repeated regex groups can exhaust the engine stack on large image payloads.
+  for (let index = 0; index < payload.length - padding; index += 1) {
+    const code = payload.charCodeAt(index);
+    if (!((code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) || code === 43 || code === 47)) {
+      throw new Base64EnvelopeError('invalid_base64', 'Base64 payload is not canonical.');
+    }
+  }
+  assertCanonicalPadding(payload);
   return (payload.length / 4) * 3 - padding;
 }
 

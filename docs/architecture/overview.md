@@ -53,7 +53,15 @@ secrets and full videos from caches. See the [workspace spec](../design-spec/wor
 
 Model capabilities and stored parameter policies drive controls and server
 validation. The server selects and snapshots the model's wire protocol for a job.
+Generation count is an application fan-out count (1-32), excluded from model
+parameter policy even when legacy model records contain count rules. The job
+route creates that many durable jobs with one requested output each; queue
+limits govern execution concurrency independently of upstream batch capabilities.
 Adapters map vendor payloads and normalize URLs, Base64, MIME, states, and errors.
+Large Base64 payloads use a shared linear canonical validator before decoding;
+encoded and decoded byte limits remain enforced. Unexpected internal processing
+failures are classified separately from missing model protocols and do not
+automatically trigger another generation request.
 Connection/catalog success does not establish that generation will succeed.
 
 All Provider requests and remote media downloads use the guarded transport with

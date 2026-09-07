@@ -1,14 +1,19 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ModelPolicyEditor, parameterPresets } from './model-policy-editor';
+import { ModelPolicyEditor, parameterPresets, mergeCapabilityPresets } from './model-policy-editor';
 
 describe('model parameter administration', () => {
+  it('loads missing capabilities while retaining edited rules and explicit capability choices', () => {
+    const merged = mergeCapabilityPresets({ operations: ['image.generate'], maxReferenceImages: 2, parameters: [{ path: 'resolution', label: 'Pinned resolution', type: 'select', options: ['2K'], defaultValue: '2K', locked: true }] }, { operations: ['image.generate', 'image.edit'], maxReferenceImages: 14, aspectRatios: ['1:1', '16:9'], resolutions: ['1K', '2K', '4K'] }, 'xai', 'gemini-3.1-flash-image');
+    expect(merged).toMatchObject({ operations: ['image.generate'], maxReferenceImages: 2, resolutions: ['1K', '2K', '4K'], parameters: expect.arrayContaining([{ path: 'aspectRatio', label: '画幅', type: 'select', options: ['1:1', '16:9'], enabled: true, visible: true, required: false, locked: false, allowCustom: false }, expect.objectContaining({ path: 'resolution', label: 'Pinned resolution', defaultValue: '2K', locked: true, options: ['2K'] })]) });
+  });
   it('shows automatic matching independently of the provider default', () => {
     const value = JSON.stringify({ operations: ['image.generate'] });
     const html = renderToStaticMarkup(createElement(ModelPolicyEditor, { value, modelId: 'gemini-3.1-flash-image', providerType: 'openai', onChange: () => {} }));
     expect(html).toContain('自动匹配（Gemini · Generate Content）');
-    expect(html).toContain('OpenAI · Responses Image Tool');
+    expect(html).toContain('role="combobox"');
+    expect(html).not.toContain('<select');
     expect(renderToStaticMarkup(createElement(ModelPolicyEditor, { value, modelId: 'unknown', providerType: 'xai', onChange: () => {} }))).toContain('提供商默认（xAI）');
   });
   it('keeps xAI native fields out of extra and excludes catalog-only metadata', () => {
