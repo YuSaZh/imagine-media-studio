@@ -153,7 +153,7 @@ Open **Settings > Connections (设置 > 连接)** to add an API, then add or sel
 | Image tag | Purpose |
 | --- | --- |
 | `latest` | Most recently published stable release |
-| A version such as `0.1.2` | A specific stable release |
+| A version such as `0.1.3` | A specific stable release |
 | `test` | Most recently validated and published test image |
 | `test-sha-<full-commit-SHA>` | A test image associated with a source commit |
 | `@sha256:<digest>` | Exact image content for reproducible deployment and rollback records |

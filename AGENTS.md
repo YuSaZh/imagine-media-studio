@@ -53,6 +53,7 @@ Directory guides must not weaken the runtime and secret boundaries below.
 
 ## Implementation and Verification
 
+- When preparing or publishing a release, follow [Release Notes Rules](./.github/RELEASE_NOTES.md).
 - Use the Node and exact pnpm/dependency versions declared in `package.json`
   and `pnpm-workspace.yaml`. Keep dependency upgrades in dedicated changes.
 - Follow existing module boundaries, shared schemas, helpers, and test patterns.

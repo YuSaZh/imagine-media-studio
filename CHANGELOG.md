@@ -4,14 +4,82 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.3] - 2026-09-07
 
-- Match known model families to their default image/video protocol, retaining
-  explicit model overrides and falling back to the connection for unknown IDs.
-- Allow server-validated custom model IDs through OpenAI-compatible protocols,
-  including Gemini aliases on explicitly configured Responses endpoints.
-- Search the remote model picker by display name or model ID with keyboard
-  navigation and clear empty results.
+发布日期：2026-09-07 · 上一稳定版：v0.1.2
+
+> 本次更新完善了图片生成的协议兼容和大图处理，统一桌面与手机的生成控件，
+> 并修复模型管理中的删除、能力载入和参数覆盖问题。
+
+### 重点更新
+
+- **张数独立于模型：** 使用 `1 / 2 / 4 / 8 / +` 选择生成数量，支持自定义
+  1–32 个独立生成任务，不再被模型的批量能力、隐藏参数或固定默认值限制。
+- **双端统一图片控件：** 手机在图片/视频切换同一行提供画幅、分辨率和张数；
+  两端均使用圆角弹出选择面板，自定义尺寸支持比例锁和 16 像素对齐。
+- **兼容更多 Chat 生图返回：** 支持 CPA 结构化图片、New API Markdown 内嵌图片
+  及其流式分片，减少有图片返回却报“无图片结果”的情况。
+- **大图处理不再误报协议错误：** 修复大 Base64 图片校验时的栈溢出，保留完整
+  原图和缩略图处理，并区分内部处理失败与模型协议不可用。
+
+以上修复见 [39b4672](https://github.com/YuSaZh/imagine-media-studio/commit/39b4672)。
+
+### 生图与协议兼容
+
+- 已知模型自动匹配对应协议，保留显式覆盖配置；支持经过服务器校验的自定义
+  模型 ID，以及 OpenAI 兼容接口中的 Gemini 别名。
+  ([c52cbea](https://github.com/YuSaZh/imagine-media-studio/commit/c52cbea),
+  [8b36c78](https://github.com/YuSaZh/imagine-media-studio/commit/8b36c78))
+- 按渠道协议传递原生 `1K / 2K / 4K` 或映射后的像素尺寸；例如 16:9 的 4K
+  映射为 `3840x2160`，竖向画幅交换宽高。Chat 适配同时提供 CPA 和 New API
+  所需的图片配置字段。
+- 在可明确识别的图片接口不兼容错误下支持 Chat 协议回退，保留原有参数约束；
+  不因超时、限流或不明确的失败盲目重新生成。
+  ([2598518](https://github.com/YuSaZh/imagine-media-studio/commit/2598518))
+- Base64 使用线性规范校验，在解码前检查大小；已有格式、字节数和像素上限仍然
+  生效。新增超过 10 MiB 的合成图片落盘及 64 MiB 校验边界回归。
+
+### 桌面与移动端
+
+- 桌面图库独立滚动，保持页头和生成栏稳定；视频模式的快捷分辨率、时长与
+  自定义参数可在更多设置中同步修改。
+  ([294ba93](https://github.com/YuSaZh/imagine-media-studio/commit/294ba93),
+  [65680a9](https://github.com/YuSaZh/imagine-media-studio/commit/65680a9))
+- 分辨率统一为 `auto / 1K / 2K / 4K / 自定义`。关闭自定义尺寸比例锁时，
+  画幅立即切为 `auto`，保留当前尺寸；修改宽高后在失焦或应用时对齐到最近的
+  16 倍数。模型固定的画幅和分辨率规则仍受保护。
+- 原生下拉框改为共享选择卡片，覆盖生成设置、模型与连接管理、偏好、任务筛选
+  和适配器格式。支持键盘导航、选中状态、长文本换行及滚动。
+- 生成数量和其他设置继续按账号、项目、图片/视频类型及模型分别记忆。
+
+### 模型管理
+
+- 目录模型可以直接删除，无需先编辑保存；自定义适配器管理的模型仍由适配器
+  定义维护。移除容易覆盖既有编辑的批量“刷新模型”按钮。
+- “从模型能力载入”按所选模型协议补全内置能力，保留已编辑的参数和显式配置；
+  修复跨渠道模型能力为空的问题。未识别模型会明确提示手动配置。
+- 添加模型时可以搜索远端目录的名称或 ID，并通过键盘选择。
+
+相关提交：[39b4672](https://github.com/YuSaZh/imagine-media-studio/commit/39b4672)。
+
+### 升级说明与限制
+
+- 本版本没有新增数据库迁移，继续使用单容器、SQLite 和持久化 `/data`；升级时
+  保留原有数据、用户权限和 `APP_SECRET`，具体步骤见版本对应的发布指南。
+- 张数表示独立任务数量，实际同时执行的数量由服务器队列限制；不等于向上游
+  发送一个多图批量请求。原有模型 `count` 规则不再控制该数量。
+- 可用画幅、分辨率和返回的实际图片尺寸仍取决于模型与渠道；Chat 生图仅接受
+  能映射到受支持预设的像素尺寸。自动化 fixture 通过不代表所有真实渠道验收。
+- Test Image 支持在主分支 CI 通过后手动发布经过摘要验证的多架构测试镜像，
+  与稳定版本发布及具体部署分开执行。
+  ([4047cb2](https://github.com/YuSaZh/imagine-media-studio/commit/4047cb2),
+  [294ba93](https://github.com/YuSaZh/imagine-media-studio/commit/294ba93))
+
+### 贡献者
+
+- [@YuSaZh](https://github.com/YuSaZh)
+
+完整变更：[v0.1.2...v0.1.3](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.2...v0.1.3)
 
 ## [0.1.2] - 2026-09-06
 
