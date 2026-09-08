@@ -961,6 +961,7 @@ test('custom model resolution capabilities edit, persist and expose a future nat
     expect(created.status()).toBe(201);
     await open(page, '/settings/providers');
     await page.getByRole('button', { name: '编辑模型 Future image', exact: true }).click();
+    await page.getByRole('button', { name: '生成参数', exact: true }).click();
     await page.getByLabel('分辨率允许值', { exact: true }).fill('auto, 1K, 8K');
     await page.getByLabel('最大宽度', { exact: true }).fill('8192');
     await page.getByLabel('边长对齐倍数', { exact: true }).fill('32');
@@ -1218,7 +1219,7 @@ test('desktop video shortcuts preserve presets custom values and model rules', a
       const resolution = page.getByRole('button', { name: '选择视频分辨率', exact: true });
       const duration = page.getByRole('button', { name: '选择视频时长', exact: true });
       await resolution.click();
-      await expect(page.locator('.desktop-video-options > .choice')).toHaveText(['480p', '720p', '1080p', '自定义']);
+      await expect(page.locator('.desktop-video-options > .choice')).toHaveText(['480p', '720p', '1080p', '1440p', '自定义']);
       await page.getByRole('button', { name: '1080p', exact: true }).click();
       await expect(resolution).toContainText('1080p');
       await duration.click();
