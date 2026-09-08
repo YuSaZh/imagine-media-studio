@@ -45,6 +45,7 @@ export function geminiModelCapabilities(
   };
   return {
     operations: ['image.generate', 'image.edit'],
+    imageResolution: { mode: 'native', values: [...profile.resolutions], allowCustomDimensions: false },
     aspectRatios: profile.aspectRatios,
     resolutions: profile.resolutions,
     maxReferenceImages: profile.maxReferenceImages,

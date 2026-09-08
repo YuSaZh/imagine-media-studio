@@ -4,6 +4,16 @@ import { describe, expect, it } from 'vitest';
 import { ModelPolicyEditor, parameterPresets, mergeCapabilityPresets } from './model-policy-editor';
 
 describe('model parameter administration', () => {
+  it('retains flexible pixel sizing when deriving resolution rules from capabilities', () => {
+    const capabilities = { operations: ['image.generate'], resolutions: ['auto', '1024x1024'], customFields: { properties: { size: { type: 'string' } } } };
+    expect(parameterPresets(capabilities)).toContainEqual(expect.objectContaining({ path: 'resolution', allowCustom: true }));
+    expect(parameterPresets({ ...capabilities, resolutions: [] })).toContainEqual(expect.objectContaining({ path: 'resolution', type: 'text' }));
+    for (const size of [{ type: 'string', enum: ['1024x1024'] }, { type: 'string', const: '1024x1024' }]) {
+      expect(parameterPresets({ ...capabilities, customFields: { properties: { size } } })).toContainEqual(expect.objectContaining({ path: 'resolution', allowCustom: false }));
+    }
+    const current = { ...capabilities, parameters: [{ path: 'resolution', label: 'Restricted', type: 'select', options: ['1024x1024'], allowCustom: false }] };
+    expect(mergeCapabilityPresets(current, capabilities, 'openai', 'gpt-image-2').parameters).toContainEqual(expect.objectContaining({ allowCustom: false, label: 'Restricted' }));
+  });
   it('loads missing capabilities while retaining edited rules and explicit capability choices', () => {
     const merged = mergeCapabilityPresets({ operations: ['image.generate'], maxReferenceImages: 2, parameters: [{ path: 'resolution', label: 'Pinned resolution', type: 'select', options: ['2K'], defaultValue: '2K', locked: true }] }, { operations: ['image.generate', 'image.edit'], maxReferenceImages: 14, aspectRatios: ['1:1', '16:9'], resolutions: ['1K', '2K', '4K'] }, 'xai', 'gemini-3.1-flash-image');
     expect(merged).toMatchObject({ operations: ['image.generate'], maxReferenceImages: 2, resolutions: ['1K', '2K', '4K'], parameters: expect.arrayContaining([{ path: 'aspectRatio', label: '画幅', type: 'select', options: ['1:1', '16:9'], enabled: true, visible: true, required: false, locked: false, allowCustom: false }, expect.objectContaining({ path: 'resolution', label: 'Pinned resolution', defaultValue: '2K', locked: true, options: ['2K'] })]) });

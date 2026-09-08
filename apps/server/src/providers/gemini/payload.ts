@@ -1,4 +1,5 @@
-import type { GenerationRequest } from '@imagine/shared';
+import { prepareNativeImageResolution, type GenerationRequest, type ImageResolutionCapability } from '@imagine/shared';
+import { builtinImageResolution } from '../image-resolution-defaults.js';
 
 import { GeminiValidationError } from './errors.js';
 import type { GeminiInputAsset, GeminiProviderContext } from './types.js';
@@ -64,28 +65,28 @@ const MODEL_PROFILES: readonly GeminiModelProfile[] = [
     id: 'gemini-3.1-flash-lite-image',
     displayName: 'Gemini 3.1 Flash Lite Image',
     maxReferenceImages: 14,
-    resolutions: ['1K'],
+    resolutions: builtinImageResolution('gemini-3.1-flash-lite-image', GEMINI_PROFILE)!.values.filter(value => value !== 'auto'),
     aspectRatios: ['1:1', '3:2', '2:3', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
   },
   {
     id: 'gemini-3.1-flash-image',
     displayName: 'Gemini 3.1 Flash Image',
     maxReferenceImages: 14,
-    resolutions: ['512', '1K', '2K', '4K'],
+    resolutions: builtinImageResolution('gemini-3.1-flash-image', GEMINI_PROFILE)!.values.filter(value => value !== 'auto'),
     aspectRatios: GEMINI_IMAGE_ASPECT_RATIOS,
   },
   {
     id: 'gemini-3-pro-image',
     displayName: 'Gemini 3 Pro Image',
     maxReferenceImages: 14,
-    resolutions: ['1K', '2K', '4K'],
+    resolutions: builtinImageResolution('gemini-3-pro-image', GEMINI_PROFILE)!.values.filter(value => value !== 'auto'),
     aspectRatios: GEMINI_IMAGE_ASPECT_RATIOS,
   },
   {
     id: 'gemini-2.5-flash-image',
     displayName: 'Gemini 2.5 Flash Image',
     maxReferenceImages: 3,
-    resolutions: ['1K'],
+    resolutions: builtinImageResolution('gemini-2.5-flash-image', GEMINI_PROFILE)!.values.filter(value => value !== 'auto'),
     aspectRatios: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9'],
   },
 ];
@@ -101,16 +102,16 @@ function canonicalModelId(modelId: string): string {
   return trimmed.startsWith('models/') ? trimmed.slice('models/'.length) : trimmed;
 }
 
-export function getGeminiModelProfile(modelId: string): GeminiModelProfile {
+export function getGeminiModelProfile(modelId: string, capability?: ImageResolutionCapability): GeminiModelProfile {
   const canonical = canonicalModelId(modelId);
-  const exact = MODEL_PROFILE_BY_ID.get(canonical);
-  if (exact) return exact;
-  if (/^gemini-[a-z0-9.-]+-image(?:-preview)?$/i.test(canonical)) {
+  const exact = MODEL_PROFILE_BY_ID.get(canonical) ?? MODEL_PROFILE_BY_ID.get(canonical.replace(/-\d{4}-\d{2}-\d{2}$/, '').replace(/-preview$/, ''));
+  if (exact) return { ...exact, id: canonical, ...(capability ? { resolutions: capability.values } : {}) };
+  if (capability || /^gemini-[a-z0-9.-]+-image(?:-preview)?$/i.test(canonical)) {
     return {
       id: canonical,
       displayName: canonical,
       maxReferenceImages: 3,
-      resolutions: GEMINI_IMAGE_SIZES,
+      resolutions: capability?.values ?? GEMINI_IMAGE_SIZES,
       aspectRatios: GEMINI_IMAGE_ASPECT_RATIOS,
     };
   }
@@ -286,6 +287,15 @@ export function buildGeminiGenerateContentPayload(
   request: GenerationRequest,
   context: GeminiProviderContext,
 ): GeminiGenerateContentPayload {
+  if (context.imageResolution) {
+    try {
+      const prepared = prepareNativeImageResolution(request, context.imageResolution);
+      request = prepared.request;
+      context = { ...context, imageResolution: prepared.capability };
+    } catch (error) {
+      throw new GeminiValidationError(error instanceof Error ? error.message : 'Invalid resolution', 'gemini_resolution_unsupported');
+    }
+  }
   if (request.providerId !== context.providerId) {
     throw new GeminiValidationError(
       'The Gemini generation request provider does not match the active provider.',
@@ -305,7 +315,7 @@ export function buildGeminiGenerateContentPayload(
     }
     requestIds.add(input.assetId);
   }
-  const profile = getGeminiModelProfile(request.modelId);
+  const profile = { ...getGeminiModelProfile(request.modelId, context.imageResolution), ...(context.operationPolicy?.maxReferenceImages === undefined ? {} : { maxReferenceImages: context.operationPolicy.maxReferenceImages }) };
   assertRequestShape(request, profile);
   const resolved = inputMap(context, request);
   const parts: GeminiContentPart[] = [{ text: request.prompt.trim() }];
@@ -328,7 +338,7 @@ export function buildGeminiGenerateContentPayload(
     contents: [{ role: 'user', parts }],
     generationConfig,
   };
-  assertGeminiGenerateContentPayload(payload);
+  assertGeminiGenerateContentPayload(payload, context.imageResolution?.values);
   return payload;
 }
 
@@ -376,7 +386,7 @@ function assertGeminiPart(value: unknown): void {
 }
 
 /** Rejects payload fields outside the documented generateContent image subset. */
-export function assertGeminiGenerateContentPayload(value: unknown): asserts value is GeminiGenerateContentPayload {
+export function assertGeminiGenerateContentPayload(value: unknown, resolutions: readonly string[] = GEMINI_IMAGE_SIZES): asserts value is GeminiGenerateContentPayload {
   if (!isRecord(value)) throw new GeminiValidationError('Gemini payload must be an object.', 'gemini_payload_invalid');
   assertExactKeys(value, ['contents', 'generationConfig'], 'request');
   if (!Array.isArray(value.contents) || value.contents.length !== 1) {
@@ -413,13 +423,13 @@ export function assertGeminiGenerateContentPayload(value: unknown): asserts valu
     if ('imageSize' in imageConfig && typeof imageConfig.imageSize !== 'string') {
       throw new GeminiValidationError('Gemini imageSize must be a string.', 'gemini_payload_invalid');
     }
-    if ('imageSize' in imageConfig && !GEMINI_IMAGE_SIZES.includes(imageConfig.imageSize as (typeof GEMINI_IMAGE_SIZES)[number])) {
+    if ('imageSize' in imageConfig && !resolutions.includes(imageConfig.imageSize as string)) {
       throw new GeminiValidationError('Gemini imageSize is unsupported.', 'gemini_payload_invalid');
     }
   }
 }
 
-export function buildGeminiGenerateContentUrl(baseUrl: string, modelId: string): string {
+export function buildGeminiGenerateContentUrl(baseUrl: string, modelId: string, configured = false): string {
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -433,7 +443,7 @@ export function buildGeminiGenerateContentUrl(baseUrl: string, modelId: string):
     throw new GeminiValidationError('Gemini base URL must use HTTP or HTTPS.', 'gemini_base_url_invalid');
   }
   const model = canonicalModelId(modelId);
-  if (!/^gemini-[a-z0-9.-]+-image(?:-preview)?$/i.test(model)) {
+  if (!configured && !/^gemini-[a-z0-9.-]+-image(?:-preview)?$/i.test(model)) {
     throw new GeminiValidationError(`Gemini model '${modelId}' is not an image model.`, 'gemini_model_unsupported');
   }
   const path = url.pathname.replace(/\/+$/u, '');

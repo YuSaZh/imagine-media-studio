@@ -1,4 +1,4 @@
-import type { GenerationRequest } from '@imagine/shared';
+import { assertImageResolution, prepareNativeImageResolution, type GenerationRequest } from '@imagine/shared';
 import type {
   ProviderAdapter,
   ProviderCapabilities,
@@ -209,7 +209,8 @@ function validateRequest(request: GenerationRequest, context: GeminiProviderCont
   if (!['image.generate', 'image.edit'].includes(request.operation)) {
     throw new GeminiValidationError(`Gemini Interactions does not support ${request.operation}.`, 'gemini_operation_unsupported');
   }
-  const profile = modelProfile(request.modelId);
+  if (context.imageResolution) assertImageResolution(request, context.imageResolution);
+  const profile = { ...(context.imageResolution ? getGeminiModelProfile(request.modelId, context.imageResolution) : modelProfile(request.modelId)), ...(context.operationPolicy?.maxReferenceImages === undefined ? {} : { maxReferenceImages: context.operationPolicy.maxReferenceImages }) };
   const previousId = previousInteractionId(request);
   const count = (role: GenerationRequest['inputs'][number]['role']) => request.inputs.filter((input) => input.role === role).length;
   if (count('reference') > profile.maxReferenceImages) {
@@ -278,6 +279,15 @@ function resolvedInputs(request: GenerationRequest, context: GeminiProviderConte
 }
 
 function buildPayload(request: GenerationRequest, context: GeminiProviderContext): GeminiInteractionsPayload {
+  if (context.imageResolution) {
+    try {
+      const prepared = prepareNativeImageResolution(request, context.imageResolution);
+      request = prepared.request;
+      context = { ...context, imageResolution: prepared.capability };
+    } catch (error) {
+      throw new GeminiValidationError(error instanceof Error ? error.message : 'Invalid resolution', 'gemini_resolution_unsupported');
+    }
+  }
   const validation = validateRequest(request, context);
   const inputs = resolvedInputs(request, context);
   const content: InteractionInput[] = [
@@ -300,11 +310,11 @@ function buildPayload(request: GenerationRequest, context: GeminiProviderContext
     response_format: responseFormat,
     ...(validation.previousId === undefined ? {} : { previous_interaction_id: validation.previousId }),
   };
-  assertInteractionsPayload(payload);
+  assertInteractionsPayload(payload, context.imageResolution?.values);
   return payload;
 }
 
-export function assertInteractionsPayload(value: unknown): asserts value is GeminiInteractionsPayload {
+export function assertInteractionsPayload(value: unknown, resolutions: readonly string[] = GEMINI_IMAGE_SIZES): asserts value is GeminiInteractionsPayload {
   if (!isRecord(value)) throw new GeminiValidationError('Gemini Interactions payload must be an object.', 'gemini_payload_invalid');
   assertExactKeys(value, ['model', 'input', 'response_format', 'previous_interaction_id'], 'Interactions payload');
   if (typeof value.model !== 'string' || value.model.trim() === '') throw new GeminiValidationError('Gemini Interactions model is required.', 'gemini_payload_invalid');
@@ -332,7 +342,7 @@ export function assertInteractionsPayload(value: unknown): asserts value is Gemi
   if (value.response_format.type !== 'image') throw new GeminiValidationError('Gemini Interactions response_format.type must be image.', 'gemini_payload_invalid');
   if (value.response_format.mime_type !== undefined && (typeof value.response_format.mime_type !== 'string' || !IMAGE_MIME_TYPES.has(canonicalMimeType(value.response_format.mime_type)))) throw new GeminiValidationError('Gemini Interactions response MIME type is invalid.', 'gemini_payload_invalid');
   if (value.response_format.aspect_ratio !== undefined && (typeof value.response_format.aspect_ratio !== 'string' || !GEMINI_IMAGE_ASPECT_RATIOS.includes(value.response_format.aspect_ratio as (typeof GEMINI_IMAGE_ASPECT_RATIOS)[number]))) throw new GeminiValidationError('Gemini Interactions aspect ratio is invalid.', 'gemini_payload_invalid');
-  if (value.response_format.image_size !== undefined && (typeof value.response_format.image_size !== 'string' || !GEMINI_IMAGE_SIZES.includes(value.response_format.image_size as (typeof GEMINI_IMAGE_SIZES)[number]))) throw new GeminiValidationError('Gemini Interactions image size is invalid.', 'gemini_payload_invalid');
+  if (value.response_format.image_size !== undefined && (typeof value.response_format.image_size !== 'string' || !resolutions.includes(value.response_format.image_size))) throw new GeminiValidationError('Gemini Interactions image size is invalid.', 'gemini_payload_invalid');
   if (value.previous_interaction_id !== undefined && (typeof value.previous_interaction_id !== 'string' || value.previous_interaction_id.length === 0)) throw new GeminiValidationError('Gemini previous_interaction_id is invalid.', 'gemini_payload_invalid');
 }
 

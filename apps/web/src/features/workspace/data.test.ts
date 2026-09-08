@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelDto, ProviderDto } from '@imagine/shared';
-import { allPages, generationRequest, mapModels, mediaExtension, operationFor, type Creation } from './data';
+import { allPages, generationRequest, mapModels, modelForOperation, mediaExtension, operationFor, type Creation } from './data';
 
 const provider = (id: string) => ({ id, enabled: true, name: id, isDefault: false }) as ProviderDto;
 const model = (id: string, providerId: string): ModelDto => ({ id, providerId, modelId: 'same-model', displayName: id, enabled: true, capabilitySource: 'manual', createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z', capabilities: { operations: ['image.generate'], aspectRatios: ['1:1', '3:2'], maxBatchCount: 4, supportsBatchCount: true } });
 
 describe('workspace API contracts', () => {
+  it('maps operation duration bounds without passing step into the legacy duration schema', () => {
+    const raw = model('video', 'first');
+    raw.capabilities = { operations: ['video.generate', 'video.extend'], durations: [5, 10], operationPolicies: { 'video.extend': { durations: { min: 2, max: 10, step: 1 } } } };
+    const effective = modelForOperation(mapModels([raw], [provider('first')])[0]!, 'video.extend');
+    expect(effective.raw.capabilities.durations).toEqual({ min: 2, max: 10 });
+    expect(effective.raw.capabilities.operationPolicies).toEqual(raw.capabilities.operationPolicies);
+  });
   it('submits application count with managed models and ignores stale saved count parameters', () => {
     const raw = model('managed', 'first');
     for (const parameters of [[], [{ path: 'count', label: 'Count', type: 'number', defaultValue: 1, locked: true }]]) {
@@ -50,6 +57,19 @@ describe('workspace API contracts', () => {
     raw.capabilities.resolutions = ['1K', '2K'];
     const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: '3:2', resolution: '2K', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false };
     expect(generationRequest(input)).toMatchObject({ aspectRatio: '3:2', resolution: '2K' });
+    expect(generationRequest({ ...input, ratio: 'auto' })).not.toHaveProperty('aspectRatio');
+    expect(generationRequest({ ...input, ratio: 'auto' }).resolution).toBe('2K');
+  });
+  it('preserves explicit automatic choices for server defaults without bypassing locks', () => {
+    const raw = model('managed-auto', 'first');
+    raw.capabilities.parameters = [
+      { path: 'aspectRatio', label: 'Ratio', type: 'select', options: ['1:1'], defaultValue: '1:1' },
+      { path: 'resolution', label: 'Resolution', type: 'select', options: ['1K'], defaultValue: '1K' },
+    ];
+    const input: Creation = { model: mapModels([raw], [provider('first')])[0]!, prompt: 'test', operation: 'image.generate', inputs: [], ratio: 'auto', resolution: 'auto', count: 1, duration: 5, negativePrompt: '', seed: '', audio: false, parameters: { aspectRatio: 'auto', resolution: 'auto' } };
+    expect(generationRequest(input)).toMatchObject({ aspectRatio: 'auto', resolution: 'auto' });
+    raw.capabilities.parameters = raw.capabilities.parameters.map(rule => ({ ...(rule as object), locked: true }));
+    expect(generationRequest({ ...input, model: mapModels([raw], [provider('first')])[0]! })).toMatchObject({ aspectRatio: '1:1', resolution: '1K' });
   });
   it('maps xAI quality to its native request field instead of unsupported extra fields', () => {
     const raw = model('xai', 'first');

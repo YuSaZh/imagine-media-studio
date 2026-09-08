@@ -10,6 +10,7 @@
 | Contributor and Agent workflow | [CONTRIBUTING.md](../CONTRIBUTING.md), [AGENTS.md](../AGENTS.md), and its directory guide index |
 | Runtime architecture and enduring boundaries | [Architecture overview](./architecture/overview.md) |
 | Production UI and desktop/mobile behavior | [Workspace specification](./design-spec/workspace.md) |
+| Built-in media models, aliases and operation limits | [Model capabilities](./model-capabilities.md) |
 | Deployment, image channels, upgrade and rollback | [RELEASE.md](../RELEASE.md) and the README deployment examples |
 | Custom Provider examples | [Custom providers](../examples/custom-providers/README.md) |
 | Trusted JavaScript execution | [Adapter runtime](../apps/server/src/adapters/README.md) |

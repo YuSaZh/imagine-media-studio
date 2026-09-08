@@ -80,6 +80,14 @@ async function expectCode(operation: () => unknown, code: string): Promise<void>
 }
 
 describe('GenerationInputResolver', () => {
+  it('honors the operation reference limit independently of the UI total input count', async () => {
+    const source = asset({ id: 'source' }), reference = asset({ id: 'reference' });
+    const resolver = harness([source, reference], [model({ capabilities: { operations: ['image.edit'], maxReferenceImages: 1, operationPolicies: { 'image.edit': { maxReferenceImages: 0 } } } })]);
+    const request = createMockGenerationRequest({ operation: 'image.edit', inputs: [{ assetId: source.id, role: 'source' }] });
+    expect(resolver.resolve(request).inputs).toHaveLength(1);
+    await expectCode(() => resolver.resolve({ ...request, inputs: [...request.inputs, { assetId: reference.id, role: 'reference' }] }), 'reference_limit_exceeded');
+  });
+
   it('resolves enabled Provider models and valid generate references', () => {
     const references = [asset({ id: 'ref-1' }), asset({ id: 'ref-2' })];
     const resolver = harness(references);
@@ -183,6 +191,19 @@ describe('GenerationInputResolver', () => {
     );
   });
 
+  it.each([false, true])('derives mask processing from capabilities instead of a client override (native=%s)', native => {
+    const source = asset({ id: 'source' }), mask = asset({ id: 'mask', role: 'mask', parentAssetId: source.id });
+    const selected = model({ capabilities: { operations: ['image.edit'], maxReferenceImages: 0, supportsMask: native } });
+    const request = createMockGenerationRequest({ operation: 'image.edit', inputs: [{ assetId: source.id, role: 'source' }, { assetId: mask.id, role: 'mask' }], maskProcessing: { version: 1, mode: native ? 'overlay' : 'native', sourceAssetId: 'spoofed', outputMimeType: 'image/webp' } });
+    expect(harness([source, mask], [selected]).resolve(request).request.maskProcessing).toEqual({ version: 1, mode: native ? 'native' : 'overlay', sourceAssetId: source.id, outputMimeType: 'image/png' });
+  });
+  it('supports a mask on a declared reference-image operation but rejects text-only models', async () => {
+    const source = asset({ id: 'source' }), mask = asset({ id: 'mask', role: 'mask', parentAssetId: source.id });
+    const request = createMockGenerationRequest({ inputs: [{ assetId: source.id, role: 'reference' }, { assetId: mask.id, role: 'mask' }] });
+    const capabilities = { operations: ['image.generate'], maxReferenceImages: 1, supportsMask: false };
+    expect(harness([source, mask], [model({ capabilities })]).resolve(request).request.maskProcessing?.mode).toBe('overlay');
+    await expectCode(() => harness([source, mask], [model({ capabilities: { ...capabilities, maxReferenceImages: 0 } })]).resolve(request), 'reference_limit_exceeded');
+  });
   it('requires masks to be PNG children with source-matching dimensions', async () => {
     const source = asset({ id: 'source', width: 640, height: 480 });
     const requestFor = (mask: AssetRecord) => createMockGenerationRequest({

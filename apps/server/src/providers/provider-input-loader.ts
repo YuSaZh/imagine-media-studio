@@ -1,7 +1,8 @@
+import { prepareMaskedInputs } from './mask-composite.js';
 import { createHash } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
 
-import type { ProviderInput } from '@imagine/provider-contract';
+import type { ProviderInput, ProviderVideoSource } from '@imagine/provider-contract';
 import type { GenerationRequest } from '@imagine/shared';
 
 import type { AssetRecord } from '../database/assets.js';
@@ -28,6 +29,7 @@ export class ProviderInputLoaderError extends Error {
 
 export interface ProviderInputAssetLookup {
   get(id: string): AssetRecord | null;
+  getVideoSource?(id: string): ProviderVideoSource | undefined;
 }
 
 export interface ProviderInputLoaderOptions {
@@ -115,7 +117,8 @@ export class ProviderInputLoader {
           `Provider input Asset ${input.assetId} is unavailable.`,
         );
       }
-      const expectedType = 'image';
+      const expectedType = request.operation === 'video.edit' || request.operation === 'video.extend' ? 'video' : 'image';
+      if (expectedType === 'video' && !request.operationPolicy?.video) throw new ProviderInputLoaderError('provider_input_invalid', '缺少视频输入能力配置');
       if (asset.deletedAt !== null || asset.type !== expectedType || asset.fileSize < 1) {
         throw new ProviderInputLoaderError(
           'provider_input_invalid',
@@ -127,6 +130,13 @@ export class ProviderInputLoader {
           'provider_input_too_large',
           'Provider inputs exceed the configured byte limit.',
         );
+      }
+      const videoSource = expectedType === 'video' ? this.assets.getVideoSource?.(asset.id) : undefined;
+      const policy = request.operationPolicy?.video;
+      if (policy && policy.source !== 'uploaded-or-generated') {
+        const validSource = videoSource?.providerId === request.providerId && (policy.source !== 'same-provider-model' || videoSource.modelId === request.modelId) && videoSource.profile === request.profile;
+        if (!validSource && !policy.allowUploaded) throw new ProviderInputLoaderError('provider_input_invalid', '此操作需要同连接生成的视频来源');
+        if (validSource && policy.requireLiveSource && videoSource.expiresAt && Date.parse(videoSource.expiresAt) <= Date.now()) throw new ProviderInputLoaderError('provider_input_invalid', '上游视频来源已过期');
       }
 
       const handle = await openStoredFile(this.dataRoot, asset.filePath).catch((error: unknown) => {
@@ -160,7 +170,9 @@ export class ProviderInputLoader {
           role: input.role,
           mimeType: asset.mimeType,
           bytes,
-          ...(this.publicLinks?.enabled ? { publicUrl: this.publicLinks.create(asset) } : {}),
+          ...(videoSource ? { videoSource } : {}),
+          ...(asset.durationMs === null ? {} : { durationSeconds: asset.durationMs / 1000 }),
+          ...(asset.type === 'image' && this.publicLinks?.enabled ? { publicUrl: this.publicLinks.create(asset) } : {}),
           ...(filename === undefined ? {} : { filename }),
           parentAssetId: asset.parentAssetId,
           ...(asset.width === null ? {} : { width: asset.width }),
@@ -172,7 +184,8 @@ export class ProviderInputLoader {
         await handle.close();
       }
     }
-    return inputs;
+    try { return await prepareMaskedInputs(request, inputs, this.maxBytesPerFile, this.maxTotalBytes, signal); }
+    catch (error) { signal?.throwIfAborted(); throw new ProviderInputLoaderError('provider_input_invalid', error instanceof Error ? error.message : '蒙版合成失败', { cause: error }); }
   }
 
   private validateOperationInputs(request: GenerationRequest): void {
@@ -185,7 +198,7 @@ export class ProviderInputLoader {
       );
     }
     if (request.operation === 'video.image_to_video' &&
-      (request.inputs.length !== 1 || count('first_frame') !== 1)) {
+      (count('first_frame') !== 1 || count('last_frame') > 1 || roles.some(role => role !== 'first_frame' && !(role === 'last_frame' && request.operationPolicy?.inputRoles?.includes('last_frame'))))) {
       throw new ProviderInputLoaderError(
         'provider_input_invalid',
         'video.image_to_video requires exactly one first_frame image.',
@@ -199,10 +212,7 @@ export class ProviderInputLoader {
       );
     }
     if (request.operation === 'video.edit' || request.operation === 'video.extend') {
-      throw new ProviderInputLoaderError(
-        'provider_input_invalid',
-        `${request.operation} is not supported by the current video input runtime.`,
-      );
+      if (request.inputs.length !== 1 || count('source') !== 1) throw new ProviderInputLoaderError('provider_input_invalid', '视频编辑或续写需要一个源视频');
     }
   }
 }

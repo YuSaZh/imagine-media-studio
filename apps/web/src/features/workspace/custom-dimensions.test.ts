@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { alignImageDimension, linkedImageDimensions } from './custom-dimensions';
 
 describe('custom image dimensions', () => {
+  it('uses configured alignment and per-edge bounds', () => {
+    expect(alignImageDimension(2000, 64, 2048)).toBe(1984);
+    expect(alignImageDimension(2050, 64, 2048)).toBeUndefined();
+    expect(linkedImageDimensions('2000', '1000', 'width', 'auto', false, { multipleOf: 64, maxWidth: 2048, maxHeight: 1024 })).toEqual({ width: 1984, height: 1024 });
+  });
   it('aligns to the nearest 16 pixels and rejects invalid or excessive sides', () => {
     for (const [input, expected] of [[1, 16], [1000, 1008], [1001, 1008], [999, 992], [1080, 1088], [16384, 16384]]) expect(alignImageDimension(input!)).toBe(expected);
     for (const value of ['', 0, -1, 'invalid', Infinity, 16385]) expect(alignImageDimension(value)).toBeUndefined();

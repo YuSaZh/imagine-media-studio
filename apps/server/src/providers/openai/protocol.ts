@@ -1,4 +1,6 @@
 import type { GenerationRequest } from '@imagine/shared';
+import { imagePresetDimensions, imageDimensionsAllowed, imageResolutionAllows, type ImageResolutionCapability } from '@imagine/shared';
+import { builtinImageResolution } from '../image-resolution-defaults.js';
 import { publicInputUrl } from '../public-input-url.js';
 import type { SubmittedAsset } from '@imagine/provider-contract';
 
@@ -75,9 +77,19 @@ export interface OpenAiImageResultOptions {
 }
 
 export interface OpenAiImageRequestPolicy {
+  readonly imageResolution?: ImageResolutionCapability;
   readonly compatibleSize?: boolean;
   readonly flexibleSize?: boolean;
   readonly supportsInputFidelity?: boolean;
+}
+
+function flexibleSize(value: string): boolean {
+  return imageDimensionsAllowed(value, builtinImageResolution('gpt-image-2', 'openai-images-v1')!.dimensions);
+}
+
+function allowedSize(value: string, policy: OpenAiImageRequestPolicy): boolean {
+  if (policy.imageResolution) return imageResolutionAllows(value, policy.imageResolution);
+  return value === 'auto' || (policy.flexibleSize ? flexibleSize(value) : FIXED_SIZES.has(value) || policy.compatibleSize === true && compatibleImageSize(value));
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -136,18 +148,6 @@ function assertEnumOption(
   return normalized;
 }
 
-function flexibleSize(value: string): boolean {
-  const match = /^(\d+)x(\d+)$/.exec(value);
-  if (!match) return false;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) return false;
-  if (width > 3_840 || height > 3_840 || width % 16 !== 0 || height % 16 !== 0) return false;
-  const pixels = width * height;
-  const ratio = Math.max(width / height, height / width);
-  return pixels >= 655_360 && pixels <= 8_294_400 && ratio <= 3;
-}
-
 function compatibleImageSize(value: string): boolean {
   if (!/^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(value)) return false;
   const [width, height] = value.split('x').map(Number) as [number, number];
@@ -159,6 +159,21 @@ function deriveSize(
   extra: Record<string, unknown>,
   policy: OpenAiImageRequestPolicy,
 ): string | undefined {
+  if (policy.imageResolution) {
+    const explicit = extra.size ?? request.resolution;
+    let size = explicit === undefined ? undefined : assertStringOption(explicit, 'size');
+    if (size === undefined && (request.width !== undefined || request.height !== undefined)) {
+      if (request.width === undefined || request.height === undefined) throw new OpenAiValidationError('invalid_option', 'width and height must be provided together.');
+      size = `${request.width}x${request.height}`;
+    }
+    if (size === undefined && request.aspectRatio && request.aspectRatio !== 'auto') {
+      size = policy.imageResolution.allowCustomDimensions ? imagePresetDimensions('1K', request.aspectRatio, policy.imageResolution.dimensions?.multipleOf) : DEFAULT_SIZE_BY_ASPECT_RATIO[request.aspectRatio];
+      if (!size) throw new OpenAiValidationError('invalid_option', 'The configured image dimensions cannot represent this aspect ratio.');
+    }
+    if (size !== undefined && !allowedSize(size, policy)) throw new OpenAiValidationError('invalid_option', 'size does not satisfy the configured model resolution capability.');
+    if (size && !/^\d+x\d+$/.test(size) && size !== 'auto' && request.aspectRatio && request.aspectRatio !== 'auto') throw new OpenAiValidationError('unsupported_option', 'Images size presets cannot encode a separate aspect ratio.');
+    return size;
+  }
   const compatibleSize = (value: string) => policy.compatibleSize === true && compatibleImageSize(value);
   const explicit = extra.size ?? request.resolution;
   if (explicit !== undefined) {
@@ -201,9 +216,9 @@ function deriveSize(
       return `${width}x${height}`;
     }
     const size = policy.flexibleSize === true
-      ? ({ '1:1': '1024x1024', '16:9': '2048x1152', '9:16': '1152x2048', auto: 'auto' } as Readonly<Record<string, string>>)[request.aspectRatio]
+      ? ({ '1:1': '1024x1024', '16:9': '2048x1152', '9:16': '1152x2048', auto: 'auto' } as Readonly<Record<string, string>>)[request.aspectRatio] ?? imagePresetDimensions('1K', request.aspectRatio)
       : DEFAULT_SIZE_BY_ASPECT_RATIO[request.aspectRatio];
-    if (size === undefined) {
+    if (size === undefined || policy.flexibleSize && size !== 'auto' && !flexibleSize(size)) {
       throw new OpenAiValidationError(
         'invalid_option',
         `OpenAI does not support aspect ratio ${request.aspectRatio}.`,
@@ -370,10 +385,9 @@ export function assertImageGenerationPayload(value: unknown, policy: OpenAiImage
   ) {
     throw new OpenAiValidationError('invalid_payload', 'Images generation n must be an integer from 1 through 10.');
   }
-  const isGptImage2 = payload.model === 'gpt-image-2';
   if (payload.size !== undefined && (
     typeof payload.size !== 'string' ||
-    (isGptImage2 ? payload.size !== 'auto' && !flexibleSize(payload.size) : !FIXED_SIZES.has(payload.size) && !(policy.compatibleSize && compatibleImageSize(payload.size)))
+    !allowedSize(payload.size, policy)
   )) {
     throw new OpenAiValidationError('invalid_payload', 'Images generation size is invalid.');
   }
@@ -384,7 +398,7 @@ export function assertImageGenerationPayload(value: unknown, policy: OpenAiImage
     throw new OpenAiValidationError('invalid_payload', 'Images generation background is invalid.');
   }
   if (payload.input_fidelity !== undefined && (
-    isGptImage2 ||
+    policy.supportsInputFidelity === false ||
     typeof payload.input_fidelity !== 'string' ||
     !VALID_INPUT_FIDELITIES.has(payload.input_fidelity)
   )) {
@@ -757,6 +771,10 @@ export const normalizeOpenAiImageResponse = normalizeImageResponse;
 export function dataUrlForAsset(asset: OpenAiInputAsset): string {
   const publicUrl = publicInputUrl(asset);
   if (publicUrl) return publicUrl;
+  return inlineDataUrlForAsset(asset);
+}
+
+export function inlineDataUrlForAsset(asset: OpenAiInputAsset): string {
   return `data:${asset.mimeType};base64,${Buffer.from(asset.bytes).toString('base64')}`;
 }
 

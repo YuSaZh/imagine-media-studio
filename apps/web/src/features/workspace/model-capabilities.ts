@@ -9,6 +9,8 @@ const knownOperations = new Set<FixtureMediaOperation>([
   'video.generate',
   'video.image_to_video',
   'video.reference_to_video',
+  'video.edit',
+  'video.extend',
 ]);
 
 function isObject(value: JsonValue | undefined): value is JsonObject {

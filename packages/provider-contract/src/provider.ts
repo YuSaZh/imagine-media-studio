@@ -1,4 +1,4 @@
-import type { AssetInput, GenerationRequest, MediaOperation, NativeProviderProfile, ModelParameter } from '@imagine/shared';
+import type { AssetInput, GenerationRequest, MediaOperation, NativeProviderProfile, ModelParameter, ImageResolutionCapability, OperationPolicy } from '@imagine/shared';
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
@@ -12,6 +12,8 @@ export interface ImageInputConstraints {
 }
 
 export interface ModelCapabilities {
+  operationPolicies?: Partial<Record<MediaOperation, OperationPolicy>>;
+  imageResolution?: ImageResolutionCapability;
   profile?: NativeProviderProfile;
   parameters?: readonly ModelParameter[];
   operations: readonly MediaOperation[];
@@ -86,7 +88,18 @@ export interface ProviderCapabilities {
   models: readonly ProviderModel[];
 }
 
+export interface ProviderVideoSource {
+  providerId: string;
+  modelId: string;
+  profile: string;
+  remoteJobId: string;
+  resultId?: string;
+  expiresAt?: string;
+}
+
 export interface ProviderInput {
+  durationSeconds?: number;
+  videoSource?: ProviderVideoSource;
   /** Short-lived URL minted by the server after verifying the stored image. */
   publicUrl?: string;
   assetId: string;
@@ -103,6 +116,8 @@ export interface ProviderInput {
 }
 
 export interface ProviderContext {
+  operationPolicy?: OperationPolicy;
+  imageResolution?: ImageResolutionCapability;
   profile?: NativeProviderProfile;
   providerId: string;
   jobId?: string;

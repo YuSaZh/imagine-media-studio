@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
@@ -16,6 +17,11 @@ async function upload(request: APIRequestContext, name = 'coast') {
 async function open(page: Page, path = '/imagine') {
   await page.goto(path);
   await expect(page.locator('.workspace-header')).toBeVisible();
+}
+
+async function focusEditingPrompt(page: Page) {
+  await expect(page.locator('.mask-workspace')).toHaveCount(0);
+  await page.locator('.image-editing-controls').getByLabel('创作描述', { exact: true }).click();
 }
 
 async function chooseRatio(page: Page, value: string) {
@@ -93,15 +99,15 @@ test('generation memory separates projects modes and models before submission', 
     await choose('memory-a'); await count('3');
     await choose('memory-b'); expect(await count()).toBe('1'); await count('2');
     await choose('memory-a'); expect(await count()).toBe('3');
-    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await choose('memory-video'); await count('4');
-    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '图片', exact: true }).click();
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(page.locator('.model-trigger')).toContainText('memory-a');
     expect(await count()).toBe('3');
     await page.reload();
     await expect(page.locator('.model-trigger')).toContainText('memory-a');
     expect(await count()).toBe('3');
-    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(page.locator('.model-trigger')).toContainText('memory-video');
     expect(await count()).toBe('4');
     await page.goto('/imagine');
@@ -110,6 +116,93 @@ test('generation memory separates projects modes and models before submission', 
     await expect(page.locator('.model-trigger')).toContainText('memory-a');
     expect(await count()).toBe('3');
     await page.screenshot({ path: `/tmp/imagine-generation-memory-${page.viewportSize()!.width}.png` });
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('recognized catalog models are highlighted and stably ordered before unknown entries', async ({ page, request }) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Recognition ${randomUUID()}`, type: 'openai', enabled: true } })).json();
+  try {
+    await page.route(`**/internal/providers/${provider.id}/models/catalog`, route => route.fulfill({ json: { models: [
+      { id: 'unknown-a', displayName: 'unknown-a', recognized: false }, { id: 'gpt-image-2', displayName: 'GPT Image 2', recognized: true },
+      { id: 'unknown-b', displayName: 'unknown-b', recognized: false }, { id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2', recognized: true },
+    ] } }));
+    await open(page, '/settings/providers');
+    await page.getByRole('region', { name: `连接 ${provider.name}`, exact: true }).getByRole('button', { name: '添加模型', exact: true }).click();
+    const picker = page.getByRole('combobox', { name: '远端模型目录', exact: true });
+    await picker.click();
+    await expect(page.locator('.catalog-search-option strong')).toHaveText(['GPT Image 2', 'Nano Banana 2', 'unknown-a', 'unknown-b']);
+    await expect(page.locator('.recognized-model-name')).toHaveCount(2);
+    await picker.fill('unknown');
+    await expect(page.locator('.catalog-search-option strong')).toHaveText(['unknown-a', 'unknown-b']);
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('media prompt copy and inset selection rings work at gallery edges', async ({ page, request }, testInfo) => {
+  const uploaded = await upload(request);
+  const prompt = '完整提示词第一行\n第二行，包含标点和末尾内容。';
+  const result = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt, inputs: [] } });
+  expect(result.status()).toBe(202);
+  const job = (await result.json()).job;
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).job.status).toBe('completed');
+  await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copiedPrompt: string }).copiedPrompt = text; } } }); });
+  await open(page);
+  const card = page.locator('.study-card').first();
+  await card.hover();
+  if (page.viewportSize()!.width <= 760) {
+    const buttons = card.locator('.card-bookmark, .card-reference, .card-more, .card-copy-prompt');
+    await expect(buttons).toHaveCount(4);
+    const boxes = await buttons.evaluateAll(nodes => nodes.map(node => {
+      const css = getComputedStyle(node), box = node.getBoundingClientRect();
+      return { x: box.x, y: box.y, right: box.right, bottom: box.bottom, width: box.width, height: box.height, background: css.backgroundColor, blur: css.backdropFilter };
+    }));
+    for (const box of boxes) expect(box).toMatchObject({ width: 40, height: 40, background: 'rgba(0, 0, 0, 0)', blur: 'none' });
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]!, b = boxes[j]!;
+      expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y).toBe(true);
+    }
+    await expect(card.locator('.card-more svg')).toHaveCSS('width', '20px');
+    await page.screenshot({ path: testInfo.outputPath('mobile-icon-actions.png'), animations: 'disabled' });
+  }
+  await card.locator('.card-copy-prompt').click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { copiedPrompt: string }).copiedPrompt)).toBe(prompt);
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
+  await expect(page.getByText('已复制提示词', { exact: true })).toBeVisible();
+  await expect(page.locator(`[data-study-id="${uploaded.id}"] .card-copy-prompt`)).toHaveCount(0);
+  await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('denied'); } } }); document.execCommand = () => false; });
+  await card.locator('.card-copy-prompt').click();
+  await expect(page.getByText('复制失败，请打开详情选择提示词复制', { exact: true })).toBeVisible();
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
+  await card.locator('.study-open').click({ modifiers: ['Shift'] });
+  await expect(card).toHaveClass(/is-selected/);
+  await expect(card.locator('.card-copy-prompt')).toHaveCount(0);
+  expect(await card.evaluate(element => { const css = getComputedStyle(element, '::after'); return { top: css.top, left: css.left, right: css.right, bottom: css.bottom, width: css.borderTopWidth }; })).toEqual({ top: '0px', left: '0px', right: '0px', bottom: '0px', width: '3px' });
+  await page.screenshot({ path: testInfo.outputPath('selection-ring-at-edge.png'), animations: 'disabled' });
+});
+
+test('video edit accepts a source and omits inherited generation options', async ({ page, request }, testInfo) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Video workflow ${randomUUID()}`, type: 'xai', enabled: true, isDefault: true } })).json();
+  try {
+    const preset = await (await request.get(`/internal/providers/${provider.id}/models/capabilities?modelId=grok-imagine-video&operation=video.generate`)).json();
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'grok-imagine-video', displayName: 'Workflow Video', enabled: true, capabilities: preset.capabilities } })).status()).toBe(201);
+    await open(page);
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
+    if (page.viewportSize()!.width <= 760) await page.getByRole('button', { name: '选择视频输入方式', exact: true }).click();
+    await page.getByRole('button', { name: '编辑视频', exact: true }).click();
+    await page.getByLabel('上传源视频', { exact: true }).setInputFiles(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4'));
+    await expect(page.locator('.reference-tray')).toContainText('源视频');
+    await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '选择视频分辨率', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '选择视频时长', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '开始生成', exact: true })).toBeInViewport();
+    expect(await page.locator('.creation-controls').evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await page.getByLabel('创作描述', { exact: true }).fill('change the lighting');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured-no-paid-call' } }) : route.continue());
+    const sent = page.waitForRequest(req => req.url().endsWith('/internal/jobs') && req.method() === 'POST');
+    await page.getByRole('button', { name: '开始生成', exact: true }).click();
+    const payload = (await sent).postDataJSON();
+    expect(payload).toMatchObject({ operation: 'video.edit', inputs: [{ role: 'source' }] });
+    for (const key of ['aspectRatio', 'resolution', 'durationSeconds', 'audio']) expect(payload).not.toHaveProperty(key);
+    await page.screenshot({ path: testInfo.outputPath('video-edit-controls.png'), animations: 'disabled' });
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
@@ -131,7 +224,10 @@ test('model editor offers the complete catalog and cross-family protocols', asyn
     await page.screenshot({ path: `/tmp/imagine-catalog-search-${page.viewportSize()!.width}.png` });
     await picker.press('Enter');
     await expect(page.getByLabel('模型显示名称', { exact: true })).toHaveValue('Nano Banana 2');
-        await expect(page.getByRole('combobox', { name: '模型调用协议', exact: true })).toContainText('自动匹配（Gemini · Generate Content）');
+    await expect(page.getByText('已载入模型能力', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '生成参数', exact: true })).toHaveAttribute('aria-expanded', 'false');
+    await page.getByRole('button', { name: '生成参数', exact: true }).click();
+    await expect(page.getByRole('combobox', { name: '模型调用协议', exact: true })).toContainText('Gemini · Generate Content');
     await picker.click();
     await picker.fill('unknown');
     await page.getByRole('option', { name: 'unknown-model', exact: true }).click();
@@ -158,7 +254,7 @@ test('new workspace visual baseline and accessible responsive geometry', async (
   await expect(page.locator('.study-card')).toHaveCount(4);
   await expect.poll(() => page.locator('.study-card img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 1))).toBe(true);
   await expect(page.locator('.creation-composer')).toBeVisible();
-  await expect(page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '图片', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const form = await page.locator('.creation-composer').boundingBox();
   const viewport = page.viewportSize()!;
@@ -174,7 +270,8 @@ test('new workspace visual baseline and accessible responsive geometry', async (
 test('real image and video generation, original download, favorites and failure feedback', async ({ page, request }) => {
   await open(page);
   for (const mode of ['图片', '视频']) {
-    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: mode, exact: true }).click();
+    const modeToggle = page.getByRole('button', { name: '切换图片/视频', exact: true });
+    if (await modeToggle.getAttribute('aria-pressed') !== String(mode === '视频')) await modeToggle.click();
     const prompt = `workspace ${mode} generation ${randomUUID()}`;
     await page.getByLabel('创作描述', { exact: true }).fill(prompt);
     const submitted = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
@@ -202,6 +299,185 @@ test('real image and video generation, original download, favorites and failure 
   await page.locator('.card-bookmark').first().click();
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.locator('.study-card')).toHaveCount(2);
+});
+
+test('deleting freshly generated results never restores completed placeholders', async ({ page, request }, testInfo) => {
+  await open(page);
+  await page.getByRole('button', { name: '生成设置', exact: true }).click();
+  await chooseCount(page, '4');
+  await page.keyboard.press('Escape');
+  const prompt = `delete generated results ${randomUUID()}`;
+  await page.getByLabel('创作描述', { exact: true }).fill(prompt);
+  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  await expect(page.locator('.study-card')).toHaveCount(4, { timeout: 20000 });
+  await expect.poll(async () => (await (await request.get('/internal/jobs?limit=100')).json()).items.filter((job: { prompt: string; status: string }) => job.prompt === prompt && job.status === 'completed').length).toBe(4);
+  await expect(page.locator('.pending-study')).toHaveCount(0);
+  await page.locator('.study-open').first().click();
+  await page.getByRole('button', { name: '作品信息', exact: true }).click();
+  await page.getByRole('button', { name: '删除作品', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.locator('.study-card')).toHaveCount(3);
+  await expect(page.locator('.pending-study')).toHaveCount(0);
+  const remaining = await page.locator('.study-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-study-id')!));
+  const blocked = remaining[0]!;
+  await page.route(`**/internal/assets/${blocked}`, route => route.request().method() === 'DELETE' ? route.fulfill({ status: 500, json: { error: 'fixture_failure' } }) : route.continue());
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  for (const id of remaining) await page.locator(`[data-study-id="${id}"] .study-open`).click();
+  await page.getByRole('button', { name: '删除所选作品', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('2 件已删除，1 件失败');
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.locator('.pending-study')).toHaveCount(0);
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
+  await page.unroute(`**/internal/assets/${blocked}`);
+  await page.getByRole('button', { name: '删除所选作品', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.getByText('还没有作品', { exact: true })).toBeVisible();
+  await expect(page.locator('.pending-study')).toHaveCount(0);
+  expect((await (await request.get('/internal/jobs?limit=100')).json()).items.filter((job: { prompt: string }) => job.prompt === prompt)).toHaveLength(4);
+  await page.screenshot({ path: testInfo.outputPath('deleted-generated-results.png'), animations: 'disabled' });
+});
+
+test('login presents a conventional form and supports authentication', async ({ browser, request }, testInfo) => {
+  const username = `login_${randomUUID().slice(0, 8)}`;
+  const created = await request.post('/internal/accounts', { data: { username, password: 'login-test-password' } });
+  expect(created.status()).toBe(201);
+  const context = await browser.newContext({ ...testInfo.project.use, storageState: { cookies: [], origins: [] }, serviceWorkers: 'block' });
+  try {
+    const page = await context.newPage();
+    await page.goto('/imagine');
+    await expect(page.getByRole('heading', { name: '登录 Imagine', exact: true })).toBeVisible();
+    await expect(page.getByText('受保护的工作区', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.auth-password-field svg')).toHaveCount(0);
+    const usernameInput = page.getByLabel('用户名', { exact: true });
+    await expect(usernameInput).toHaveValue('');
+    await expect(usernameInput).toHaveAttribute('autocomplete', 'username');
+    const password = page.getByLabel('密码', { exact: true });
+    await expect(password).toHaveAttribute('type', 'password');
+    await expect(password).not.toBeFocused();
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('login.png'), animations: 'disabled' });
+    await page.getByLabel('用户名', { exact: true }).fill(username);
+    await password.fill('login-test-password');
+    await usernameInput.fill('');
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled();
+    await usernameInput.fill(username);
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.locator('.workspace-header')).toBeVisible();
+    await page.goto('/settings/account');
+    await page.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(usernameInput).toHaveValue('');
+    await expect(password).toHaveValue('');
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled();
+  } finally { await context.close(); }
+});
+
+test('private projects hide recent results and obscure project covers', async ({ page, request }, testInfo) => {
+  const privateAsset = await upload(request);
+  const publicAsset = await upload(request, 'mountain');
+  const { collection } = await (await request.post('/internal/collections', { data: { name: '隐私测试项目' } })).json();
+  await request.post(`/internal/collections/${collection.id}/assets`, { data: { assetIds: [privateAsset.id] } });
+  await open(page, `/projects/${collection.id}`);
+  await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toBeVisible();
+  await page.getByRole('button', { name: '项目操作', exact: true }).click();
+  await page.getByRole('button', { name: '设为隐私项目', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: '已设为隐私项目' })).toBeVisible();
+  await open(page);
+  await expect(page.locator(`[data-study-id="${publicAsset.id}"]`)).toBeVisible();
+  await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(`[data-study-id="${publicAsset.id}"]`)).toBeVisible();
+  await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toHaveCount(0);
+  await page.getByLabel('搜索作品', { exact: true }).fill('coast');
+  await expect(page.locator('.study-card')).toHaveCount(0);
+  await open(page, '/library');
+  await expect(page.locator(`[data-study-id="${publicAsset.id}"]`)).toBeVisible();
+  await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toHaveCount(0);
+  await page.getByLabel('搜索作品', { exact: true }).fill('coast');
+  await expect(page.locator('.study-card')).toHaveCount(0);
+  await open(page, '/projects');
+  const cover = page.getByLabel('隐私项目封面已模糊');
+  await expect(cover).toBeVisible();
+  await expect(cover.locator('img')).toHaveCount(0);
+  await expect(cover).toContainText('隐私项目');
+  await page.screenshot({ path: testInfo.outputPath('private-projects.png'), animations: 'disabled' });
+  await page.getByRole('button').filter({ hasText: '隐私测试项目' }).click();
+  await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toBeVisible();
+  await page.getByRole('button', { name: '项目操作', exact: true }).click();
+  await page.getByRole('button', { name: '取消隐私项目', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: '已在最近创作中显示' })).toBeVisible();
+  await open(page);
+  await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toBeVisible();
+});
+
+test('media mode toggles across the entire capsule and from the keyboard', async ({ page }) => {
+  await open(page);
+  const toggle = page.getByRole('button', { name: '切换图片/视频', exact: true });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  for (const mode of ['image', 'video']) {
+    // Clicking the currently selected half must switch too, including its label.
+    await toggle.locator(`[data-mode="${mode}"]`).click();
+    await expect(toggle).toHaveAttribute('aria-pressed', mode === 'image' ? 'true' : 'false');
+  }
+  const bounds = (await toggle.boundingBox())!;
+  await toggle.click({ position: { x: bounds.width / 2, y: 1 } });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await toggle.focus();
+  await page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('prompt focus keeps geometry and settings fields share one appearance', async ({ page, request }, testInfo) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Settings appearance ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'gpt-image-2', displayName: 'GPT Image 2', enabled: true, capabilities: {
+      operations: ['image.generate'], aspectRatios: ['auto', '1:1', '16:9'], imageResolution: { mode: 'pixels', values: ['auto', '1024x1024', '1536x1024'], allowCustomDimensions: true },
+      parameters: [
+        { path: 'aspectRatio', label: '画幅', type: 'select', options: ['auto', '1:1', '16:9'] },
+        { path: 'resolution', label: '分辨率', type: 'text' },
+        { path: 'extra.quality', label: '质量', type: 'select', options: ['low', 'high'] },
+        { path: 'extra.partial_images', label: '中间预览数量', type: 'number', min: 0, max: 3 },
+      ],
+    } } })).status()).toBe(201);
+    await open(page);
+    const input = page.getByLabel('创作描述', { exact: true });
+    await expect(page.locator('.mobile-model-status:visible, .model-trigger:visible').filter({ hasText: 'GPT Image 2' }).first()).toBeVisible();
+    const composer = page.locator('.creation-composer');
+    const before = (await composer.boundingBox())!;
+    const inputBefore = (await input.boundingBox())!;
+    await input.click();
+    expect((await composer.boundingBox())!.height).toBe(before.height);
+    expect((await input.boundingBox())!.height).toBe(inputBefore.height);
+    await input.fill('第一行\n第二行\n第三行');
+    expect((await composer.boundingBox())!.height).toBe(before.height);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    const panel = page.locator('.composer-generation-settings');
+    const fields = panel.locator('.setting-line > .option-trigger, .setting-line > .select-trigger, .setting-line > input:not([type="checkbox"])');
+    const styles = await fields.evaluateAll(nodes => nodes.filter(node => node.getBoundingClientRect().height > 0).map(node => {
+      const css = getComputedStyle(node); const box = node.getBoundingClientRect();
+      return { height: box.height, width: box.width, background: css.backgroundColor, border: css.borderTopWidth, fontSize: css.fontSize, radius: css.borderRadius };
+    }));
+    expect(styles.length).toBeGreaterThanOrEqual(5);
+    for (const style of styles) expect(style).toEqual(styles[0]);
+    for (const name of ['生成数量', '画幅', '分辨率']) await expect(panel.getByRole('button', { name, exact: true }).locator('svg')).toHaveCount(1);
+    await panel.getByRole('button', { name: '生成数量', exact: true }).click();
+    await expect(page.locator('.count-segments').getByRole('button')).toHaveCount(5);
+    await page.locator('.count-segments').getByRole('button', { name: '2', exact: true }).click();
+    await panel.getByRole('button', { name: '画幅', exact: true }).click();
+    await expect(page.locator('.ratio-options')).toBeVisible();
+    await page.locator('.ratio-options').getByRole('button', { name: '1:1', exact: true }).click();
+    await panel.getByRole('button', { name: '分辨率', exact: true }).click();
+    await expect(page.locator('.image-resolution-options')).toBeVisible();
+    await page.locator('.image-resolution-options').getByRole('button', { name: '1K', exact: true }).click();
+    await selectValue(page, '质量', 'high');
+    await panel.getByLabel('中间预览数量').fill('2');
+    await page.screenshot({ path: testInfo.outputPath('unified-settings.png'), animations: 'disabled' });
+    await page.keyboard.press('Escape');
+    expect((await composer.boundingBox())!.height).toBe(before.height);
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
 test('project creation, membership, search, reload and deletion confirmation', async ({ page, request }) => {
@@ -238,7 +514,8 @@ test('reference upload, canvas mask and server-backed edit submission', async ({
   await expect(page.locator('.reference.upload-ready')).toBeVisible();
   await expect(page.locator('.study-card')).toHaveCount(1);
   await page.locator('.study-open').click();
-  await page.getByRole('button', { name: '局部编辑', exact: true }).click();
+  await focusEditingPrompt(page);
+  await page.getByRole('button', { name: '编辑蒙版', exact: true }).click();
   await expect(page.locator('.mask-source')).toBeVisible();
   await expect.poll(() => page.locator('.mask-source').evaluate(canvas => {
     const data = (canvas as HTMLCanvasElement).getContext('2d')!.getImageData(0, 0, (canvas as HTMLCanvasElement).width, (canvas as HTMLCanvasElement).height).data;
@@ -253,11 +530,13 @@ test('reference upload, canvas mask and server-backed edit submission', async ({
   await page.getByRole('button', { name: '重做笔画' }).click();
   await page.getByRole('button', { name: '应用蒙版' }).click();
   await expect(page.locator('.mask-workspace')).toHaveCount(0);
-  await expect(page.locator('.reference')).toHaveCount(2);
+  await expect(page.locator('.image-editing-viewer')).toBeVisible();
+  await focusEditingPrompt(page);
+  await expect(page.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const prompt = `edit masked coast ${randomUUID()}`;
-  await page.getByLabel('创作描述', { exact: true }).fill(prompt);
+  await page.locator('.image-editing-controls').getByLabel('创作描述', { exact: true }).fill(prompt);
   const response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
-  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  await page.locator('.image-editing-controls').getByRole('button', { name: '开始生成', exact: true }).click();
   const result = await response;
   expect(result.status()).toBe(202);
   const job = (await (await request.get('/internal/jobs?limit=100')).json()).items.find((item: { prompt: string }) => item.prompt === prompt);
@@ -279,7 +558,7 @@ test('connections, persisted preferences and canonical legacy entry', async ({ p
   await open(page, '/interaction.html');
   await expect(page).toHaveURL(/\/imagine$/);
   await expect(page.locator('.creation-composer')).toBeVisible();
-  await expect(page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByLabel('创作描述', { exact: true }).fill('persist this draft');
   await page.waitForTimeout(700);
   await page.reload();
@@ -415,22 +694,22 @@ test('aspect ratio stays selectable with managed rules and mode controls keep st
     const modeBefore = await modes.boundingBox();
     const settingsBefore = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
     const submitBefore = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
-    await expect(modes.getByRole('button', { name: '视频', exact: true }).locator('span')).toBeHidden();
-    if (mobile) await expect(modes.getByRole('button', { name: '图片', exact: true }).locator('span')).toBeHidden();
-    else await expect(modes.getByRole('button', { name: '图片', exact: true }).locator('span')).toBeVisible();
+    await expect(modes.locator('.mode-segment[data-mode="video"] > span')).toBeHidden();
+    if (mobile) await expect(modes.locator('.mode-segment[data-mode="image"] > span')).toBeHidden();
+    else await expect(modes.locator('.mode-segment[data-mode="image"] > span')).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('composer-image.png'), animations: 'disabled' });
-    await modes.getByRole('button', { name: '视频', exact: true }).click();
+    await modes.getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(add).toBeDisabled();
     expect(await add.boundingBox()).toEqual(before);
     expect(await add.locator('svg').boundingBox()).toEqual(iconBefore);
     expect(await modes.boundingBox()).toEqual(modeBefore);
-    await expect(modes.getByRole('button', { name: '图片', exact: true }).locator('span')).toBeHidden();
+    await expect(modes.locator('.mode-segment[data-mode="image"] > span')).toBeHidden();
     if (mobile) {
-      await expect(modes.getByRole('button', { name: '视频', exact: true }).locator('span')).toBeHidden();
+      await expect(modes.locator('.mode-segment[data-mode="video"] > span')).toBeHidden();
       expect(await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox()).toEqual(settingsBefore);
       expect(await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox()).toEqual(submitBefore);
       await expect(ratio).toBeHidden();
-    } else await expect(modes.getByRole('button', { name: '视频', exact: true }).locator('span')).toBeVisible();
+    } else await expect(modes.locator('.mode-segment[data-mode="video"] > span')).toBeVisible();
     const videoInputs = (await page.getByRole('group', { name: '视频输入方式', exact: true }).boundingBox())!;
     if (mobile) expect(Math.abs(videoInputs.y + videoInputs.height / 2 - before!.y - before!.height / 2)).toBeLessThan(1);
     else {
@@ -453,7 +732,7 @@ test('aspect ratio stays selectable with managed rules and mode controls keep st
       expect(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y).toBe(true);
     }
     const addVideo = await add.boundingBox();
-    await modes.getByRole('button', { name: '图片', exact: true }).click();
+    await modes.getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(add).toBeEnabled();
     expect(await add.boundingBox()).toEqual(addVideo);
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
@@ -465,6 +744,7 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
   try {
     for (const name of ['Pixel image', 'Named image', 'Locked image']) {
       expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: name.replace(' ', '-'), displayName: name, enabled: true, capabilities: {
+        profile: name === 'Pixel image' ? 'openai-images-v1' : 'openai-chat-image-v1',
         operations: ['image.generate'], aspectRatios: ratios, resolutions: ['1K', '2K', '4K'],
         customFields: { type: 'object', properties: { size: { type: 'string' } } },
         parameters: [
@@ -508,6 +788,30 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
       await page.getByRole('button', { name: '16:9', exact: true }).click();
       await page.keyboard.press('Escape');
       await expect(page.locator('.creation-controls .lucide-chevron-down')).toHaveCount(0);
+      if (name !== 'Locked image') {
+        for (const [ratio, pixels] of [['3:2', '3840x2560'], ['2:3', '2560x3840'], ['1:1', '3840x3840']]) {
+          await page.getByRole('button', { name: '选择画幅', exact: true }).click();
+          await page.getByRole('button', { name: ratio, exact: true }).click();
+          await page.keyboard.press('Escape');
+          await resolution.click();
+          await page.getByRole('button', { name: '4K', exact: true }).click();
+          await savedModelOptions(request, provider.id, name, 'image', { parameters: { resolution: name === 'Pixel image' ? pixels : '4K' } });
+        }
+        await page.getByRole('button', { name: '选择画幅', exact: true }).click();
+        await page.getByRole('button', { name: 'auto', exact: true }).click();
+        await page.keyboard.press('Escape');
+        await savedModelOptions(request, provider.id, name, 'image', { parameters: { aspectRatio: 'auto', resolution: name === 'Pixel image' ? 'auto' : '4K' } });
+        await resolution.click();
+        for (const preset of ['1K', '2K', '4K']) {
+          const button = page.getByRole('button', { name: preset, exact: true });
+          await expect(button).toBeEnabled();
+        }
+        await page.screenshot({ path: testInfo.outputPath(`${name}-automatic-resolution.png`), animations: 'disabled' });
+        await page.keyboard.press('Escape');
+        await page.getByRole('button', { name: '选择画幅', exact: true }).click();
+        await page.getByRole('button', { name: '16:9', exact: true }).click();
+        await page.keyboard.press('Escape');
+      }
       if (mobile) {
         await expect(resolution).toBeVisible(); await expect(count).toBeVisible();
         const shortcutBoxes = await page.getByRole('group', { name: '图片快捷设置' }).locator('button').evaluateAll(nodes => nodes.map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, height: box.height }; }));
@@ -582,6 +886,154 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
+test('native image protocols select tiers without forcing ratio across policies and reloads', async ({ page, request }, testInfo) => {
+  test.setTimeout(60000);
+  const scenarios = [
+    { name: 'Legacy Chat', profile: 'openai-chat-image-v1', modelId: 'gemini-3.1-flash-image', resolutions: ['auto', '1024x1024', '2048x2048'], tier: '4K' },
+    { name: 'Managed Chat', profile: 'openai-chat-image-v1', modelId: 'gemini-3.1-flash-image', resolutions: ['auto', '512', '1K', '2K', '4K'], tier: '4K', ruleType: 'select' },
+    { name: 'Text Chat', profile: 'openai-chat-image-v1', modelId: 'gemini-3.1-flash-image', resolutions: ['auto', '1024x1024'], tier: '4K', ruleType: 'text' },
+    { name: 'Native Gemini', profile: 'gemini-generate-content-image-v1', modelId: 'gemini-3.1-flash-image', resolutions: ['auto', '1024x1024'], tier: '4K' },
+    { name: 'Native Interactions', profile: 'gemini-interactions-image-v1', modelId: 'gemini-3-pro-image', resolutions: ['auto', '1024x1024'], tier: '4K' },
+    { name: 'Native xAI', profile: 'xai-imagine-image-v1', modelId: 'grok-imagine-image', resolutions: ['1k', '2k'], tier: '2K' },
+    { name: 'Limited Gemini', profile: 'gemini-generate-content-image-v1', modelId: 'gemini-2.5-flash-image', resolutions: ['auto', '1024x1024'], tier: '1K' },
+  ];
+  const providers: string[] = [];
+  try {
+    for (const scenario of scenarios) {
+      const { provider } = await (await request.post('/internal/providers', { data: { name: scenario.name, type: 'openai', enabled: true, isDefault: true } })).json();
+      providers.push(provider.id);
+      expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: scenario.modelId, displayName: scenario.name, enabled: true, capabilities: {
+        profile: scenario.profile, operations: ['image.generate'], aspectRatios: ['auto', '1:1', '16:9'], resolutions: scenario.resolutions,
+        imageResolution: { mode: 'native', values: scenario.tier === '1K' ? ['auto', '1K'] : scenario.profile === 'xai-imagine-image-v1' ? ['auto', '1k', '2k'] : ['auto', '1K', '2K', '4K'], allowCustomDimensions: false },
+        ...(scenario.ruleType ? { parameters: [
+          { path: 'aspectRatio', label: '画幅', type: 'select', options: ['auto', '1:1', '16:9'] },
+          { path: 'resolution', label: '分辨率', type: scenario.ruleType, ...(scenario.ruleType === 'select' ? { options: scenario.resolutions } : {}) },
+        ] } : {}),
+      } } })).status()).toBe(201);
+    }
+    await upload(request);
+    await open(page);
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured' } }) : route.continue());
+    for (const [index, scenario] of scenarios.entries()) {
+      if (page.viewportSize()!.width <= 760) {
+        await page.getByRole('button', { name: '生成设置', exact: true }).click();
+        await selectValue(page, '模型与服务', { label: `${scenario.name} · ${scenario.name}` });
+        await page.keyboard.press('Escape');
+      } else {
+        await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
+        await page.locator('.choice').filter({ has: page.getByText(scenario.name, { exact: true }) }).click();
+      }
+      const ratio = page.getByRole('button', { name: '选择画幅', exact: true });
+      const resolution = page.getByRole('button', { name: '选择图片分辨率', exact: true });
+      await expect(ratio).toContainText('auto');
+      await resolution.click();
+      if (scenario.tier !== '4K') await expect(page.getByRole('button', { name: '4K', exact: true })).toBeDisabled();
+      await page.getByRole('button', { name: scenario.tier, exact: true }).click();
+      await expect(page.locator('.image-resolution-options')).toHaveCount(0);
+      await expect(ratio).toContainText('auto');
+      const wire = scenario.profile === 'xai-imagine-image-v1' ? scenario.tier.toLowerCase() : scenario.tier;
+      await savedModelOptions(request, providers[index]!, scenario.name, 'image', scenario.ruleType ? { parameters: { resolution: wire } } : { ratio: 'auto', resolution: wire });
+      await page.reload();
+      await expect(resolution).toContainText(scenario.tier);
+      await expect(ratio).toContainText('auto');
+      await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      await chooseResolution(page, scenario.tier);
+      await expect(page.locator('.image-resolution-options')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('auto');
+      await page.keyboard.press('Escape');
+      await page.getByLabel('创作描述', { exact: true }).fill('native resolution fixture');
+      const sent = page.waitForRequest(req => req.url().endsWith('/internal/jobs') && req.method() === 'POST');
+      await page.getByRole('button', { name: '开始生成', exact: true }).click();
+      const payload = (await sent).postDataJSON();
+      expect(payload.resolution).toBe(wire);
+      expect([undefined, 'auto']).toContain(payload.aspectRatio);
+      if (scenario.name === 'Legacy Chat') await page.screenshot({ path: testInfo.outputPath('native-auto-resolution.png'), animations: 'disabled' });
+    }
+  } finally { for (const id of providers) await request.delete(`/internal/providers/${id}`); }
+});
+
+test('custom model resolution capabilities edit, persist and expose a future native tier', async ({ page, request }, testInfo) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Custom resolution ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    const created = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'private-future-image', displayName: 'Future image', enabled: true, capabilities: {
+      profile: 'openai-chat-image-v1', operations: ['image.generate'], aspectRatios: ['auto', '1:1', '16:9'], resolutions: ['auto', '1K'],
+    } } });
+    expect(created.status()).toBe(201);
+    await open(page, '/settings/providers');
+    await page.getByRole('button', { name: '编辑模型 Future image', exact: true }).click();
+    await page.getByLabel('分辨率允许值', { exact: true }).fill('auto, 1K, 8K');
+    await page.getByLabel('最大宽度', { exact: true }).fill('8192');
+    await page.getByLabel('边长对齐倍数', { exact: true }).fill('32');
+    await page.getByLabel('最大宽度', { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('custom-resolution-capabilities.png'), animations: 'disabled' });
+    await page.getByRole('button', { name: '保存模型', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '编辑模型', exact: true })).toHaveCount(0);
+    const model = (await (await request.get('/internal/models')).json()).items.find((item: ModelDto) => item.providerId === provider.id);
+    expect(model.capabilities.imageResolution).toEqual({ mode: 'native', values: ['auto', '1K', '8K'], allowCustomDimensions: false, dimensions: { maxWidth: 8192, multipleOf: 32 } });
+    await open(page);
+    await page.getByRole('button', { name: '生成设置', exact: true }).click();
+    await selectValue(page, '模型与服务', { label: `${provider.name} · Future image` });
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '选择图片分辨率', exact: true }).click();
+    await expect(page.getByRole('button', { name: '4K', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: '8K', exact: true }).click();
+    await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toContainText('auto');
+    await savedModelOptions(request, provider.id, 'Future image', 'image', { resolution: '8K', ratio: 'auto' });
+    await page.reload();
+    await expect(page.getByRole('button', { name: '选择图片分辨率', exact: true })).toContainText('8K');
+    await page.screenshot({ path: testInfo.outputPath('custom-native-tier.png'), animations: 'disabled' });
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('GPT Image 2 presets choose a valid ratio from auto on both layouts', async ({ page, request }, testInfo) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `GPT sizes ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  const ratios = ['auto', '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4'];
+  try {
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'gpt-image-2', displayName: 'GPT sizes', enabled: true, capabilities: {
+      profile: 'openai-images-v1', operations: ['image.generate'], aspectRatios: ratios, resolutions: ['auto', '1024x1024', '3840x2160'],
+      customFields: { properties: { size: { type: 'string' } } },
+      parameters: [
+        { path: 'aspectRatio', label: '画幅', type: 'select', options: ratios, defaultValue: 'auto' },
+        { path: 'resolution', label: '分辨率', type: 'select', options: ['auto', '1024x1024', '3840x2160'], allowCustom: true, defaultValue: 'auto' },
+      ],
+    } } })).status()).toBe(201);
+    await upload(request);
+    await open(page);
+    if (page.viewportSize()!.width <= 760) {
+      await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      await selectValue(page, '模型与服务', { label: `${provider.name} · GPT sizes` });
+      await page.keyboard.press('Escape');
+    } else {
+      await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
+      await page.locator('.choice').filter({ has: page.getByText('GPT sizes', { exact: true }) }).click();
+    }
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured' } }) : route.continue());
+    await page.getByLabel('创作描述', { exact: true }).fill('GPT size fixture');
+    for (const [preset, ratio, resolution] of [['1K', '16:9', '1280x720'], ['2K', '3:2', '2048x1360'], ['4K', '9:16', '2160x3840']]) {
+      await page.getByRole('button', { name: '选择画幅', exact: true }).click();
+      await page.getByRole('button', { name: 'auto', exact: true }).click();
+      await page.keyboard.press('Escape');
+      // Exercise generation settings as well as the shortcut, with atomic ratio/size updates.
+      if (preset === '2K') await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      await page.getByRole('button', { name: preset === '2K' ? '分辨率' : '选择图片分辨率', exact: true }).click();
+      await page.getByRole('button', { name: preset, exact: true }).click();
+      if (preset === '4K') {
+        await expect(page.locator('.image-resolution-options .ratio-options .choice')).toHaveText(['16:9', '9:16']);
+        await page.screenshot({ path: testInfo.outputPath('gpt-4k-ratio-choices.png'), animations: 'disabled' });
+      }
+      await page.getByRole('button', { name: ratio, exact: true }).click();
+      if (preset === '2K') await page.keyboard.press('Escape');
+      await savedModelOptions(request, provider.id, 'GPT sizes', 'image', { parameters: { aspectRatio: ratio, resolution } });
+      const sent = page.waitForRequest(req => req.url().endsWith('/internal/jobs') && req.method() === 'POST');
+      await page.getByRole('button', { name: '开始生成', exact: true }).click();
+      expect((await sent).postDataJSON()).toMatchObject({ aspectRatio: ratio, resolution });
+      await page.reload();
+      await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toContainText(ratio);
+      await expect(page.getByRole('button', { name: '选择图片分辨率', exact: true })).toContainText(preset);
+    }
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
 test('mobile pixel resolution presets submit mapped dimensions and retain custom sizes', async ({ page, request }, testInfo) => {
   test.skip(page.viewportSize()!.width > 760, 'Mobile generation settings');
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Mobile pixels ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
@@ -630,7 +1082,7 @@ test('mobile pixel resolution presets submit mapped dimensions and retain custom
     await savedModelOptions(request, provider.id, 'Mobile pixels', 'image', { resolution: 'auto' });
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: '选择图片分辨率', exact: true })).toContainText('自动');
-    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(page.getByRole('group', { name: '图片快捷设置' })).toHaveCount(0);
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
@@ -639,11 +1091,13 @@ test('count presets custom count ratio lock and card selects work across layouts
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Independent count ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
   try {
     expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'independent-image', displayName: 'Independent image', enabled: true, capabilities: {
+      profile: 'openai-images-v1',
       operations: ['image.generate'], supportsBatchCount: false, maxBatchCount: 1,
+      imageResolution: { mode: 'pixels', values: ['auto'], allowCustomDimensions: true },
       parameters: [
         { path: 'count', label: '生成数量', type: 'number', max: 1, defaultValue: 1, locked: true, visible: false },
         { path: 'aspectRatio', label: '画幅', type: 'select', options: ['auto', '16:9'], defaultValue: '16:9' },
-        { path: 'resolution', label: '分辨率', type: 'select', options: ['1K', '2K', '4K'], allowCustom: true, defaultValue: '1K' },
+        { path: 'resolution', label: '分辨率', type: 'select', options: ['1280x720', '2048x1152', '3840x2160'], allowCustom: true, defaultValue: '1280x720' },
         { path: 'quality', label: '质量', type: 'select', options: ['low', 'medium', 'high'], defaultValue: 'medium' },
       ],
     } } })).status()).toBe(201);
@@ -685,7 +1139,7 @@ test('count presets custom count ratio lock and card selects work across layouts
     await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toContainText('auto');
     await expect(width).toHaveValue('2560');
     await expect(height).toHaveValue('1440');
-    await savedModelOptions(request, provider.id, 'Independent image', 'image', { parameters: { aspectRatio: 'auto', resolution: '2K' } });
+    await savedModelOptions(request, provider.id, 'Independent image', 'image', { parameters: { aspectRatio: 'auto', resolution: '2048x1152' } });
     await page.screenshot({ path: testInfo.outputPath('resolution-ratio-unlocked.png'), animations: 'disabled' });
     await width.fill('1000');
     await height.focus();
@@ -727,7 +1181,7 @@ test('count presets custom count ratio lock and card selects work across layouts
     await page.getByRole('button', { name: '开始生成', exact: true }).click();
     const payload = (await sent).postDataJSON();
     expect(payload).toMatchObject({ count: 13, resolution: '2000x1440', quality: 'high' });
-    expect(payload).not.toHaveProperty('aspectRatio');
+    expect(payload.aspectRatio).toBe('auto');
     await savedModelOptions(request, provider.id, 'Independent image', 'image', { count: 13, parameters: { resolution: '2000x1440', aspectRatio: 'auto' } });
     await page.reload();
     await expect(count).toContainText('×13');
@@ -757,7 +1211,7 @@ test('desktop video shortcuts preserve presets custom values and model rules', a
       expect(added.status()).toBe(201);
     }
     await open(page);
-    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+    await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
     for (const name of ['Standard video', 'Managed video']) {
       await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
       await page.locator('.choice').filter({ has: page.getByText(name, { exact: true }) }).click();
@@ -797,7 +1251,7 @@ test('desktop video shortcuts preserve presets custom values and model rules', a
       expect((await submitted).postDataJSON()).toMatchObject({ resolution: '1440p', durationSeconds: 12 });
       await savedModelOptions(request, provider.id, name, 'video', name.startsWith('Managed') ? { parameters: { resolution: '1440p', durationSeconds: 12 } } : { resolution: '1440p', duration: 12 });
       await page.reload();
-      await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+      await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
       await expect(page.locator('.model-trigger')).toContainText(name);
       await expect(resolution).toContainText('1440p');
       await expect(duration).toContainText('12s');
@@ -853,6 +1307,70 @@ test('desktop gallery scroll keeps headers fixed and paginates in its own viewpo
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 });
 
+test('catalog selection loads capabilities and unknown models copy builtin or saved configuration', async ({ page, request }, testInfo) => {
+  const name = `Template connection ${randomUUID()}`;
+  const { provider } = await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json();
+  const sourceCapabilities = { operations: ['image.generate', 'image.edit'], profile: 'openai-chat-image-v1', aspectRatios: ['auto', '16:9'], resolutions: ['2K'], maxReferenceImages: 3, parameters: [{ path: 'resolution', label: '固定分辨率', type: 'select', options: ['2K'], defaultValue: '2K', locked: true }] };
+  const created = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'saved-template-image', displayName: 'Saved template', enabled: false, capabilities: sourceCapabilities } });
+  expect(created.status()).toBe(201);
+  const source = (await created.json()).model;
+  try {
+    await page.route(`**/internal/providers/${provider.id}/models/catalog`, route => route.fulfill({ json: { models: [{ id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2' }, { id: 'private-image-alias', displayName: 'private-image-alias' }] } }));
+    await open(page, '/settings/providers');
+    await page.getByRole('region', { name: `连接 ${name}`, exact: true }).getByRole('button', { name: '添加模型', exact: true }).click();
+    const picker = page.getByRole('combobox', { name: '远端模型目录', exact: true });
+    await picker.click();
+    await page.getByRole('option').filter({ hasText: 'Nano Banana 2' }).click();
+    await expect(page.getByText('已载入模型能力', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('最大参考图数量', { exact: true })).toHaveValue('14');
+    await expect(page.getByLabel('分辨率允许值', { exact: true })).toHaveValue('512, 1K, 2K, 4K');
+    await expect(page.getByLabel('参数路径 2', { exact: true })).toHaveValue('resolution');
+    await picker.click();
+    await page.getByRole('option').filter({ hasText: 'private-image-alias' }).click();
+    await expect(page.getByText('未找到内置能力', { exact: true })).toBeVisible();
+    await page.getByLabel('模型显示名称', { exact: true }).fill('My private alias');
+    await selectValue(page, '配置来源模型', { label: '内置 · Nano Banana 2 · Generate Content' });
+    await page.getByRole('button', { name: '复制配置', exact: true }).click();
+    await expect(page.getByLabel('最大参考图数量', { exact: true })).toHaveValue('14');
+    await selectValue(page, '配置来源模型', { label: `${name} · Saved template · saved-template-image` });
+    await page.getByRole('button', { name: '复制配置', exact: true }).click();
+    await expect(page.getByLabel('最大参考图数量', { exact: true })).toHaveValue('3');
+    await expect(page.getByLabel('参数默认值 1', { exact: true })).toHaveValue('2K');
+    await expect(page.getByLabel('模型 ID', { exact: true })).toHaveValue('private-image-alias');
+    await expect(page.getByLabel('模型显示名称', { exact: true })).toHaveValue('My private alias');
+    await page.getByLabel('配置来源模型', { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('copy-model-capabilities.png'), animations: 'disabled' });
+    await page.getByRole('button', { name: '保存模型', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '添加模型', exact: true })).toHaveCount(0);
+    const items = (await (await request.get('/internal/models')).json()).items;
+    expect(items.find((item: ModelDto) => item.modelId === 'private-image-alias')).toMatchObject({ providerId: provider.id, displayName: 'My private alias', enabled: true, capabilities: source.capabilities });
+    expect(items.find((item: ModelDto) => item.id === source.id)).toEqual(source);
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('delayed automatic capability loading preserves newer model edits', async ({ page, request }) => {
+  const name = `Delayed template ${randomUUID()}`;
+  const { provider } = await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await page.route(`**/internal/providers/${provider.id}/models/catalog`, route => route.fulfill({ json: { models: [{ id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2' }] } }));
+    await page.route(`**/internal/providers/${provider.id}/models/capabilities?*`, async route => { await gate; await route.fulfill({ json: { capabilities: { operations: ['image.generate'], maxReferenceImages: 14 } } }); });
+    await open(page, '/settings/providers');
+    await page.getByRole('region', { name: `连接 ${name}`, exact: true }).getByRole('button', { name: '添加模型', exact: true }).click();
+    await page.getByRole('combobox', { name: '远端模型目录', exact: true }).click();
+    await page.getByRole('option').filter({ hasText: 'Nano Banana 2' }).click();
+    await expect(page.getByText('正在载入模型能力…', { exact: true })).toBeVisible();
+    await page.getByLabel('最大参考图数量', { exact: true }).fill('7');
+    const response = page.waitForResponse(res => res.url().includes('/models/capabilities?'));
+    release(); await response;
+    await expect(page.getByLabel('最大参考图数量', { exact: true })).toHaveValue('7');
+    await page.getByRole('button', { name: '保存模型', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '添加模型', exact: true })).toHaveCount(0);
+    expect((await (await request.get('/internal/models')).json()).items.find((item: ModelDto) => item.providerId === provider.id).capabilities.maxReferenceImages).toBe(7);
+  } finally { release(); await request.delete(`/internal/providers/${provider.id}`); }
+});
+
 test('catalog models delete directly and capability loading preserves model edits', async ({ page, request }) => {
   const refresh = await request.post('/internal/providers/mock/models/refresh');
   expect(refresh.status()).toBe(200);
@@ -870,12 +1388,31 @@ test('catalog models delete directly and capability loading preserves model edit
     await expect(page.getByRole('button', { name: `删除模型 ${discovered.displayName}`, exact: true })).toHaveCount(0);
     expect((await (await request.get('/internal/models')).json()).items.some((model: ModelDto) => model.id === discovered.id)).toBe(false);
     await page.getByRole('button', { name: '编辑模型 Nano Banana fixture', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '编辑模型', exact: true });
+    const toggle = dialog.getByRole('button', { name: '生成参数', exact: true });
+    const save = dialog.getByRole('button', { name: '保存模型', exact: true });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(dialog.locator('.parameter-content')).toBeHidden();
+    await expect(dialog.locator('.model-form-body')).toHaveCSS('scrollbar-width', 'none');
+    await expect(save).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: `/tmp/imagine-collapsed-model-${page.viewportSize()!.width}.png` });
     await expect(page.getByLabel('参数路径 1', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: '从模型能力载入', exact: true }).click();
     await expect(page.getByLabel('参数路径 1', { exact: true })).toHaveValue('aspectRatio');
     await expect(page.getByLabel('参数路径 2', { exact: true })).toHaveValue('resolution');
     expect((await (await request.get('/internal/models')).json()).items.find((model: ModelDto) => model.id === saved.id).capabilities).toEqual(saved.capabilities);
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
     await page.getByLabel('参数默认值 1', { exact: true }).fill('16:9');
+    await expect(save).toBeInViewport({ ratio: 1 });
+    await dialog.locator('.model-form-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect.poll(() => dialog.locator('.model-form-body').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await expect(save).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: `/tmp/imagine-expanded-model-${page.viewportSize()!.width}.png` });
+    await toggle.click();
+    await expect(dialog.locator('.parameter-content')).toBeHidden();
+    await toggle.click();
+    await expect(page.getByLabel('参数默认值 1', { exact: true })).toHaveValue('16:9');
     await page.getByLabel('模型显示名称', { exact: true }).fill('Pinned Nano Banana');
     await page.getByRole('button', { name: '从模型能力载入', exact: true }).click();
     await expect(page.getByRole('button', { name: '从模型能力载入', exact: true })).toBeEnabled();
@@ -911,6 +1448,7 @@ test('shared connection model management saves rules and renders them in the com
     await selectValue(page, '筛选连接', provider.id);
     await expect(page.locator('.model-table tbody tr')).toHaveCount(2);
     await page.getByRole('button', { name: '编辑模型 Managed image', exact: true }).click();
+    await page.getByRole('button', { name: '生成参数', exact: true }).click();
     await expect(page.getByRole('combobox', { name: '模型调用协议', exact: true })).toContainText('xAI');
     await page.getByRole('combobox', { name: '选择参数路径 1', exact: true }).click();
     await expect(page.getByRole('option', { name: 'count', exact: true })).toHaveCount(0);
@@ -1023,7 +1561,7 @@ test('card references, video parameter memory and responsive video controls', as
   await card.hover();
   await card.locator('.card-reference').click();
   await expect(page.locator('.reference-tray img')).toHaveCount(1);
-  await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+  await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
   const modes = await page.getByRole('group', { name: '视频输入方式' }).boundingBox();
   const controls = await page.locator('.creation-controls').boundingBox();
   if (page.viewportSize()!.width <= 760) {
@@ -1033,8 +1571,8 @@ test('card references, video parameter memory and responsive video controls', as
     expect(Math.abs(modes!.y + modes!.height / 2 - settings!.y - settings!.height / 2)).toBeLessThan(1);
     expect(modes!.x + modes!.width).toBeLessThanOrEqual(settings!.x);
     expect(submit!.x - settings!.x).toBeLessThan(60);
-    await expect(page.locator('.mode-segments span').first()).toBeHidden();
-    await expect(page.locator('.mode-segments span').last()).toBeHidden();
+    await expect(page.locator('.mode-segment > span').first()).toBeHidden();
+    await expect(page.locator('.mode-segment > span').last()).toBeHidden();
   } else {
     expect(modes!.y + modes!.height).toBeLessThanOrEqual(controls!.y);
     expect(modes!.x).toBe(controls!.x);
@@ -1051,7 +1589,7 @@ test('card references, video parameter memory and responsive video controls', as
   expect((await submitted).postDataJSON()).toMatchObject({ aspectRatio: '9:16', resolution: '720p' });
   await expect.poll(async () => Object.values((await (await request.get('/internal/settings')).json()).settings['generation.default']?.video?.models ?? {}).some((value: unknown) => !!value && typeof value === 'object' && 'resolution' in value && value.resolution === '720p')).toBe(true);
   await page.reload();
-  await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '视频', exact: true }).click();
+  await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('9:16');
   await expect(page.getByRole('combobox', { name: '分辨率', exact: true })).toHaveText('720p');
@@ -1111,8 +1649,8 @@ test('ordinary accounts log in without seeing administrator data and can change 
     await expect(other.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
     await other.screenshot({ path: `/tmp/imagine-account-login-${page.viewportSize()!.width}.png` });
     await other.getByLabel('用户名', { exact: true }).fill(username);
-    await other.getByLabel('应用密码', { exact: true }).fill('member-password');
-    await other.getByRole('button', { name: '进入工作区', exact: true }).click();
+    await other.getByLabel('密码', { exact: true }).fill('member-password');
+    await other.getByRole('button', { name: '登录', exact: true }).click();
     await expect(other.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
     await expect(other.locator('.study-card')).toHaveCount(0);
     await other.goto('/settings/account');
@@ -1126,15 +1664,15 @@ test('ordinary accounts log in without seeing administrator data and can change 
     await other.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(other.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
     await other.getByLabel('用户名', { exact: true }).fill(username);
-    await other.getByLabel('应用密码', { exact: true }).fill('changed-password');
-    await other.getByRole('button', { name: '进入工作区', exact: true }).click();
+    await other.getByLabel('密码', { exact: true }).fill('changed-password');
+    await other.getByRole('button', { name: '登录', exact: true }).click();
     await expect(other.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
     await page.goto('/settings/account');
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
     await page.getByLabel('用户名', { exact: true }).fill(username);
-    await page.getByLabel('应用密码', { exact: true }).fill('changed-password');
-    await page.getByRole('button', { name: '进入工作区', exact: true }).click();
+    await page.getByLabel('密码', { exact: true }).fill('changed-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
     await expect(page.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
     await page.goto('/imagine');
     await expect(page.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
@@ -1189,4 +1727,328 @@ test('gallery action buttons share the same frosted surface', async ({ page, req
   }));
   expect(styles[1]).toEqual(styles[0]); expect(styles[2]).toEqual(styles[0]);
   expect(styles[0]!.blur).toBe('blur(9px)');
+});
+
+
+test('back to top follows the active gallery viewport and avoids composer selection and keyboard', async ({ page, request }, testInfo) => {
+  await upload(request);
+  const base = (await (await request.get('/internal/assets?limit=1')).json()).items[0];
+  const items = Array.from({ length: 80 }, () => ({ ...base, id: randomUUID() }));
+  await page.route(/\/internal\/assets\?/, route => route.fulfill({ json: { items, nextCursor: null } }));
+  const { collection } = await (await request.post('/internal/collections', { data: { name: 'Return to top' } })).json();
+  await page.route(`**/internal/collections/${collection.id}/assets?*`, route => route.fulfill({ json: { items, nextCursor: null } }));
+  for (const path of ['/imagine', '/library', '/saved', `/projects/${collection.id}`]) {
+    await open(page, path);
+    const scroll = page.locator(page.viewportSize()!.width > 760 ? '.gallery-scroll' : '.workspace');
+    const button = page.getByRole('button', { name: '返回顶部', exact: true });
+    await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1000);
+    await scroll.evaluate(element => { element.scrollTop = 600; });
+    await expect(button).toHaveCount(0);
+    await scroll.evaluate(element => { element.scrollTop = 700; });
+    await expect(button).toBeVisible();
+    const box = (await button.boundingBox())!;
+    const grid = (await page.locator('.study-grid').boundingBox())!;
+    if (await page.locator('.creation-composer').count()) {
+      const send = (await page.locator('.creation-composer .generate-button').boundingBox())!;
+      expect(Math.abs(box.x + box.width / 2 - send.x - send.width / 2)).toBeLessThanOrEqual(2);
+    } else expect(Math.abs(box.x + box.width - (grid.x + grid.width))).toBeLessThanOrEqual(2);
+    expect(box.width).toBe(page.viewportSize()!.width > 760 ? 40 : 44);
+    await expect(button).toHaveCSS('backdrop-filter', 'none');
+    const composer = page.locator('.creation-composer');
+    if (await composer.count()) expect(Math.abs((await composer.boundingBox())!.y - box.y - box.height - 12)).toBeLessThanOrEqual(2);
+    else expect(Math.abs(page.viewportSize()!.height - box.y - box.height - 20)).toBeLessThanOrEqual(2);
+    await page.screenshot({ path: testInfo.outputPath(`back-top-${path.split('/')[1]}.png`), animations: 'disabled' });
+    await button.click();
+    await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(0);
+    await expect(button).toHaveCount(0);
+    await page.getByRole('button', { name: '选择作品', exact: true }).click();
+    await scroll.evaluate(element => { element.scrollTop = 700; });
+    await expect(button).toHaveCount(0);
+    await page.getByRole('button', { name: '关闭多选', exact: true }).click();
+  }
+  await open(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const scroll = page.locator(page.viewportSize()!.width > 760 ? '.gallery-scroll' : '.workspace');
+  await scroll.evaluate(element => { element.scrollTop = 700; });
+  await expect(page.locator('.back-to-top')).toBeVisible();
+  await page.evaluate(() => {
+    const original = Element.prototype.scrollTo;
+    Element.prototype.scrollTo = function (...args: Parameters<Element['scrollTo']>) {
+      document.documentElement.dataset.topScrollBehavior = typeof args[0] === 'object' ? args[0]?.behavior : '';
+      return Reflect.apply(original, this, args);
+    };
+  });
+  await page.locator('.back-to-top').click();
+  expect(await page.locator('html').getAttribute('data-top-scroll-behavior')).toBe('instant');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.workspace').evaluate(element => { element.scrollTop = 700; });
+  await expect(page.locator('.back-to-top')).toBeVisible();
+  await page.evaluate(() => { Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 480 }); window.visualViewport!.dispatchEvent(new Event('resize')); });
+  await expect(page.locator('.back-to-top')).toHaveCount(0);
+  await page.evaluate(() => { delete (window.visualViewport as unknown as { height?: number }).height; window.visualViewport!.dispatchEvent(new Event('resize')); });
+  await expect(page.locator('.back-to-top')).toBeVisible();
+  await page.locator('.back-to-top').click();
+  await expect.poll(() => page.locator('.workspace').evaluate(element => element.scrollTop)).toBe(0);
+});
+
+
+test('image editing workspace expands in place preserves masks and shows local results', async ({ page, request }, testInfo) => {
+  const source = await upload(request, 'coast');
+  await open(page);
+  await page.getByLabel('创作描述', { exact: true }).fill('main-page draft stays intact');
+  await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+  const viewer = page.locator('.image-editing-viewer'), controls = page.locator('.image-editing-controls');
+  await expect(controls.locator('.composer-compact')).toBeVisible();
+  await expect(viewer.locator('.viewer-footer, .zoom-tools')).toHaveCount(0);
+  const before = (await controls.boundingBox())!;
+  const prompt = controls.getByLabel('创作描述', { exact: true });
+  await prompt.fill('Change the marked region into a small garden');
+  await expect(controls.locator('.composer-compact')).toHaveCount(0);
+  expect((await controls.boundingBox())!.height).toBeGreaterThan(before.height);
+  await expect.poll(async () => { const mask = (await controls.locator('.editing-mask-entry').boundingBox())!; const send = (await controls.locator('.generate-button').boundingBox())!; return Math.abs(mask.x + mask.width / 2 - send.x - send.width / 2); }).toBeLessThanOrEqual(1);
+  const stage = viewer.locator('.viewer-stage');
+  await stage.click({ position: { x: 10, y: 10 } });
+  await expect(controls.locator('.composer-compact')).toBeVisible();
+  await expect(prompt).toHaveValue('Change the marked region into a small garden');
+  if (page.viewportSize()!.width > 760) {
+    const image = viewer.locator('.viewer-image'); const rect = (await image.boundingBox())!;
+    await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await page.mouse.wheel(0, -400);
+    await expect.poll(async () => Number(await stage.getAttribute('data-viewer-scale'))).toBeGreaterThan(1);
+    await image.dblclick();
+    await expect(stage).toHaveAttribute('data-viewer-scale', '1');
+  }
+  await focusEditingPrompt(page);
+  await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
+  const maskStage = page.locator('.mask-stage'); await expect(maskStage).toBeVisible();
+  await expect.poll(() => page.locator('.mask-source').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBeGreaterThan(0);
+  const bounds = (await maskStage.boundingBox())!;
+  expect((await page.locator('.mask-tools').boundingBox())!.y).toBeGreaterThanOrEqual(bounds.y + bounds.height);
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2); await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width / 2 + 20, bounds.y + bounds.height / 2, { steps: 5 }); await page.mouse.up();
+  await page.screenshot({ path: testInfo.outputPath('mask-bottom-tools.png'), animations: 'disabled' });
+  await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+  await focusEditingPrompt(page);
+  await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', /^blob:/);
+  const masked = await viewer.locator('.viewer-image').getAttribute('src');
+  await prompt.click();
+  await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', source.contentUrl);
+  await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveCount(0);
+  await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await expect(controls.getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', /^blob:/);
+  expect(masked).toBeTruthy();
+  await focusEditingPrompt(page);
+  await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
+  await expect(page.getByRole('button', { name: '清空蒙版', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '清空蒙版', exact: true }).click();
+  await page.getByRole('button', { name: '确认清空', exact: true }).click();
+  await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+  await focusEditingPrompt(page);
+  await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', source.contentUrl);
+  await prompt.click();
+  await controls.getByRole('button', { name: '生成设置', exact: true }).click();
+  const panel = page.locator('.composer-generation-settings');
+  if (page.viewportSize()!.width <= 760) await expect(panel.getByRole('combobox', { name: '模型与服务', exact: true })).toHaveCSS('font-size', '12px');
+  await panel.getByRole('button', { name: '生成数量', exact: true }).click();
+  await page.locator('.count-segments').getByRole('button', { name: '2', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(controls.locator('.composer-compact')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('image-edit-expanded.png'), animations: 'disabled' });
+  const submitted = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+  await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+  expect((await submitted).status()).toBe(202);
+  await expect(viewer).toBeVisible();
+  await expect(controls.getByRole('button', { name: '编辑此生成结果', exact: true })).toHaveCount(2, { timeout: 25000 });
+  await page.screenshot({ path: testInfo.outputPath('image-edit-results.png'), animations: 'disabled' });
+  await controls.getByRole('button', { name: '编辑此生成结果', exact: true }).first().click();
+  await focusEditingPrompt(page);
+  await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(viewer).toBeVisible();
+  await viewer.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(viewer).toHaveCount(0);
+  await expect(page.getByLabel('创作描述', { exact: true })).toHaveValue('main-page draft stays intact');
+});
+
+
+test('image editor submits overlay masks and clean first-frame videos without navigation', async ({ page, request }, testInfo) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  const catalog = (await (await request.get('/internal/models?limit=100')).json()).items as ModelDto[];
+  const original = catalog.find(model => model.modelId === 'mock-image-v1')!;
+  const save = (capabilities: ModelDto['capabilities']) => request.post('/internal/models', { data: { providerId: original.providerId, modelId: original.modelId, displayName: original.displayName, capabilities, enabled: true } });
+  expect((await save({ ...original.capabilities, supportsMask: false })).ok()).toBe(true);
+  try {
+    const source = await upload(request); await open(page);
+    await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+    const controls = page.locator('.image-editing-controls'), viewer = page.locator('.image-editing-viewer');
+    await focusEditingPrompt(page);
+  await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
+    const stage = page.locator('.mask-stage'); await expect(stage).toBeVisible();
+    await expect.poll(() => page.locator('.mask-source').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBeGreaterThan(0);
+    const box = (await stage.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2, { steps: 5 }); await page.mouse.up();
+    await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+    await expect(page.locator('.mask-workspace')).toHaveCount(0);
+    await focusEditingPrompt(page);
+  await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    const prompt = controls.getByLabel('创作描述', { exact: true }); await prompt.fill('Overlay mask edit fixture');
+    await expect(prompt).toHaveValue('Overlay mask edit fixture');
+    let response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+    await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+    const imageResponse = await response; expect(imageResponse.status()).toBe(202);
+    const imageJob = (await imageResponse.json()).job;
+    expect(imageJob.request.maskProcessing).toMatchObject({ mode: 'overlay', sourceAssetId: source.id });
+    expect(imageJob.prompt).toBe('Overlay mask edit fixture');
+    await expect(controls.getByRole('button', { name: '编辑此生成结果' })).toHaveCount(1, { timeout: 20000 });
+    await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+    await expect(controls.getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await prompt.fill('Animate the clean sea');
+    response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+    await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+    const videoResponse = await response; expect(videoResponse.status()).toBe(202);
+    const videoJob = (await videoResponse.json()).job;
+    expect(videoJob.request.operation).toBe('video.image_to_video');
+    expect(videoJob.request.inputs).toEqual([{ assetId: source.id, role: 'first_frame' }]);
+    expect(videoJob.request.maskProcessing).toBeUndefined();
+    const video = controls.getByLabel('生成的视频', { exact: true }); await expect(video).toBeVisible({ timeout: 25000 });
+    await video.evaluate(element => (element as HTMLVideoElement).play());
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).currentTime)).toBeGreaterThan(0);
+    await page.screenshot({ path: testInfo.outputPath('editor-video-result.png'), animations: 'disabled' });
+    await viewer.getByRole('button', { name: '返回作品', exact: true }).click(); await expect(viewer).toHaveCount(0);
+    await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+    await controls.getByLabel('创作描述', { exact: true }).click();
+    await expect(controls.getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+    await focusEditingPrompt(page);
+  await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', /^blob:/);
+  } finally { expect((await save(original.capabilities)).ok()).toBe(true); }
+});
+
+
+test('mask entry follows prompt focus and remains clickable by touch', async ({ page, request }, testInfo) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  const source = await upload(request); await open(page);
+  await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+  const controls = page.locator('.image-editing-controls');
+  const mask = controls.getByRole('button', { name: '编辑蒙版', exact: true });
+  await expect(controls.locator('.composer-compact')).toBeVisible(); await expect(mask).toHaveCount(0);
+  await focusEditingPrompt(page); await expect(mask).toBeVisible();
+  await controls.getByRole('button', { name: '生成设置', exact: true }).click(); await expect(mask).toHaveCount(0);
+  await page.keyboard.press('Escape'); await expect(mask).toHaveCount(0);
+  await focusEditingPrompt(page);
+  if (page.viewportSize()!.width < 761) await mask.tap(); else await mask.click();
+  await expect(page.locator('.mask-workspace')).toBeVisible();
+  await page.getByRole('button', { name: '关闭局部编辑', exact: true }).click();
+  await expect(page.locator('.mask-workspace')).toHaveCount(0);
+  await page.locator('.viewer-stage').click({ position: { x: 5, y: 5 } }); await expect(mask).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('idle-editor-without-mask-button.png'), animations: 'disabled' });
+});
+
+
+test('video workspace defers frame capture until send and removes temporary inputs', async ({ page, request }, testInfo) => {
+  test.setTimeout(60000);
+  const path = testInfo.outputPath('two-color.mp4');
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=10:d=1', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=10:d=1', '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[v]', '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', path]);
+  const uploaded = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'two-color.mp4', mimeType: 'video/mp4', buffer: await readFile(path) } } });
+  expect(uploaded.status()).toBe(201); const source = (await uploaded.json()).asset;
+  await open(page, `/imagine?asset=${source.id}`);
+  const viewer = page.locator('.video-editing-viewer'), controls = viewer.locator('.image-editing-controls'), video = viewer.locator('.viewer-source-video');
+  let uploads = 0; page.on('request', req => { if (req.url().endsWith('/internal/assets/upload')) uploads++; });
+  await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
+  await controls.getByLabel('创作描述', { exact: true }).click();
+  await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await expect(video).toBeVisible(); expect(uploads).toBe(0);
+  await video.evaluate(element => { const video = element as HTMLVideoElement; video.currentTime = 1.5; });
+  await expect.poll(() => video.evaluate(element => !(element as HTMLVideoElement).seeking)).toBe(true);
+  expect(uploads).toBe(0);
+  await controls.getByLabel('创作描述', { exact: true }).fill('Edit the currently paused blue frame');
+  const capture = page.waitForResponse(response => response.url().endsWith('/internal/assets/upload') && response.request().method() === 'POST');
+  const jobResponse = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+  await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+  const frameResponse = await capture; expect(frameResponse.status()).toBe(201); const frame = (await frameResponse.json()).asset;
+  expect(frame).toMatchObject({ parentAssetId: source.id, width: 320, height: 180, type: 'image' });
+  const pixels = await page.evaluate(async src => { const image = new Image(); image.src = src; await image.decode(); const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1; const ctx = canvas.getContext('2d')!; ctx.drawImage(image, 0, 0, 1, 1); return Array.from(ctx.getImageData(0, 0, 1, 1).data); }, frame.contentUrl);
+  expect(pixels[2]).toBeGreaterThan(240); expect(pixels[0]).toBeLessThan(15);
+  const submitted = await jobResponse; expect(submitted.status()).toBe(202); const job = (await submitted.json()).job;
+  expect(job.request.inputs).toEqual([{ assetId: frame.id, role: 'source' }]);
+  expect((await (await request.get('/internal/assets?limit=100')).json()).items.some((asset: { id: string }) => asset.id === frame.id)).toBe(false);
+  await expect(controls.getByRole('button', { name: '编辑此生成结果' })).toHaveCount(1, { timeout: 20000 });
+  await expect.poll(async () => (await request.get(`/internal/assets/${frame.id}`)).status()).toBe(404);
+  await expect(video).toBeVisible(); expect(uploads).toBe(1);
+  const detail = (await (await request.get(`/internal/jobs/${job.id}`)).json()); expect(detail.assets[0].parentAssetId).toBe(source.id);
+  await page.screenshot({ path: testInfo.outputPath('deferred-video-frame.png'), animations: 'disabled' });
+});
+
+test('video viewer edits and extends in place and reports capture upload failures', async ({ page, request }, testInfo) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Video editor ${randomUUID()}`, type: 'xai', enabled: true } })).json();
+  try {
+    const preset = await (await request.get(`/internal/providers/${provider.id}/models/capabilities?modelId=grok-imagine-video&operation=video.generate`)).json();
+    expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'grok-imagine-video', displayName: 'Editor Video', enabled: true, capabilities: preset.capabilities } })).status()).toBe(201);
+    const path = testInfo.outputPath('video-source.mp4');
+    execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=green:s=320x180:r=10:d=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', path]);
+    const uploaded = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'video-source.mp4', mimeType: 'video/mp4', buffer: await readFile(path) } } });
+    expect(uploaded.status()).toBe(201); const source = (await uploaded.json()).asset;
+    await open(page, `/imagine?asset=${source.id}`);
+    const viewer = page.locator('.video-editing-viewer'), controls = viewer.locator('.image-editing-controls');
+    await controls.getByLabel('创作描述', { exact: true }).fill('Change the video lighting');
+    await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured-no-paid-call' } }) : route.continue());
+    for (const operation of ['edit', 'extend']) {
+      await controls.getByRole('button', { name: operation === 'edit' ? '编辑视频' : '续写视频', exact: true }).click();
+      const sent = page.waitForRequest(req => req.url().endsWith('/internal/jobs') && req.method() === 'POST');
+      await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+      const payload = (await sent).postDataJSON(); expect(payload).toMatchObject({ operation: `video.${operation}`, inputs: [{ assetId: source.id, role: 'source' }] });
+      expect(payload).not.toHaveProperty('aspectRatio'); expect(payload).not.toHaveProperty('resolution');
+      await expect(controls.locator('.editing-error')).toBeVisible(); await expect(viewer).toBeVisible();
+    }
+    await page.route('**/internal/assets/upload', route => route.fulfill({ status: 400, json: { error: 'frame-upload-fixture-failure', message: '视频截图上传失败，请重试' } }));
+    await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+    await controls.getByLabel('创作描述', { exact: true }).click();
+    await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
+    await expect(controls.locator('.editing-error')).toContainText('视频截图上传失败，请重试');
+    await expect(controls.getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(viewer.locator('.viewer-source-video')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('video-edit-extend.png'), animations: 'disabled' });
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('video mask entry captures lazily and its temporary mask is cleaned with the frame', async ({ page, request }, testInfo) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  const response = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'mask-video.mp4', mimeType: 'video/mp4', buffer: await readFile(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4')) } } });
+  expect(response.status()).toBe(201); const source = (await response.json()).asset;
+  await open(page, `/imagine?asset=${source.id}`);
+  const viewer = page.locator('.video-editing-viewer'), controls = viewer.locator('.image-editing-controls');
+  await controls.getByLabel('创作描述', { exact: true }).click();
+  await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await expect(viewer.locator('.viewer-source-video')).toBeVisible();
+  await controls.getByLabel('创作描述', { exact: true }).click();
+  const capture = page.waitForResponse(response => response.url().endsWith('/internal/assets/upload'));
+  await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
+  const frame = (await (await capture).json()).asset;
+  await expect(page.locator('.mask-stage')).toBeVisible();
+  await expect.poll(() => page.locator('.mask-source').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBeGreaterThan(0);
+  const stage = (await page.locator('.mask-stage').boundingBox())!;
+  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2); await page.mouse.down();
+  await page.mouse.move(stage.x + stage.width / 2 + 15, stage.y + stage.height / 2, { steps: 3 }); await page.mouse.up();
+  const uploadMask = page.waitForResponse(response => response.url().endsWith('/internal/assets/upload'));
+  await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+  const mask = (await (await uploadMask).json()).asset;
+  await expect(page.locator('.mask-workspace')).toHaveCount(0);
+  await expect(viewer.locator('img.viewer-image')).toBeVisible();
+  const library = (await (await request.get('/internal/assets?limit=100')).json()).items;
+  expect(library.some((asset: { id: string }) => [frame.id, mask.id].includes(asset.id))).toBe(false);
+  await controls.getByLabel('创作描述', { exact: true }).fill('Modify the marked video frame');
+  const submitted = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+  await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+  const result = await submitted; expect(result.status()).toBe(202);
+  expect((await result.json()).job.request.inputs).toEqual([{ assetId: frame.id, role: 'source' }, { assetId: mask.id, role: 'mask' }]);
+  await expect(controls.getByRole('button', { name: '编辑此生成结果' })).toHaveCount(1, { timeout: 20000 });
+  for (const id of [frame.id, mask.id]) await expect.poll(async () => (await request.get(`/internal/assets/${id}`)).status()).toBe(404);
+  await expect(viewer.locator('.viewer-source-video')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('video-mask-cleanup.png'), animations: 'disabled' });
 });

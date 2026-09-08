@@ -1,5 +1,6 @@
 import type { GenerationRequest } from '@imagine/shared';
-import { MediaOperationSchema } from '@imagine/shared';
+import { MediaOperationSchema, OperationPoliciesSchema, matchModelProtocol, type OperationPolicy } from '@imagine/shared';
+import { videoOperationPolicies } from '../providers/video-operation-policy.js';
 import { z } from 'zod';
 
 import type { AssetRecord, AssetRepository } from '../database/assets.js';
@@ -14,6 +15,8 @@ const ImageInputConstraintsSchema = z.object({
 }).strict();
 
 const RelevantCapabilitiesSchema = z.object({
+  profile: z.string().optional(),
+  operationPolicies: OperationPoliciesSchema.optional(),
   operations: z.array(MediaOperationSchema).min(1),
   maxReferenceImages: z.number().int().nonnegative().optional(),
   supportsMask: z.boolean().optional(),
@@ -95,6 +98,7 @@ export class GenerationInputResolver {
       );
     }
     const capabilities = parsedCapabilities.data;
+    const policy = capabilities.operationPolicies?.[request.operation] ?? videoOperationPolicies(capabilities.profile ?? matchModelProtocol(request.modelId) ?? '', request.modelId)[request.operation];
     if (!capabilities.operations.includes(request.operation)) {
       throw new GenerationInputError(
         'operation_not_supported',
@@ -102,7 +106,19 @@ export class GenerationInputResolver {
       );
     }
 
-    this.validateCardinality(request, capabilities);
+    // Never trust a client-supplied processing mode. Derive it from the stored model.
+    request = { ...request }; delete request.maskProcessing;
+    const maskInput = request.inputs.find(input => input.role === 'mask');
+    if (maskInput && request.operation.startsWith('image.')) {
+      const mask = this.assets.get(maskInput.assetId);
+      const sourceInput = request.operation === 'image.edit' ? request.inputs.find(input => input.role === 'source') : request.inputs.find(input => input.role === 'reference' && input.assetId === mask?.parentAssetId);
+      if (!sourceInput) throw new GenerationInputError(request.operation === 'image.edit' ? 'source_input_required' : 'mask_source_required', '蒙版必须关联本次提交的原图');
+      const mimeTypes = capabilities.inputImageConstraints?.mimeTypes;
+      const outputMimeType = ['image/png', 'image/jpeg', 'image/webp'].find(mime => !mimeTypes || mimeTypes.includes(mime)) as 'image/png' | 'image/jpeg' | 'image/webp' | undefined;
+      if (!outputMimeType) throw new GenerationInputError('image_mime_unsupported', '模型没有可用的合成图片格式');
+      request.maskProcessing = { version: 1, mode: request.operation === 'image.edit' && capabilities.supportsMask ? 'native' : 'overlay', sourceAssetId: sourceInput.assetId, outputMimeType, ...(capabilities.inputImageConstraints?.maxBytes ? { maxOutputBytes: capabilities.inputImageConstraints.maxBytes } : {}) };
+    }
+    this.validateCardinality(request, capabilities, policy);
     const seenAssetIds = new Set<string>();
     const inputs = request.inputs.map((input) => {
       if (seenAssetIds.has(input.assetId)) {
@@ -119,7 +135,11 @@ export class GenerationInputResolver {
           `Input Asset ${input.assetId} was not found.`,
         );
       }
-      this.validateImage(asset, capabilities.inputImageConstraints);
+      if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+        if (asset.type !== 'video' || !asset.durationMs || asset.durationMs <= 0) throw new GenerationInputError('input_role_not_allowed', '需要有有效时长的视频素材');
+        const constraints = policy?.video;
+        if (constraints && (!constraints.mimeTypes.includes(asset.mimeType) || (constraints.maxBytes !== undefined && asset.fileSize > constraints.maxBytes) || (constraints.minDurationSeconds !== undefined && asset.durationMs / 1000 < constraints.minDurationSeconds) || (constraints.maxDurationSeconds !== undefined && asset.durationMs / 1000 > constraints.maxDurationSeconds))) throw new GenerationInputError('input_role_not_allowed', '视频格式、大小或时长不符合当前操作要求');
+      } else this.validateImage(asset, input.role === 'mask' ? undefined : capabilities.inputImageConstraints);
       return { input, asset };
     });
 
@@ -130,11 +150,13 @@ export class GenerationInputResolver {
   private validateCardinality(
     request: GenerationRequest,
     capabilities: z.infer<typeof RelevantCapabilitiesSchema>,
+    policy?: OperationPolicy,
   ): void {
     const count = (role: GenerationRequest['inputs'][number]['role']) =>
       request.inputs.filter((input) => input.role === role).length;
+    if (count('mask') > 1) throw new GenerationInputError('input_role_not_allowed', '一次编辑仅允许一个蒙版');
     const references = count('reference');
-    const maxReferences = capabilities.maxReferenceImages ?? 0;
+    const maxReferences = policy?.maxReferenceImages ?? capabilities.maxReferenceImages ?? 0;
     if (references > maxReferences) {
       throw new GenerationInputError(
         'reference_limit_exceeded',
@@ -143,7 +165,7 @@ export class GenerationInputResolver {
     }
 
     if (request.operation === 'image.generate') {
-      if (request.inputs.some((input) => input.role !== 'reference')) {
+      if (request.inputs.some((input) => input.role !== 'reference' && !(input.role === 'mask' && request.maskProcessing?.mode === 'overlay'))) {
         throw new GenerationInputError(
           'input_role_not_allowed',
           'image.generate only accepts reference image inputs.',
@@ -161,7 +183,7 @@ export class GenerationInputResolver {
       return;
     }
     if (request.operation === 'video.image_to_video') {
-      if (count('first_frame') !== 1 || request.inputs.some((input) => input.role !== 'first_frame')) {
+      if (count('first_frame') !== 1 || count('last_frame') > 1 || request.inputs.some((input) => input.role !== 'first_frame' && !(input.role === 'last_frame' && policy?.inputRoles?.includes('last_frame')))) {
         throw new GenerationInputError(
           'source_input_required',
           'video.image_to_video requires exactly one first_frame image.',
@@ -179,10 +201,8 @@ export class GenerationInputResolver {
       return;
     }
     if (request.operation === 'video.edit' || request.operation === 'video.extend') {
-      throw new GenerationInputError(
-        'input_role_not_allowed',
-        `${request.operation} is not supported by the current video input runtime.`,
-      );
+      if (count('source') !== 1 || request.inputs.length !== 1) throw new GenerationInputError('source_input_required', '视频编辑或续写需要一个源视频');
+      return;
     }
     if (request.operation !== 'image.edit') return;
 
@@ -202,7 +222,7 @@ export class GenerationInputResolver {
         'image.edit accepts one source, references, and at most one mask.',
       );
     }
-    if (count('mask') > 0 && capabilities.supportsMask !== true) {
+    if (count('mask') > 0 && capabilities.supportsMask !== true && request.maskProcessing?.mode !== 'overlay') {
       throw new GenerationInputError('mask_not_supported', `Model ${request.modelId} does not support masks.`);
     }
   }
@@ -251,8 +271,8 @@ export class GenerationInputResolver {
     request: GenerationRequest,
     inputs: readonly ResolvedGenerationInput[],
   ): void {
-    if (request.operation !== 'image.edit') return;
-    const source = inputs.find((input) => input.input.role === 'source')?.asset;
+    if (!request.operation.startsWith('image.')) return;
+    const source = inputs.find((input) => input.input.assetId === request.maskProcessing?.sourceAssetId || input.input.role === 'source')?.asset;
     const mask = inputs.find((input) => input.input.role === 'mask')?.asset;
     if (!mask) return;
     if (!source) {

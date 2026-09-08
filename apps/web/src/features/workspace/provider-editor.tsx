@@ -1,13 +1,14 @@
 import { Select, SelectItem } from './select';
-import { useState } from 'react';
-import { matchModelProtocol, MODEL_PROTOCOLS, modelDisplayName, ModelCapabilityPresetQuerySchema, type ModelDto, type ProviderDto } from '@imagine/shared';
+import { useEffect, useRef, useState } from 'react';
+import { matchModelProtocol, MODEL_PROTOCOLS, modelDisplayName, ModelCapabilityPresetQuerySchema, ModelCapabilitiesSchema, resolveModelProfile, type ModelDto, type ProviderDto } from '@imagine/shared';
 import { useQuery } from '@tanstack/react-query';
-import { RefreshCw } from 'lucide-react';
-import { internalClient } from '../../api/internal-client';
+import { Copy, RefreshCw } from 'lucide-react';
+import { internalClient, InternalApiError } from '../../api/internal-client';
 import { buildManualModelWriteInput, buildProviderWriteInput, modelToForm, providerToForm, PROVIDER_PROFILE_OPTIONS, type ProviderFormState } from '../settings/model/provider-form';
 import { Panel } from './ui';
-import { ModelPolicyEditor } from './model-policy-editor';
+import { ModelPolicyEditor, mergeCapabilityPresets } from './model-policy-editor';
 import { ModelCatalogPicker } from './model-catalog-picker';
+import { useWorkspaceCatalog } from './queries';
 
 export function ProviderApiKeyField({ hasStoredKey, onChange, value }: { hasStoredKey: boolean; onChange: (value: string) => void; value: string }) {
   return <label><span>API Key</span><input aria-label="API Key" autoComplete="new-password" type="password" value={value} onChange={event => onChange(event.target.value)} placeholder={hasStoredKey ? '留空保留已存储的密钥' : '输入 API Key'} /></label>;
@@ -57,21 +58,55 @@ export function ProviderEditor({ provider, onClose, onSaved }: { provider: Provi
 export function ModelEditor({ model, providerId, providerType = '', onClose, onSaved }: { model: ModelDto | null; providerId: string; providerType?: string; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState(() => modelToForm(model, providerId));
   const remoteModels = useQuery({ queryKey: ['provider-model-catalog', providerId], queryFn: () => internalClient.discoverProviderModels(providerId), enabled: !model, staleTime: 60000, retry: false });
-  const selectModel = (id: string, fromCatalog = true) => setForm(current => {
+  const templates = useQuery({ queryKey: ['model-capability-templates', providerId], queryFn: () => internalClient.getModelCapabilityTemplates(providerId), staleTime: 60000, retry: false });
+  const catalog = useWorkspaceCatalog();
+  const [copySource, setCopySource] = useState('');
+  const [loadingCapabilities, setLoadingCapabilities] = useState(false);
+  const [notice, setNotice] = useState('');
+  const revision = useRef(0);
+  useEffect(() => () => { revision.current++; }, []);
+  const invalidateLoad = () => { revision.current++; setLoadingCapabilities(false); setNotice(''); };
+  const selectModel = (id: string, fromCatalog = true) => {
+    invalidateLoad(); setError(''); setCopySource('');
     const matched = MODEL_PROTOCOLS.find(profile => profile.value === matchModelProtocol(id));
-    let capabilitiesJson = current.capabilitiesJson;
+    setForm(current => ({ ...current, modelId: id, displayName: fromCatalog ? remoteModels.data?.models.find(model => model.id === id)?.displayName ?? modelDisplayName(id) : !current.displayName || current.displayName === modelDisplayName(current.modelId) ? modelDisplayName(id) : current.displayName,
+      capabilitiesJson: fromCatalog ? JSON.stringify({ operations: [`${matched?.kind ?? 'image'}.generate`] }) : current.capabilitiesJson }));
+    if (!fromCatalog) return;
+    const token = revision.current;
+    setLoadingCapabilities(true);
+    void internalClient.getModelCapabilityPreset(providerId, ModelCapabilityPresetQuerySchema.parse({ modelId: id, operation: `${matched?.kind ?? 'image'}.generate` })).then(({ capabilities }) => {
+      if (revision.current !== token) return;
+      setForm(current => ({ ...current, capabilitiesJson: JSON.stringify(mergeCapabilityPresets({}, capabilities, providerType, id), null, 2) }));
+      setNotice('已载入模型能力');
+    }).catch(failure => {
+      if (revision.current !== token) return;
+      if (failure instanceof InternalApiError && failure.status === 400) setNotice('未找到内置能力');
+      else setError(failure instanceof Error ? failure.message : '模型能力载入失败');
+    }).finally(() => { if (revision.current === token) setLoadingCapabilities(false); });
+  };
+  const sources = [
+    ...(templates.data?.models ?? []).map(item => ({ key: `builtin:${item.capabilities.profile}:${item.modelId}`, label: `内置 · ${item.displayName} · ${MODEL_PROTOCOLS.find(profile => profile.value === item.capabilities.profile)?.label ?? ''}`, capabilities: item.capabilities, modelId: item.modelId, providerType })),
+    ...(catalog.models.data ?? []).filter(item => item.id !== model?.id && catalog.providers.data?.some(provider => provider.id === item.providerId && !provider.type.startsWith('custom-'))).map(item => {
+      const provider = catalog.providers.data!.find(provider => provider.id === item.providerId)!;
+      return { key: `saved:${item.id}`, label: `${provider.name} · ${item.displayName} · ${item.modelId}`, capabilities: item.capabilities, modelId: item.modelId, providerType: provider.type };
+    }),
+  ];
+  const copyCapabilities = () => {
+    const source = sources.find(item => item.key === copySource);
+    if (!source) return;
+    invalidateLoad(); setError('');
     try {
-      const capabilities = JSON.parse(capabilitiesJson);
-      if (matched && !capabilities.profile && Array.isArray(capabilities.operations) && !capabilities.operations.every((operation: string) => operation.startsWith(`${matched.kind}.`))) {
-        capabilitiesJson = JSON.stringify({ ...capabilities, operations: [`${matched.kind}.generate`] }, null, 2);
-      }
-    } catch { /* Keep incomplete advanced configuration editable. */ }
-    return { ...current, modelId: id, displayName: fromCatalog || !current.displayName || current.displayName === modelDisplayName(current.modelId) ? modelDisplayName(id) : current.displayName, capabilitiesJson };
-  });
+      const capabilities = ModelCapabilitiesSchema.parse(source.capabilities);
+      const profile = resolveModelProfile(source.providerType, capabilities.operations[0]!, source.modelId, capabilities.profile);
+      const copied = { ...capabilities, ...(profile ? { profile } : {}) };
+      setForm(current => ({ ...current, capabilitiesJson: JSON.stringify(capabilities.parameters === undefined ? mergeCapabilityPresets({}, copied, source.providerType, source.modelId) : copied, null, 2) }));
+      setNotice('已复制模型配置');
+    } catch (failure) { setError(failure instanceof Error ? failure.message : '模型配置复制失败'); }
+  };
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  return <Panel title={model ? '编辑模型' : '添加模型'} open onEscapeKeyDown={event => { const target = event.target; if (target instanceof HTMLElement && target.getAttribute("role") === "combobox" && target.getAttribute("aria-expanded") === "true") event.preventDefault(); }} onClose={() => !saving && onClose()} className="connection-editor"><form className="connection-form" onSubmit={event => {
-    event.preventDefault(); setSaving(true); setError('');
+  return <Panel title={model ? '编辑模型' : '添加模型'} open onEscapeKeyDown={event => { const target = event.target; if (target instanceof HTMLElement && target.getAttribute("role") === "combobox" && target.getAttribute("aria-expanded") === "true") event.preventDefault(); }} onClose={() => !saving && onClose()} className="connection-editor model-editor"><form className="connection-form" onSubmit={event => {
+    event.preventDefault(); if (loadingCapabilities) return; setSaving(true); setError('');
     void (async () => {
       try {
         const input = buildManualModelWriteInput(form);
@@ -81,5 +116,12 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
       } catch (failure) { setError(failure instanceof Error ? failure.message : '模型保存失败'); }
       finally { setSaving(false); }
     })();
-  }}>{!model && <div className="catalog-field"><span>远端模型目录</span><div className="catalog-model-picker"><ModelCatalogPicker models={remoteModels.data?.models ?? []} value={form.modelId} loading={remoteModels.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !remoteModels.data.models.length && <span>没有可用的远端模型</span>}</div>}<div className="form-columns"><label><span>模型 ID</span><input aria-label="模型 ID" required value={form.modelId} onChange={event => selectModel(event.target.value, false)} /></label><label><span>显示名称</span><input aria-label="模型显示名称" required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div><ModelPolicyEditor loadCapabilities={async current => (await internalClient.getModelCapabilityPreset(providerId, ModelCapabilityPresetQuerySchema.parse({ modelId: form.modelId, profile: current.profile, operation: Array.isArray(current.operations) ? current.operations[0] : 'image.generate' }))).capabilities} modelId={form.modelId} providerType={providerType} value={form.capabilitiesJson} onChange={value => setForm(current => ({ ...current, capabilitiesJson: value }))} /><label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />启用模型</label>{error && <p className="error-state" role="alert">{error}</p>}<div className="form-footer"><button type="button" className="quiet-command" disabled={saving} onClick={onClose}>取消</button><button className="primary-command" type="submit" disabled={saving}>{saving ? '正在保存' : '保存模型'}</button></div></form></Panel>;
+  }}><div className="model-form-body">{!model && <div className="catalog-field"><span>远端模型目录</span><div className="catalog-model-picker"><ModelCatalogPicker models={remoteModels.data?.models ?? []} value={form.modelId} loading={remoteModels.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !remoteModels.data.models.length && <span>没有可用的远端模型</span>}</div>}
+    <div className="form-columns"><label><span>模型 ID</span><input aria-label="模型 ID" required value={form.modelId} onChange={event => selectModel(event.target.value, false)} /></label><label><span>显示名称</span><input aria-label="模型显示名称" required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div>
+    <label><span>复制模型配置</span><Select aria-label="配置来源模型" value={copySource} onChange={event => setCopySource(event.target.value)}><SelectItem value="">选择来源模型</SelectItem>{sources.map(source => <SelectItem key={source.key} value={source.key}>{source.label}</SelectItem>)}</Select></label>
+    <button type="button" className="quiet-command" disabled={!copySource || saving} onClick={copyCapabilities}><Copy size={16} />复制配置</button>
+    {templates.isPending && <p role="status">正在加载内置模型…</p>}{templates.isError && <p className="error-state" role="alert">内置模型加载失败<button type="button" className="quiet-command" onClick={() => void templates.refetch()}>重试</button></p>}
+    {(loadingCapabilities || notice) && <p role="status">{loadingCapabilities ? '正在载入模型能力…' : notice}</p>}
+    <ModelPolicyEditor loadCapabilities={async current => { invalidateLoad(); return (await internalClient.getModelCapabilityPreset(providerId, ModelCapabilityPresetQuerySchema.parse({ modelId: form.modelId, profile: current.profile, operation: Array.isArray(current.operations) ? current.operations[0] : 'image.generate' }))).capabilities; }} modelId={form.modelId} providerType={providerType} value={form.capabilitiesJson} onChange={value => { invalidateLoad(); setForm(current => ({ ...current, capabilitiesJson: value })); }} />
+    <label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />启用模型</label>{error && <p className="error-state" role="alert">{error}</p>}</div><div className="form-footer"><button type="button" className="quiet-command" disabled={saving} onClick={onClose}>取消</button><button className="primary-command" type="submit" disabled={saving || loadingCapabilities}>{saving ? '正在保存' : '保存模型'}</button></div></form></Panel>;
 }

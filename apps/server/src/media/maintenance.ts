@@ -408,7 +408,7 @@ export async function inspectMediaConsistency(options: {
     ];
     for (const item of assetPaths) {
       if (safeAssetPath(options.paths, asset, item.variant, item.path)) expected.add(item.path);
-      await inspectAssetPath(options.paths, asset, item.variant, item.path, state, limits);
+      if (!(asset.deletedAt && asset.metadata.temporaryVideoFrame === true)) await inspectAssetPath(options.paths, asset, item.variant, item.path, state, limits);
       if (state.truncated) break;
     }
     if (state.truncated) break;

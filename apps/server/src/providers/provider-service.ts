@@ -1,7 +1,10 @@
+import { compatibleCatalog } from './compatible-model-catalog.js';
 import { randomUUID } from 'node:crypto';
 
 import {
   ModelCapabilitiesSchema,
+  ModelCapabilityTemplatesResponseSchema,
+  MODEL_PROTOCOLS,
   ProviderBaseUrlSchema,
   ProviderDtoSchema,
   ProviderTypeSchema,
@@ -41,7 +44,8 @@ import {
   type ProviderStorageRecord,
 } from '../database/providers.js';
 import type { SecretVault } from '../security/secret-vault.js';
-import { createAdapter, MOCK_PROVIDER_ID } from './provider-registry.js';
+import { createAdapter, MOCK_PROVIDER_ID, ProviderRegistryError } from './provider-registry.js';
+import { matchLibraryModel } from './model-library.js';
 import type { ProviderRegistry } from './provider-registry.js';
 
 export interface CreateProviderServiceInput {
@@ -329,6 +333,8 @@ function toProviderModelCapabilities(value: ModelCapabilities): ProviderModel['c
   const inputImageConstraints = value.inputImageConstraints;
   return {
     ...(value.profile === undefined ? {} : { profile: value.profile }),
+    ...(value.imageResolution === undefined ? {} : { imageResolution: value.imageResolution }),
+    ...(value.operationPolicies === undefined ? {} : { operationPolicies: value.operationPolicies }),
     ...(value.parameters === undefined ? {} : { parameters: value.parameters }),
     operations: value.operations,
     ...(value.aspectRatios === undefined ? {} : { aspectRatios: value.aspectRatios }),
@@ -374,12 +380,14 @@ export class ProviderService {
 
   public get(id: string): ProviderDto | null {
     const provider = this.providers.get(id);
+    if (provider?.type === 'mock' && !this.registry.mockProviderEnabled) return null;
     return provider ? toProviderDto(provider) : null;
   }
 
   public async discoverModels(providerId: string) {
     const registration = await Promise.resolve(this.registry.resolve(providerId));
     const family = providerFamily(registration.adapter.type);
+    const templates = family ? (await this.modelCapabilityTemplates(providerId)).models : [];
     if (!family || !registration.http) return { models: this.models.listForProvider(providerId).map(model => ({ id: model.modelId, displayName: model.displayName })) };
     const defaults = { openai: 'https://api.openai.com/v1', xai: 'https://api.x.ai/v1', gemini: 'https://generativelanguage.googleapis.com/v1beta' };
     const base = registration.baseUrl ?? defaults[family];
@@ -403,7 +411,8 @@ export class ProviderService {
           const raw = typeof entry === 'string' ? entry : entry && typeof entry === 'object' ? (entry as Record<string, unknown>)[family === 'gemini' ? 'name' : 'id'] : undefined;
           if (typeof raw !== 'string') continue;
           const id = family === 'gemini' ? raw.replace(/^models\//, '') : raw;
-          const parsed = RemoteModelCatalogSchema.shape.models.element.safeParse({ id, displayName: modelDisplayName(id) });
+          const template = matchLibraryModel(templates, id, matchModelProtocol(id));
+          const parsed = RemoteModelCatalogSchema.shape.models.element.safeParse({ id, displayName: template?.displayName ?? id, recognized: !!template, ...(template ? { template: { modelId: template.modelId, profile: template.capabilities.profile } } : {}) });
           if (parsed.success) models.set(id, parsed.data);
         }
         if (models.size > 4096) throw new Error('Catalog exceeds model limit');
@@ -426,13 +435,27 @@ export class ProviderService {
     const adapter = createAdapter(profile ?? provider.type, registration.adapter);
     const catalog = await adapter?.getCapabilities({ providerId, secrets: {} });
     const modelId = query.modelId.replace(/^models\//, '');
-    const model = catalog?.models.find(model => model.id === modelId || model.id === modelId.replace(/-(preview|latest)$/, ''));
+    const model = matchLibraryModel([...(catalog?.models ?? []), ...compatibleCatalog(profile ?? provider.type)].map(model => ({ modelId: model.id, displayName: model.displayName, capabilities: ModelCapabilitiesSchema.parse({ ...model.capabilities, ...(profile ? { profile } : {}) }) })), modelId, profile);
     if (!model) throw new ManualModelServiceError('invalid_model', '没有找到该模型的内置能力，请手动配置。');
     return { capabilities: ModelCapabilitiesSchema.parse({ ...model.capabilities, ...(profile ? { profile } : {}) }) };
   }
 
+  public async modelCapabilityTemplates(providerId: string) {
+    const provider = this.providers.get(providerId);
+    if (!provider) throw new ManualModelServiceError('provider_not_found', 'Provider was not found.');
+    if (customKindForProviderType(provider.type) !== null) throw new ManualModelServiceError('invalid_model', 'Custom Provider models are managed by the adapter definition.');
+    const registration = await Promise.resolve(this.registry.resolve(providerId));
+    const models = [];
+    for (const profile of MODEL_PROTOCOLS) {
+      const adapter = createAdapter(profile.value, registration.adapter);
+      const catalog = await adapter?.getCapabilities({ providerId, secrets: {} });
+      for (const model of [...(catalog?.models ?? []), ...compatibleCatalog(profile.value)]) models.push({ modelId: model.id, displayName: modelDisplayName(model.id), capabilities: { ...model.capabilities, profile: profile.value } });
+    }
+    return ModelCapabilityTemplatesResponseSchema.parse({ models });
+  }
+
   public page(request: ProviderPageRequest = {}): CursorPage<ProviderDto> {
-    const page = this.providers.page(request);
+    const page = this.providers.page({ ...request, ...(!this.registry.mockProviderEnabled ? { excludeType: 'mock' } : {}) });
     return { items: page.items.map(toProviderDto), nextCursor: page.nextCursor };
   }
 
@@ -504,7 +527,7 @@ export class ProviderService {
   }
 
   public listModels(request: ModelPageRequest = {}): CursorPage<ModelRecord> {
-    return this.models.page(request);
+    return this.models.page({ ...request, ...(!this.registry.mockProviderEnabled ? { excludeProviderType: 'mock' } : {}) });
   }
 
   public saveManualModel(input: ManualModelInput): ModelRecord {
@@ -838,6 +861,9 @@ export class ProviderService {
 
   private createWithId(id: string, input: CreateProviderServiceInput): ProviderDto {
     const type = ProviderTypeSchema.parse(input.type);
+    if (type === 'mock' && !this.registry.mockProviderEnabled) {
+      throw new ProviderRegistryError('provider_disabled', 'The test Provider is disabled.');
+    }
     const baseUrl = parseProviderBaseUrl(input.baseUrl);
     const config = SafeConfigSchema.parse(input.config ?? {});
     const created = this.providers.create({

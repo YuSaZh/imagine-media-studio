@@ -19,7 +19,7 @@ const EnvironmentSchema = z.object({
     .default('info'),
   MOCK_PROVIDER_ENABLED: z
     .enum(['true', 'false'])
-    .default('true')
+    .default('false')
     .transform((value) => value === 'true'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   MAX_IMAGE_UPLOAD_BYTES: z.coerce.number().int().positive().default(32 * 1024 * 1024),

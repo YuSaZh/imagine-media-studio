@@ -65,6 +65,7 @@ export interface ProviderHttpClientFactory {
 }
 
 export interface ProviderRegistryOptions {
+  mockProviderEnabled?: boolean;
   mockAdapter?: ProviderAdapter;
   http?: ProviderHttpClientPort;
   httpFactory?: ProviderHttpClientFactory;
@@ -233,6 +234,7 @@ export function createAdapter(providerType: string, mockAdapter: ProviderAdapter
  * short-lived registration/context handed to a job operation.
  */
 export class ProviderRegistry implements ProviderRegistryPort {
+  public readonly mockProviderEnabled: boolean;
   private readonly mockAdapter: ProviderAdapter;
   private readonly http: ProviderHttpClientPort | undefined;
   private readonly httpFactory: ProviderHttpClientFactory | undefined;
@@ -244,6 +246,7 @@ export class ProviderRegistry implements ProviderRegistryPort {
     private readonly vault: SecretVault,
     optionsOrMock: ProviderRegistryOptions | ProviderAdapter = {},
   ) {
+    this.mockProviderEnabled = isAdapter(optionsOrMock) ? true : optionsOrMock.mockProviderEnabled ?? true;
     if (isAdapter(optionsOrMock)) {
       this.mockAdapter = optionsOrMock;
       this.http = undefined;
@@ -276,7 +279,7 @@ export class ProviderRegistry implements ProviderRegistryPort {
         `Provider ${providerId} was not found.`,
       );
     }
-    if (!provider.enabled) {
+    if (!provider.enabled || provider.type === 'mock' && !this.mockProviderEnabled) {
       throw new ProviderRegistryError(
         'provider_disabled',
         `Provider ${providerId} is disabled.`,

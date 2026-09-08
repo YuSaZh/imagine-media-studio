@@ -1,5 +1,5 @@
 import type { AssetDto, AssetInput, GenerationRequest, JobDto, ModelDto, ProviderDto, JsonObject } from '@imagine/shared';
-import { GenerationRequestSchema, applyModelParameters, matchModelProtocol, normalizeAutomaticParameters } from '@imagine/shared';
+import { GenerationRequestSchema, ModelCapabilitiesSchema, MODEL_PROTOCOLS, NativeProviderProfileSchema, applyModelParameters, assertImageResolution, assertOperationParameters, inferImageResolution, matchModelProtocol, resolveModelProfile, type ImageResolutionCapability, type MediaOperation } from '@imagine/shared';
 import { managedParameters } from './managed-parameters';
 import { internalClient } from '../../api/internal-client';
 import { mapInternalModel } from './model-capabilities';
@@ -32,6 +32,8 @@ export interface MediaItem {
 }
 export interface Project { id: string; name: string; }
 export interface WorkspaceModel extends ReturnType<typeof mapInternalModel> {
+  imageProfile?: string | undefined;
+  imageResolution?: ImageResolutionCapability | undefined;
   key: string;
   name: string;
   providerName: string;
@@ -40,7 +42,7 @@ export interface WorkspaceModel extends ReturnType<typeof mapInternalModel> {
   raw: ModelDto;
 }
 export interface ReferenceInput { asset: AssetDto; role: AssetInput['role']; }
-export interface MediaFilter { kind: 'all' | MediaKind; saved: boolean; projectId: string | null; search: string; }
+export interface MediaFilter { excludePrivate?: boolean; publicProjectIds?: readonly string[]; kind: 'all' | MediaKind; saved: boolean; projectId: string | null; search: string; }
 export interface MediaPage { items: MediaItem[]; nextCursor: string | null; offline: boolean; }
 export const ACTIVE_JOB_STATUSES = new Set(['queued', 'submitting', 'remote_pending', 'remote_running', 'downloading', 'processing']);
 export const JOB_LABELS: Record<string, string> = {
@@ -75,6 +77,7 @@ export async function fetchMediaPage(filter: MediaFilter, cursor?: string): Prom
   try {
     const page = await internalClient.listAssets({
       limit: 60, includeJobs: true,
+      ...(filter.excludePrivate ? { excludePrivate: true } : {}),
       ...(cursor ? { cursor } : {}),
       ...(filter.kind !== 'all' ? { type: filter.kind } : {}),
       ...(filter.saved ? { favorite: true } : {}),
@@ -93,6 +96,7 @@ export async function fetchMediaPage(filter: MediaFilter, cursor?: string): Prom
     if (cached === null || cursor) throw error;
     return {
       items: cached.filter(item => item.persistedAsset !== false)
+        .filter(item => !filter.excludePrivate || item.folderIds.every(id => filter.publicProjectIds?.includes(id)))
         .filter(item => filter.kind === 'all' || item.kind === filter.kind)
         .filter(item => !filter.saved || item.saved)
         .filter(item => !filter.projectId || item.folderIds.includes(filter.projectId))
@@ -120,17 +124,48 @@ export async function allPages<T>(load: (cursor?: string) => Promise<{ items: re
 
 export function mapModels(models: readonly ModelDto[], providers: readonly ProviderDto[]): WorkspaceModel[] {
   const enabled = new Map(providers.filter(provider => provider.enabled).map(provider => [provider.id, provider]));
-  return models.filter(model => model.enabled && enabled.has(model.providerId)).map(model => ({
-    ...mapInternalModel(model), key: model.id, name: model.displayName,
-    providerName: enabled.get(model.providerId)!.name,
-    providerType: enabled.get(model.providerId)!.type ?? '',
-    providerDefault: enabled.get(model.providerId)!.isDefault, raw: model,
-  })).sort((left, right) => Number(right.providerDefault) - Number(left.providerDefault));
+  return models.filter(model => model.enabled && enabled.has(model.providerId)).map(model => {
+    const mapped = mapInternalModel(model);
+    const provider = enabled.get(model.providerId)!;
+    const declared = NativeProviderProfileSchema.safeParse(model.capabilities.profile);
+    const imageProfile = mapped.mediaKind === 'image' && (!declared.success || MODEL_PROTOCOLS.some(profile => profile.value === declared.data && profile.kind === 'image'))
+      ? resolveModelProfile(provider.type ?? '', 'image.generate', model.modelId, declared.success ? declared.data : undefined) : undefined;
+    const imageResolution = mapped.mediaKind === 'image' ? inferImageResolution(model.capabilities, imageProfile) : undefined;
+    return {
+      ...mapped, capabilities: { ...mapped.capabilities, resolutions: imageResolution?.values ?? mapped.capabilities.resolutions },
+      key: model.id, name: model.displayName, providerName: provider.name,
+      providerType: provider.type ?? '', providerDefault: provider.isDefault, raw: model, imageProfile, imageResolution,
+    };
+  }).sort((left, right) => Number(right.providerDefault) - Number(left.providerDefault));
 }
 
-export function operationFor(mode: MediaKind, videoMode: 'text' | 'first_frame' | 'references', inputs: readonly ReferenceInput[]): 'image.generate' | 'image.edit' | 'video.generate' | 'video.image_to_video' | 'video.reference_to_video' {
+export type VideoMode = 'text' | 'first_frame' | 'first_last_frame' | 'references' | 'edit' | 'extend';
+
+export function modelForOperation(model: WorkspaceModel, operation: MediaOperation): WorkspaceModel {
+  const parsed = ModelCapabilitiesSchema.safeParse(model.raw.capabilities);
+  const policy = parsed.success ? parsed.data.operationPolicies?.[operation] : undefined;
+  if (!policy) return model;
+  const raw = { ...model.raw, capabilities: { ...model.raw.capabilities,
+    ...(policy.parameters ? { parameters: policy.parameters } : {}), ...(policy.resolutions ? { resolutions: policy.resolutions } : {}),
+    ...(policy.aspectRatios ? { aspectRatios: policy.aspectRatios } : {}), ...(policy.durations ? { durations: Array.isArray(policy.durations) ? policy.durations : { min: policy.durations.min, max: policy.durations.max } } : {}),
+  } };
+  const caps = raw.capabilities as Record<string, unknown>;
+  const blocked = policy.unsupportedParameters ?? [];
+  if (blocked.includes('aspectRatio')) caps.aspectRatios = [];
+  if (blocked.includes('resolution')) caps.resolutions = [];
+  if (blocked.includes('durationSeconds')) caps.durations = [];
+  if (blocked.includes('audio')) caps.supportsAudio = false;
+  const fields = caps.customFields as { properties?: Record<string, unknown> } | undefined;
+  if (fields?.properties) caps.customFields = { ...fields, properties: Object.fromEntries(Object.entries(fields.properties).filter(([key]) => !blocked.includes(`extra.${key}`) && !blocked.includes(key))) };
+  if (Array.isArray(caps.parameters)) caps.parameters = caps.parameters.filter(rule => !blocked.includes(rule.path));
+  const effectiveRaw = { ...raw, capabilities: JSON.parse(JSON.stringify(caps)) };
+  const mapped = mapInternalModel(effectiveRaw);
+  return { ...model, ...mapped, capabilities: { ...mapped.capabilities, ...(blocked.includes('aspectRatio') ? { aspectRatios: [] } : {}) }, raw: effectiveRaw };
+}
+
+export function operationFor(mode: MediaKind, videoMode: VideoMode, inputs: readonly ReferenceInput[]): MediaOperation {
   if (mode === 'image') return inputs.some(input => input.role === 'source' || input.role === 'reference') ? 'image.edit' : 'image.generate';
-  return videoMode === 'first_frame' ? 'video.image_to_video' : videoMode === 'references' ? 'video.reference_to_video' : 'video.generate';
+  return videoMode === 'edit' ? 'video.edit' : videoMode === 'extend' ? 'video.extend' : ['first_frame', 'first_last_frame'].includes(videoMode) ? 'video.image_to_video' : videoMode === 'references' ? 'video.reference_to_video' : 'video.generate';
 }
 
 export interface Creation {
@@ -150,6 +185,11 @@ export interface Creation {
 }
 
 export function generationRequest(input: Creation): GenerationRequest {
+  input = { ...input, model: modelForOperation(input.model, input.operation) };
+  const rawCaps = ModelCapabilitiesSchema.safeParse(input.model.raw.capabilities);
+  const policy = rawCaps.success ? rawCaps.data.operationPolicies?.[input.operation] : undefined;
+  if (policy?.unsupportedParameters?.includes('aspectRatio')) input = { ...input, ratio: '' };
+  if (policy?.unsupportedParameters?.includes('resolution')) input = { ...input, resolution: '' };
   if (input.ratio === 'auto' || input.resolution === 'auto') input = { ...input, ratio: input.ratio === 'auto' ? '' : input.ratio, resolution: input.resolution === 'auto' ? '' : input.resolution };
   if (input.operation === 'image.edit' && !input.inputs.some(item => item.role === 'source')) {
     const first = input.inputs.findIndex(item => item.role === 'reference');
@@ -170,7 +210,11 @@ export function generationRequest(input: Creation): GenerationRequest {
       else request[rule.path] = value;
     }
     if (Object.keys(extra).length) request.extra = extra;
-    return normalizeAutomaticParameters(applyModelParameters(GenerationRequestSchema.parse(request), rules));
+    // Preserve explicit auto until the server has applied its authoritative defaults.
+    const result = applyModelParameters(GenerationRequestSchema.parse(request), rules);
+    if (!video && model.imageResolution) assertImageResolution(result, model.imageResolution);
+    if (policy) assertOperationParameters(result, policy);
+    return result;
   }
   const customSize = !video && allowsCustomSize(model);
   const customRatio = !input.resolution && input.ratio && !model.capabilities.aspectRatios.includes(input.ratio);
@@ -190,7 +234,7 @@ export function generationRequest(input: Creation): GenerationRequest {
   const xai = String(model.raw.capabilities.profile ?? matchModelProtocol(model.id) ?? model.providerType).startsWith('xai');
   const quality = xai ? extra.quality : undefined;
   if (xai) delete extra.quality;
-  return GenerationRequestSchema.parse({
+  const request = GenerationRequestSchema.parse({
     operation: input.operation, providerId: model.providerId, modelId: model.id, prompt: input.prompt.trim(),
     inputs: input.inputs.map(({ asset, role }) => ({ assetId: asset.id, role })),
     ...(input.ratio && (video || !/^\d+x\d+$/.test(resolution)) ? { aspectRatio: input.ratio } : {}),
@@ -203,6 +247,9 @@ export function generationRequest(input: Creation): GenerationRequest {
     ...(model.raw.capabilities.supportsSeed && input.seed ? { seed } : {}),
     ...(video && model.raw.capabilities.supportsAudio ? { audio: input.audio } : {}),
   });
+  if (!video && model.imageResolution) assertImageResolution(request, model.imageResolution);
+  if (policy) assertOperationParameters(request, policy);
+  return request;
 }
 
 export function mediaExtension(item: Pick<MediaItem, 'mimeType' | 'kind'>): string {

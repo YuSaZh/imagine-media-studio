@@ -1,6 +1,5 @@
-import { applyModelParameters, imageDimensionsPreset, imagePresetDimensions, type ModelParameter } from '@imagine/shared';
+import { applyModelParameters, imageDimensionsPreset, imagePresetDimensions, imageResolutionAllows, inferImageResolution, type ModelParameter } from '@imagine/shared';
 import type { WorkspaceModel } from './data';
-import { allowsCustomSize } from './generation-options';
 
 export const IMAGE_RESOLUTIONS = ['1K', '2K', '4K'] as const;
 
@@ -10,15 +9,16 @@ export function imageResolutionLabel(value: string): string {
   const mapped = imageDimensionsPreset(value);
   if (mapped) return mapped.preset;
   const size = /^([1-9]\d*)x([1-9]\d*)$/.exec(value);
+  if (!size) return value;
   const edge = size ? Math.max(Number(size[1]), Number(size[2])) : 0;
-  return [1024, 2048, 4096].includes(edge) ? `${edge / 1024}K` : '自定义';
+  return edge === 3840 ? '4K' : [1024, 2048, 4096].includes(edge) ? `${edge / 1024}K` : '自定义';
 }
 
 export function acceptsImageOption(model: WorkspaceModel, rules: ModelParameter[] | undefined, path: 'count' | 'resolution', value: number | string): boolean {
   if (path === 'count') return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 32;
   if (typeof value !== 'string') return false;
-  const dimensions = typeof value === 'string' ? /^([1-9]\d{0,4})x([1-9]\d{0,4})$/.exec(value) : null;
-  if (dimensions && (Number(dimensions[1]) > 16384 || Number(dimensions[2]) > 16384 || Number(dimensions[1]) * Number(dimensions[2]) > 100_000_000)) return false;
+  const capability = model.imageResolution ?? inferImageResolution(model.raw.capabilities, model.imageProfile);
+  if (!imageResolutionAllows(value, capability)) return false;
   if (rules) {
     const rule = rules.find(rule => rule.path === path && rule.enabled && rule.visible);
     if (!rule || rule.locked) return false;
@@ -28,15 +28,28 @@ export function acceptsImageOption(model: WorkspaceModel, rules: ModelParameter[
     } catch { return false; }
   }
   // The workspace splits image batches into separate jobs when needed.
-  return model.capabilities.resolutions.includes(String(value)) || allowsCustomSize(model) && dimensions !== null;
+  return true;
 }
 
 export function imageResolutionValue(model: WorkspaceModel, rules: ModelParameter[] | undefined, preset: string, ratio: string): string | undefined {
   const rule = rules?.find(rule => rule.path === 'resolution');
-  const options = rules ? rule?.options?.map(String) ?? [] : model.capabilities.resolutions;
-  const native = options.find(value => value.toUpperCase() === preset);
-  if (native && acceptsImageOption(model, rules, 'resolution', native)) return native;
-  const pixels = imagePresetDimensions(preset, ratio);
+  const capability = model.imageResolution ?? inferImageResolution(model.raw.capabilities, model.imageProfile);
+  const options = [...(rules ? rule?.options?.map(String) ?? [] : []), ...model.capabilities.resolutions];
+  const native = capability.mode !== 'native' ? undefined : options.find(value => value.toUpperCase() === preset.toUpperCase() && acceptsImageOption(model, rules, 'resolution', value));
+  if (native) return native;
+  const pixels = imagePresetDimensions(preset, ratio, capability.dimensions?.multipleOf);
   if (pixels && acceptsImageOption(model, rules, 'resolution', pixels)) return pixels;
   return undefined;
+}
+
+export function imagePresetRatioChoices(model: WorkspaceModel, rules: ModelParameter[] | undefined, preset: string): Array<{ ratio: string; resolution: string }> {
+  if (imageResolutionValue(model, rules, preset, 'auto')) return [];
+  const ratioRule = rules?.find(rule => rule.path === 'aspectRatio');
+  if (rules && (!ratioRule?.enabled || !ratioRule.visible || ratioRule.locked)) return [];
+  const ratios = rules ? ratioRule?.options?.map(String) ?? [] : model.capabilities.aspectRatios;
+  return ratios.flatMap(ratio => {
+    if (ratio === 'auto') return [];
+    const resolution = imageResolutionValue(model, rules, preset, ratio);
+    return resolution ? [{ ratio, resolution }] : [];
+  });
 }

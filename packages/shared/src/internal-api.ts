@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { GenerationRequestSchema, JobStatusSchema, MediaOperationSchema } from './generation.js';
 import { NativeProviderProfileSchema } from './provider-protocols.js';
 import { ModelParametersSchema } from './model-parameters.js';
+import { ImageResolutionCapabilitySchema } from './image-resolution.js';
 
 export type JsonValue =
   | boolean
@@ -1006,8 +1007,12 @@ const DurationSchema = z.union([
     .refine((value) => value.max >= value.min, 'Duration maximum must not be below minimum.'),
 ]);
 
+import { OperationPoliciesSchema } from './operation-policy.js';
+
 export const ModelCapabilitiesSchema = z.object({
+  operationPolicies: OperationPoliciesSchema.optional(),
   profile: NativeProviderProfileSchema.optional(),
+  imageResolution: ImageResolutionCapabilitySchema.optional(),
   parameters: ModelParametersSchema.optional(),
   operations: z.array(MediaOperationSchema).min(1),
   aspectRatios: z.array(z.string().trim().min(1).max(32)).optional(),
@@ -1047,6 +1052,9 @@ export const ModelCapabilityPresetQuerySchema = z.object({
 }).strict();
 export type ModelCapabilityPresetQuery = z.infer<typeof ModelCapabilityPresetQuerySchema>;
 export const ModelCapabilityPresetResponseSchema = z.object({ capabilities: ModelCapabilitiesSchema }).strict();
+export const ModelCapabilityTemplatesResponseSchema = z.object({ models: z.array(z.object({
+  modelId: z.string().min(1).max(255), displayName: z.string().min(1).max(255), capabilities: ModelCapabilitiesSchema,
+}).strict()).max(4096) }).strict();
 
 // Keep the older name as an explicit alias for callers that only validate
 // request bodies. Both manual writes and stored model inputs use this schema.
@@ -1175,9 +1183,10 @@ export const AssetPatchSchema = z.object({
 
 export const CollectionCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),
+  isPrivate: z.boolean().optional(),
 }).strict();
 
-export const CollectionPatchSchema = CollectionCreateSchema;
+export const CollectionPatchSchema = CollectionCreateSchema.partial().refine(value => Object.keys(value).length > 0, 'At least one project setting is required.');
 
 export const CollectionAssetsPatchSchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1).max(100),
@@ -1186,6 +1195,7 @@ export const CollectionAssetsPatchSchema = z.object({
 export const CollectionDtoSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
+  isPrivate: z.boolean().default(false),
   itemCount: z.number().int().nonnegative(),
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,

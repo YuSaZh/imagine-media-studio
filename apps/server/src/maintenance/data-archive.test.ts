@@ -136,6 +136,16 @@ describe('DataArchive', () => {
     await expect(lstat(join(result.bundlePath, 'logs/server.log'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('archives retired temporary input tombstones without requiring deleted media', async () => {
+    const { paths, sqlite } = await fixture('ims-archive-retired-frame-');
+    sqlite.prepare(`INSERT INTO assets (id, type, role, file_path, mime_type, file_size, sha256, created_at, deleted_at, metadata_json) VALUES ('retired-frame', 'image', 'reference', 'media/uploads/retired.png', 'image/png', 10, 'fixture', ?, ?, ?)`)
+      .run(CREATED_AT.getTime(), CREATED_AT.getTime(), JSON.stringify({ temporaryVideoFrame: true, temporaryPurged: true }));
+    const result = await service(paths, sqlite, { id: () => 'retired-frame' }).create();
+    expect((await verifyDataArchive(result.bundlePath)).entries).toBe(1);
+    sqlite.prepare("UPDATE assets SET metadata_json='{}' WHERE id='retired-frame'").run();
+    await expect(service(paths, sqlite, { id: () => 'ordinary-missing-input' }).create()).rejects.toThrow();
+  });
+
   it('preserves the database-to-media consistency contract', async () => {
     const { paths, sqlite } = await fixture('ims-data-archive-media-consistency-');
     const payload = Buffer.from('database referenced media');

@@ -5,12 +5,8 @@ import type { LoadedSourceContent } from './source-content.js';
 
 export const MAX_EDITOR_DEVICE_PIXEL_RATIO = 2;
 export const MAX_EDITOR_RENDER_PIXELS = MAX_IMAGE_EDITOR_NATURAL_PIXELS;
-export const DEFAULT_MASK_OVERLAY_COLOR = Object.freeze({
-  alpha: 104,
-  blue: 82,
-  green: 64,
-  red: 235,
-});
+export { MASK_OVERLAY_COLOR as DEFAULT_MASK_OVERLAY_COLOR } from '@imagine/shared';
+import { MASK_OVERLAY_COLOR as DEFAULT_MASK_OVERLAY_COLOR } from '@imagine/shared';
 
 export interface MaskOverlayColor {
   readonly alpha: number;

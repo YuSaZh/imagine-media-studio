@@ -1,4 +1,6 @@
 import type { GenerationRequest } from '@imagine/shared';
+import { sourceVideo } from '../video-input.js';
+import { videoOperationPolicies } from '../video-operation-policy.js';
 import type {
   ProviderAdapter,
   ProviderAssetReference,
@@ -81,6 +83,8 @@ interface VeoPayload {
   readonly instances: readonly [{
     readonly prompt: string;
     readonly image?: VeoInlineData;
+    readonly lastFrame?: VeoInlineData;
+    readonly video?: { readonly uri: string; readonly mimeType: string };
     readonly referenceImages?: readonly VeoReferenceImage[];
   }];
   readonly parameters: Readonly<Record<string, unknown>>;
@@ -97,7 +101,7 @@ function definition(
   return {
     id,
     displayName,
-    capabilities: modelCapabilities(operations, {
+    capabilities: { ...modelCapabilities(operations, {
       aspectRatios: conservative ? undefined : VEO_ASPECT_RATIOS,
       durations: conservative ? [8] : VEO_DURATIONS,
       resolutions: conservative ? ['720p'] : resolutions,
@@ -111,7 +115,7 @@ function definition(
           properties: { personGeneration: { enum: [...VEO_PERSON_GENERATION] } },
           additionalProperties: false,
         },
-    }),
+    }), operationPolicies: videoOperationPolicies(GEMINI_VEO_PROFILE, id), operations: [...operations, ...(videoOperationPolicies(GEMINI_VEO_PROFILE, id)['video.extend'] ? ['video.extend' as const] : [])] },
   };
 }
 
@@ -197,6 +201,13 @@ function validateRequest(request: GenerationRequest, context: GeminiVideoRuntime
   const prompt = request.prompt;
   if (typeof prompt !== 'string' || prompt.trim() === '' || prompt.length > 32_000) throw new GeminiValidationError('Gemini Veo prompt is invalid.', 'gemini_prompt_invalid');
   const model = modelDefinition(request.modelId);
+  if (request.operation === 'video.extend') {
+    try {
+      const source = sourceVideo(request, context, GEMINI_VEO_PROFILE);
+      if (!source.videoSource?.modelId.startsWith('veo-') || !source.width || !source.height || Math.min(source.width, source.height) !== 720 || Math.max(source.width, source.height) !== 1280) throw new Error('Veo 续写需要同连接生成的 720p 视频');
+      return { model, inputs: [source], options: { duration: 8, resolution: '720p' } };
+    } catch (error) { throw new GeminiValidationError(error instanceof Error ? error.message : 'Invalid video', 'gemini_video_input_invalid'); }
+  }
   const options = validateOptions(request, model);
   const supported = model.capabilities.operations;
   if (!supported.includes(request.operation)) throw new GeminiValidationError(`Gemini Veo does not support ${request.operation} for this model.`, 'gemini_operation_unsupported');
@@ -209,7 +220,7 @@ function validateRequest(request: GenerationRequest, context: GeminiVideoRuntime
   if (request.operation === 'video.generate' && request.inputs.length > 0) {
     throw new GeminiValidationError('Veo video.generate does not accept input images.', 'gemini_input_role_unsupported');
   }
-  if (request.operation === 'video.image_to_video' && (request.inputs.length !== 1 || request.inputs[0]?.role !== 'first_frame')) {
+  if (request.operation === 'video.image_to_video' && (request.inputs.filter(input => input.role === 'first_frame').length !== 1 || request.inputs.filter(input => input.role === 'last_frame').length > 1 || request.inputs.some(input => input.role !== 'first_frame' && !(input.role === 'last_frame' && (context.operationPolicy ?? model.capabilities.operationPolicies?.['video.image_to_video'])?.inputRoles?.includes('last_frame'))))) {
     throw new GeminiValidationError('Veo image-to-video requires exactly one first_frame image.', 'gemini_input_role_invalid');
   }
   if (request.operation === 'video.reference_to_video') {
@@ -233,12 +244,16 @@ function buildPayload(request: GenerationRequest, context: GeminiVideoRuntimeCon
   const instance: {
     prompt: string;
     image?: VeoInlineData;
+    lastFrame?: VeoInlineData;
+    video?: { uri: string; mimeType: string };
     referenceImages?: readonly VeoReferenceImage[];
   } = { prompt: request.prompt.trim() };
   if (request.operation === 'video.image_to_video') {
-    const input = validation.inputs[0];
+    const input = validation.inputs.find(input => input.role === 'first_frame');
     if (!input) throw new GeminiValidationError('Veo first frame is missing.', 'gemini_input_unresolved');
     instance.image = { inlineData: inputInlineData(input) };
+    const last = validation.inputs.find(input => input.role === 'last_frame');
+    if (last) instance.lastFrame = { inlineData: inputInlineData(last) };
   }
   if (request.operation === 'video.reference_to_video') {
     instance.referenceImages = validation.inputs.map((input) => ({
@@ -246,6 +261,7 @@ function buildPayload(request: GenerationRequest, context: GeminiVideoRuntimeCon
     }));
   }
   const parameters: Record<string, unknown> = {};
+  if (request.operation === 'video.extend') { parameters.resolution = '720p'; parameters.durationSeconds = '8'; parameters.personGeneration = 'allow_all'; }
   if (request.aspectRatio !== undefined) parameters.aspectRatio = request.aspectRatio;
   if (request.durationSeconds !== undefined) parameters.durationSeconds = String(validation.options.duration);
   if (validation.options.resolution !== undefined) parameters.resolution = validation.options.resolution;
@@ -267,13 +283,18 @@ function assertVeoPayload(value: unknown): asserts value is VeoPayload {
     throw new GeminiValidationError('Gemini Veo payload is invalid.', 'gemini_payload_invalid');
   }
   const instance = root.instances[0] as Record<string, unknown>;
-  if (Object.keys(instance).some((key) => !['prompt', 'image', 'referenceImages'].includes(key)) || typeof instance.prompt !== 'string' || instance.prompt.length === 0) {
+  if (Object.keys(instance).some((key) => !['prompt', 'image', 'lastFrame', 'video', 'referenceImages'].includes(key)) || typeof instance.prompt !== 'string' || instance.prompt.length === 0) {
     throw new GeminiValidationError('Gemini Veo instance is invalid.', 'gemini_payload_invalid');
   }
   if (instance.image !== undefined && instance.referenceImages !== undefined) {
     throw new GeminiValidationError('Gemini Veo image and referenceImages cannot be combined.', 'gemini_payload_invalid');
   }
   if (instance.image !== undefined) assertInlineData(instance.image);
+  if (instance.lastFrame !== undefined) { if (!instance.image) throw new GeminiValidationError('尾帧需要首帧', 'gemini_payload_invalid'); assertInlineData(instance.lastFrame); }
+  if (instance.video !== undefined) {
+    const video = asRecord(instance.video);
+    if (!video || video.mimeType !== 'video/mp4' || typeof video.uri !== 'string' || !/^https?:\/\//.test(video.uri) || instance.image || instance.referenceImages) throw new GeminiValidationError('Veo video source is invalid.', 'gemini_payload_invalid');
+  }
   if (instance.referenceImages !== undefined) {
     if (!Array.isArray(instance.referenceImages) || instance.referenceImages.length < 1 || instance.referenceImages.length > 3) throw new GeminiValidationError('Gemini Veo referenceImages is invalid.', 'gemini_payload_invalid');
     for (const reference of instance.referenceImages) {
@@ -445,6 +466,13 @@ export class GeminiVeoProvider implements ProviderAdapter {
   public async submit(request: GenerationRequest, context: ProviderContext): Promise<SubmitResult> {
     const runtimeContext = runtime(context);
     const payload = buildPayload(request, runtimeContext);
+    if (request.operation === 'video.extend') {
+      const input = sourceVideo(request, runtimeContext, GEMINI_VEO_PROFILE);
+      const origin = input.videoSource!;
+      const target = await this.resolveResult({ type: 'video', mimeType: 'video/mp4', source: 'provider', providerId: origin.providerId, remoteJobId: origin.remoteJobId, variant: 'video' }, { ...context, modelId: origin.modelId });
+      (payload.instances[0] as { video?: { uri: string; mimeType: string } }).video = { uri: target.url, mimeType: 'video/mp4' };
+      assertVeoPayload(payload);
+    }
     const model = modelDefinition(request.modelId);
     const key = videoApiKey(runtimeContext);
     const base = videoBaseUrl(runtimeContext, this.baseUrl, [`/models/${canonicalModelId(request.modelId)}:predictLongRunning`]);

@@ -13,10 +13,10 @@ export function useMedia(filter: MediaFilter) {
   });
 }
 
-export function useWorkspaceJobs(status?: string) {
+export function useWorkspaceJobs(status?: string, excludePrivate = false) {
   return useInfiniteQuery({
-    queryKey: [...keys.jobs, 'workspace', status ?? 'all'],
-    queryFn: ({ pageParam }) => internalClient.listJobs({ limit: 60, ...(pageParam ? { cursor: pageParam } : {}), ...(status ? { status } : {}) }),
+    queryKey: [...keys.jobs, 'workspace', status ?? 'all', excludePrivate],
+    queryFn: ({ pageParam }) => internalClient.listJobs({ limit: 60, ...(excludePrivate ? { excludePrivate: true } : {}), ...(pageParam ? { cursor: pageParam } : {}), ...(status ? { status } : {}) }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: page => page.nextCursor ?? undefined,
     refetchInterval: query => query.state.data?.pages[0]?.items.some(job => !['completed', 'failed', 'cancelled', 'rejected', 'expired'].includes(job.status)) ? 10000 : false,

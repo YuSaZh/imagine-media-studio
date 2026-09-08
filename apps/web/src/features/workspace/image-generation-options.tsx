@@ -12,7 +12,7 @@ export function ImageGenerationOptions({ model, ratio, resolution, count, parame
   resolution: string;
   count: number;
   parameters: JsonObject;
-  onResolution: (value: string) => void;
+  onResolution: (value: string, ratio?: string) => void;
   onCount: (value: number) => void;
   onParameters: (values: JsonObject) => void;
   onUnlock: () => void;
@@ -21,7 +21,7 @@ export function ImageGenerationOptions({ model, ratio, resolution, count, parame
   const rule = rules?.find(rule => rule.path === 'resolution');
   const selected = String(rules ? (rule?.locked ? rule.defaultValue : parameters.resolution ?? rule?.defaultValue) ?? '' : resolution);
   return <>
-    <ImageResolutionPicker model={model} rules={rules} value={selected} ratio={ratio} onChange={value => { if (rules) onParameters({ ...parameters, resolution: value }); else onResolution(value); }} onUnlock={onUnlock} label="选择图片分辨率" className="desktop-image-option" trigger={<><ScanLine size={16} /><span>{imageResolutionLabel(selected)}</span></>} />
+    <ImageResolutionPicker model={model} rules={rules} value={selected} ratio={ratio} onChange={(value, selectedRatio) => { if (rules) onParameters({ ...parameters, resolution: value, ...(selectedRatio ? { aspectRatio: selectedRatio } : {}) }); else onResolution(value, selectedRatio); }} onUnlock={onUnlock} label="选择图片分辨率" className="desktop-image-option" trigger={<><ScanLine size={16} /><span>{imageResolutionLabel(selected)}</span></>} />
     <GenerationCount value={count} onChange={onCount} className="desktop-image-option" trigger={<><Copy size={16} /><span>×{count}</span></>} />
   </>;
 }

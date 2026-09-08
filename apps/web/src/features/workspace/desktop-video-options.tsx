@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { Check, Clock3, ScanLine } from 'lucide-react';
-import { applyModelParameters, type JsonObject, type ModelParameter } from '@imagine/shared';
+import { applyModelParameters, ModelCapabilitiesSchema, type JsonObject, type ModelParameter, type MediaOperation } from '@imagine/shared';
 import type { WorkspaceModel } from './data';
 import { managedParameters } from './managed-parameters';
 
@@ -24,6 +24,7 @@ function accepts(model: WorkspaceModel, rules: ModelParameter[] | undefined, pat
 }
 
 interface VideoOptionProps {
+  presets?: readonly (string | number)[] | undefined;
   path: VideoParameter;
   icon: ReactNode;
   value: string | number | undefined;
@@ -32,14 +33,14 @@ interface VideoOptionProps {
   onChange: (value: string | number) => void;
 }
 
-function VideoOption({ path, icon, value, disabled, accepts, onChange }: VideoOptionProps) {
+function VideoOption({ path, icon, value, disabled, accepts, onChange, presets: configuredPresets }: VideoOptionProps) {
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState(false);
   const [draft, setDraft] = useState('');
   const [invalid, setInvalid] = useState(false);
   const resolution = path === 'resolution';
   const label = resolution ? '视频分辨率' : '视频时长';
-  const presets: Array<string | number> = resolution ? ['480p', '720p', '1080p'] : [6, 10, 15];
+  const presets = configuredPresets?.length ? configuredPresets : resolution ? ['480p', '720p', '1080p'] : [6, 10, 15];
   const format = (value: string | number) => resolution ? String(value) : `${value}s`;
   const customSelected = value !== undefined && value !== '' && value !== 'auto' && !presets.includes(value);
   const commit = (value: string | number) => { onChange(value); setOpen(false); };
@@ -64,7 +65,8 @@ function VideoOption({ path, icon, value, disabled, accepts, onChange }: VideoOp
   </Popover.Root>;
 }
 
-export function DesktopVideoOptions({ model, resolution, duration, parameters, onResolution, onDuration, onParameters }: {
+export function DesktopVideoOptions({ model, resolution, duration, parameters, onResolution, onDuration, onParameters, operation = 'video.generate' }: {
+  operation?: MediaOperation;
   model: WorkspaceModel | undefined;
   resolution: string;
   duration: number;
@@ -74,11 +76,13 @@ export function DesktopVideoOptions({ model, resolution, duration, parameters, o
   onParameters: (values: JsonObject) => void;
 }) {
   const rules = managedParameters(model);
+  const capabilities = ModelCapabilitiesSchema.safeParse(model?.raw.capabilities);
   return <>{(['resolution', 'durationSeconds'] as const).map(path => {
+    if (capabilities.success && capabilities.data.operationPolicies?.[operation]?.unsupportedParameters?.includes(path)) return null;
     const rule = rules?.find(rule => rule.path === path && rule.enabled && rule.visible);
     const value = rules ? rule?.locked ? rule.defaultValue : parameters[path] ?? rule?.defaultValue : path === 'resolution' ? resolution : duration;
     const disabled = !model || (rules !== undefined ? !rule || rule.locked : path === 'resolution' ? !model.capabilities.resolutions.length : !model.capabilities.durations.length && !model.capabilities.durationRange);
-    return <VideoOption key={path} path={path} icon={path === 'resolution' ? <ScanLine size={16} /> : <Clock3 size={16} />}
+    return <VideoOption key={path} path={path} presets={path === 'resolution' ? model?.capabilities.resolutions : model?.capabilities.durations} icon={path === 'resolution' ? <ScanLine size={16} /> : <Clock3 size={16} />}
       value={typeof value === 'string' || typeof value === 'number' ? value : undefined} disabled={disabled}
       accepts={value => !!model && accepts(model, rules, path, value)}
       onChange={value => { if (rules) onParameters({ ...parameters, [path]: value }); else if (path === 'resolution') onResolution(String(value)); else onDuration(Number(value)); }} />;

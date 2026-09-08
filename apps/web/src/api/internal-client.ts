@@ -1,4 +1,4 @@
-import { AccountResponseSchema, AccountListSchema, RemoteModelCatalogSchema, ModelCapabilityPresetResponseSchema, type ModelCapabilityPresetQuery } from '@imagine/shared';
+import { AccountResponseSchema, AccountListSchema, RemoteModelCatalogSchema, ModelCapabilityPresetResponseSchema, ModelCapabilityTemplatesResponseSchema, type ModelCapabilityPresetQuery } from '@imagine/shared';
 import {
   AdapterDocumentFormatSchema,
   AdapterEmptyQuerySchema,
@@ -748,6 +748,8 @@ export const internalClient = {
     requestJson(`/internal/providers/${encodeURIComponent(providerId)}/models/catalog`, RemoteModelCatalogSchema),
   getModelCapabilityPreset: async (providerId: string, query: ModelCapabilityPresetQuery) =>
     requestJson(`/internal/providers/${encodeURIComponent(providerId)}/models/capabilities?${new URLSearchParams({ modelId: query.modelId, operation: query.operation, ...(query.profile ? { profile: query.profile } : {}) })}`, ModelCapabilityPresetResponseSchema),
+  getModelCapabilityTemplates: async (providerId: string) =>
+    requestJson(`/internal/providers/${encodeURIComponent(providerId)}/models/templates`, ModelCapabilityTemplatesResponseSchema),
   listTrustedAdapters: async (options: InternalRequestOptions = {}) => {
     parseEmptyQuery();
     return requestJson('/internal/adapters', TrustedAdapterPageSchema, requestSignal(options));
@@ -1093,7 +1095,7 @@ export const internalClient = {
       body: jsonBody(input),
       ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
     }),
-  listJobs: async (options: { cursor?: string; limit?: number; modelId?: string; providerId?: string; status?: string } = {}) =>
+  listJobs: async (options: { excludePrivate?: boolean; cursor?: string; limit?: number; modelId?: string; providerId?: string; status?: string } = {}) =>
     requestJson(`/internal/jobs${queryString(options)}`, JobPageSchema),
   getJob: async (jobId: string) =>
     requestJson(`/internal/jobs/${encodeURIComponent(jobId)}`, JobDetailResponseSchema),
@@ -1109,18 +1111,19 @@ export const internalClient = {
     }),
   deleteJob: async (jobId: string) =>
     requestEmpty(`/internal/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
-  listAssets: async (options: { collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
+  listAssets: async (options: { excludePrivate?: boolean; collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
     requestJson(`/internal/assets${queryString(options)}`, AssetPageSchema),
   getAsset: async (assetId: string) =>
     requestJson(`/internal/assets/${encodeURIComponent(assetId)}`, AssetResponseSchema),
   uploadAsset: async (
     file: File,
-    fields: { parentAssetId?: string; role?: string } = {},
+    fields: { parentAssetId?: string; role?: string; temporaryVideoFrame?: boolean } = {},
     options: { signal?: AbortSignal } = {},
   ) => {
     const body = new FormData();
     if (fields.parentAssetId) body.set('parentAssetId', fields.parentAssetId);
     if (fields.role) body.set('role', fields.role);
+    if (fields.temporaryVideoFrame) body.set('temporaryVideoFrame', 'true');
     body.set('file', file, file.name);
     return requestJson('/internal/assets/upload', AssetResponseSchema, {
       method: 'POST',
@@ -1142,10 +1145,10 @@ export const internalClient = {
       method: 'POST',
       body: jsonBody({ name }),
     }),
-  patchCollection: async (collectionId: string, name: string) =>
+  patchCollection: async (collectionId: string, change: string | { name?: string; isPrivate?: boolean }) =>
     requestJson(`/internal/collections/${encodeURIComponent(collectionId)}`, CollectionResponseSchema, {
       method: 'PATCH',
-      body: jsonBody({ name }),
+      body: jsonBody(typeof change === 'string' ? { name: change } : change),
     }),
   deleteCollection: async (collectionId: string) =>
     requestEmpty(`/internal/collections/${encodeURIComponent(collectionId)}`, { method: 'DELETE' }),

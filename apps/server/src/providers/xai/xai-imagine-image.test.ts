@@ -312,7 +312,7 @@ describe('XaiImagineImageProvider', () => {
       operation: 'image.edit',
       modelId: 'grok-imagine-image',
       inputs: [...fourInputs, { assetId: 'reference-4', role: 'reference' as const }],
-    }), context)).rejects.toThrow('at most three references');
+    }), context)).rejects.toThrow('at most 3 references');
   });
 
   it('exposes official model capabilities and rejects unsupported controls strictly', async () => {
@@ -325,7 +325,7 @@ describe('XaiImagineImageProvider', () => {
           id: 'grok-imagine-image-2.0',
           capabilities: expect.objectContaining({
             operations: ['image.generate', 'image.edit'],
-            maxReferenceImages: 3,
+            maxReferenceImages: 4,
             maxBatchCount: 10,
             supportsMask: false,
           }),

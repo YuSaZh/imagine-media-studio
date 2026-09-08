@@ -1,4 +1,6 @@
 import type { GenerationRequest } from '@imagine/shared';
+import { sourceVideo } from '../video-input.js';
+import { videoOperationPolicies } from '../video-operation-policy.js';
 import type {
   ProviderAdapter,
   ProviderAssetReference,
@@ -56,9 +58,9 @@ import {
 export const GEMINI_OMNI_VIDEO_DEFAULT_BASE_URL = GEMINI_VIDEO_DEFAULT_BASE_URL;
 export const GEMINI_OMNI_INTERACTIONS_VIDEO_PROFILE = GEMINI_OMNI_VIDEO_PROFILE;
 
-const OMNI_MODELS = ['gemini-omni-flash-preview'] as const;
+const OMNI_MODELS = ['gemini-omni-1.1-flash', 'gemini-omni-flash-preview'] as const;
 const OMNI_ASPECT_RATIOS = ['9:16', '16:9'] as const;
-const OMNI_TASKS = ['text_to_video', 'image_to_video', 'reference_to_video'] as const;
+const OMNI_TASKS = ['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend'] as const;
 
 interface OmniImagePart {
   readonly type: 'image';
@@ -73,8 +75,9 @@ interface OmniTextPart {
 
 interface OmniPayload {
   readonly model: string;
-  readonly input: string | readonly (OmniImagePart | OmniTextPart)[];
-  readonly response_format: { readonly type: 'video'; readonly delivery: 'uri'; readonly aspect_ratio?: string };
+  readonly input: string | readonly (OmniImagePart | OmniTextPart | { type: 'video'; data: string; mime_type: string })[];
+  readonly previous_interaction_id?: string;
+  readonly response_format: { readonly type: 'video'; readonly delivery: 'uri'; readonly aspect_ratio?: string; readonly resolution?: string };
   readonly generation_config?: { readonly video_config: { readonly task: (typeof OMNI_TASKS)[number] } };
 }
 
@@ -82,11 +85,11 @@ function definition(id: string, displayName: string, conservative = false): Gemi
   return {
     id,
     displayName,
-    capabilities: modelCapabilities(
-      conservative ? ['video.generate'] : ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
+    capabilities: { ...modelCapabilities(
+      conservative ? ['video.generate'] : ['video.generate', 'video.image_to_video', 'video.reference_to_video', 'video.edit', 'video.extend'],
       {
         aspectRatios: conservative ? undefined : OMNI_ASPECT_RATIOS,
-        resolutions: undefined,
+        resolutions: id === 'gemini-omni-1.1-flash' ? ['360p', '720p', '1080p', '4k'] : undefined,
         durations: undefined,
         maxReferenceImages: conservative ? 0 : 3,
         supportsSeed: false,
@@ -95,12 +98,13 @@ function definition(id: string, displayName: string, conservative = false): Gemi
           ? { type: 'object', additionalProperties: false }
           : { type: 'object', additionalProperties: false },
       },
-    ),
+    ), operationPolicies: videoOperationPolicies('gemini-omni-interactions-video-v1', id) },
   };
 }
 
 const OMNI_DEFINITIONS = new Map<string, GeminiVideoModelDefinition>([
   [OMNI_MODELS[0], definition(OMNI_MODELS[0], 'Gemini Omni Flash')],
+  [OMNI_MODELS[1], definition(OMNI_MODELS[1], 'Gemini Omni Flash Preview')],
 ]);
 
 function conservativeDefinition(id: string): GeminiVideoModelDefinition {
@@ -128,15 +132,20 @@ function validateRequest(request: GenerationRequest, context: GeminiVideoRuntime
   if (request.providerId !== context.providerId) throw new GeminiValidationError('Gemini request provider does not match the active provider.', 'gemini_provider_mismatch');
   if (typeof request.prompt !== 'string' || request.prompt.trim() === '' || request.prompt.length > 32_000) throw new GeminiValidationError('Gemini Omni prompt is invalid.', 'gemini_prompt_invalid');
   const model = modelDefinition(request.modelId);
+  if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+    try { return { model, inputs: [sourceVideo(request, context, 'gemini-omni-interactions-video-v1')], task: request.operation === 'video.edit' ? 'edit' : 'extend' }; }
+    catch (error) { throw new GeminiValidationError(error instanceof Error ? error.message : 'Invalid video', 'gemini_video_input_invalid'); }
+  }
   if (request.extra !== undefined && Object.keys(request.extra).length > 0) throw new GeminiValidationError('Gemini Omni does not support extra fields in this profile.', 'gemini_extra_fields_unsupported');
   if (request.aspectRatio !== undefined && !OMNI_ASPECT_RATIOS.includes(request.aspectRatio as (typeof OMNI_ASPECT_RATIOS)[number])) throw new GeminiValidationError('Gemini Omni aspect ratio must be 9:16 or 16:9.', 'gemini_aspect_ratio_unsupported');
   if (request.count !== undefined && request.count !== 1) throw new GeminiValidationError('Gemini Omni supports one video per request.', 'gemini_batch_unsupported');
   const unsupported: ReadonlyArray<[string, unknown]> = [
-    ['negativePrompt', request.negativePrompt], ['width', request.width], ['height', request.height], ['resolution', request.resolution],
+    ['negativePrompt', request.negativePrompt], ['width', request.width], ['height', request.height],
     ['durationSeconds', request.durationSeconds], ['fps', request.fps], ['quality', request.quality], ['format', request.format],
     ['seed', request.seed],
   ];
   const found = unsupported.find(([, value]) => value !== undefined);
+  if (request.resolution !== undefined && !model.capabilities.resolutions?.includes(request.resolution)) throw new GeminiValidationError('Gemini Omni resolution is unsupported.', 'gemini_resolution_unsupported');
   if (found) throw new GeminiValidationError(`Gemini Omni does not support ${found[0]}.`, 'gemini_option_unsupported');
   if (request.audio !== undefined && (request.audio !== true || model.capabilities.supportsAudio !== true)) throw new GeminiValidationError('Gemini Omni audio is generated by the model and cannot be disabled.', 'gemini_audio_unsupported');
 
@@ -145,7 +154,7 @@ function validateRequest(request: GenerationRequest, context: GeminiVideoRuntime
     if (request.inputs.length > 0) throw new GeminiValidationError('Gemini Omni text-to-video does not accept input images.', 'gemini_input_role_unsupported');
     task = 'text_to_video';
   } else if (request.operation === 'video.image_to_video') {
-    if (request.inputs.length !== 1 || request.inputs[0]?.role !== 'first_frame') throw new GeminiValidationError('Gemini Omni image-to-video requires one first_frame image.', 'gemini_input_role_invalid');
+    if (request.inputs.filter(input => input.role === 'first_frame').length !== 1 || request.inputs.filter(input => input.role === 'last_frame').length > 1 || request.inputs.some(input => !['first_frame', 'last_frame'].includes(input.role))) throw new GeminiValidationError('Gemini Omni requires a first frame and optional last frame.', 'gemini_input_role_invalid');
     task = 'image_to_video';
   } else if (request.operation === 'video.reference_to_video') {
     if (request.inputs.length < 1 || request.inputs.length > 3 || request.inputs.some((input) => input.role !== 'reference')) throw new GeminiValidationError('Gemini Omni reference-to-video requires one to three reference images.', 'gemini_input_role_invalid');
@@ -159,10 +168,14 @@ function validateRequest(request: GenerationRequest, context: GeminiVideoRuntime
 
 function buildPayload(request: GenerationRequest, context: GeminiVideoRuntimeContext): OmniPayload {
   const validation = validateRequest(request, context);
-  const input = validation.inputs.length === 0
+  const source = validation.inputs[0]?.videoSource;
+  const previous = (request.operation === 'video.edit' || request.operation === 'video.extend') && source?.providerId === context.providerId && source.profile === 'gemini-omni-interactions-video-v1' && source.modelId === request.modelId && source.remoteJobId.startsWith('interaction:') && (!source.expiresAt || Date.parse(source.expiresAt) > Date.now()) ? source.remoteJobId.slice('interaction:'.length) : undefined;
+  const orderedInputs = [...validation.inputs].sort((a, b) => Number(a.role === 'last_frame') - Number(b.role === 'last_frame'));
+  const input = validation.inputs.length === 0 || previous
     ? request.prompt.trim()
     : [
-      ...validation.inputs.map((candidate) => {
+      ...orderedInputs.map((candidate) => {
+        if (candidate.mimeType.startsWith('video/')) return { type: 'video' as const, data: Buffer.from(candidate.bytes).toString('base64'), mime_type: candidate.mimeType };
         const inline = inputInlineData(candidate);
         return { type: 'image' as const, data: inline.data, mime_type: inline.mimeType };
       }),
@@ -171,7 +184,8 @@ function buildPayload(request: GenerationRequest, context: GeminiVideoRuntimeCon
   const payload: OmniPayload = {
     model: validation.model.id,
     input,
-    response_format: { type: 'video', delivery: 'uri', ...(request.aspectRatio === undefined ? {} : { aspect_ratio: request.aspectRatio }) },
+    ...(previous ? { previous_interaction_id: assertInteractionId(previous) } : {}),
+    response_format: { type: 'video', delivery: 'uri', ...(request.aspectRatio === undefined ? {} : { aspect_ratio: request.aspectRatio }), ...(request.resolution ? { resolution: request.resolution } : {}) },
     ...(validation.task === 'text_to_video' ? {} : { generation_config: { video_config: { task: validation.task } } }),
   };
   assertOmniPayload(payload);
@@ -180,7 +194,8 @@ function buildPayload(request: GenerationRequest, context: GeminiVideoRuntimeCon
 
 export function assertOmniPayload(value: unknown): asserts value is OmniPayload {
   const root = asRecord(value);
-  if (!root || Object.keys(root).some((key) => !['model', 'input', 'response_format', 'generation_config'].includes(key)) || typeof root.model !== 'string' || root.model.length === 0 || (typeof root.input !== 'string' && !Array.isArray(root.input)) || (typeof root.input === 'string' && root.input.trim() === '')) throw new GeminiValidationError('Gemini Omni payload is invalid.', 'gemini_payload_invalid');
+  if (!root || Object.keys(root).some((key) => !['model', 'input', 'response_format', 'generation_config', 'previous_interaction_id'].includes(key)) || typeof root.model !== 'string' || root.model.length === 0 || (typeof root.input !== 'string' && !Array.isArray(root.input)) || (typeof root.input === 'string' && root.input.trim() === '')) throw new GeminiValidationError('Gemini Omni payload is invalid.', 'gemini_payload_invalid');
+  if (root.previous_interaction_id !== undefined) assertInteractionId(root.previous_interaction_id);
   if (Array.isArray(root.input)) {
     if (root.input.length < 2) throw new GeminiValidationError('Gemini Omni multimodal input is invalid.', 'gemini_payload_invalid');
     let textPart = false;
@@ -192,12 +207,14 @@ export function assertOmniPayload(value: unknown): asserts value is OmniPayload 
         textPart = true;
       } else if (record.type === 'image') {
         if (Object.keys(record).some((key) => !['type', 'data', 'mime_type'].includes(key)) || typeof record.data !== 'string' || !validBase64(record.data, 20 * 1024 * 1024) || typeof record.mime_type !== 'string' || !['image/jpeg', 'image/png'].includes(record.mime_type)) throw new GeminiValidationError('Gemini Omni image input is invalid.', 'gemini_payload_invalid');
+      } else if (record.type === 'video') {
+        if (Object.keys(record).some(key => !['type', 'data', 'mime_type'].includes(key)) || record.mime_type !== 'video/mp4' || typeof record.data !== 'string' || !validBase64(record.data, 64 * 1024 * 1024)) throw new GeminiValidationError('Gemini Omni video input is invalid.', 'gemini_payload_invalid');
       } else throw new GeminiValidationError('Gemini Omni input type is unsupported.', 'gemini_payload_invalid');
     }
     if (!textPart) throw new GeminiValidationError('Gemini Omni multimodal input must contain a text prompt.', 'gemini_payload_invalid');
   }
   const format = asRecord(root.response_format);
-  if (!format || Object.keys(format).some((key) => !['type', 'delivery', 'aspect_ratio'].includes(key)) || format.type !== 'video' || format.delivery !== 'uri' || (format.aspect_ratio !== undefined && !OMNI_ASPECT_RATIOS.includes(format.aspect_ratio as (typeof OMNI_ASPECT_RATIOS)[number]))) throw new GeminiValidationError('Gemini Omni response_format is invalid.', 'gemini_payload_invalid');
+  if (!format || Object.keys(format).some((key) => !['type', 'delivery', 'aspect_ratio', 'resolution'].includes(key)) || format.type !== 'video' || format.delivery !== 'uri' || (format.aspect_ratio !== undefined && !OMNI_ASPECT_RATIOS.includes(format.aspect_ratio as (typeof OMNI_ASPECT_RATIOS)[number])) || (format.resolution !== undefined && !['360p', '720p', '1080p', '4k'].includes(String(format.resolution)))) throw new GeminiValidationError('Gemini Omni response_format is invalid.', 'gemini_payload_invalid');
   if (root.generation_config !== undefined) {
     const config = asRecord(root.generation_config);
     const videoConfig = asRecord(config?.video_config);

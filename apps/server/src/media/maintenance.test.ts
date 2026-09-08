@@ -289,6 +289,14 @@ describe('terminal provider-output cleanup', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('does not schedule repairs for intentionally retired temporary inputs', async () => {
+    const { paths, repository } = await fixture('imagine-retired-frame-audit-');
+    repository.records.push(asset('retired-frame', 'media/uploads/retired.png', Buffer.from('removed'), { role: 'reference', deletedAt: new Date(), metadata: { temporaryVideoFrame: true, temporaryPurged: true } }));
+    expect((await inspectMediaConsistency({ paths, repository })).ok).toBe(true);
+    repository.records[0] = { ...repository.records[0]!, metadata: {} };
+    expect((await inspectMediaConsistency({ paths, repository })).ok).toBe(false);
+  });
+
   it('treats a soft-deleted Asset as a reference during audit and cleanup', async () => {
     const { paths, repository } = await fixture('imagine-provider-cleanup-soft-deleted-');
     const jobId = 'soft-deleted-job';

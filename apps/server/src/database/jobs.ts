@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { jobOutsidePrivateProjects } from './recent-visibility.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
@@ -38,6 +39,7 @@ import {
 } from './pagination.js';
 import {
   assets,
+  assetVideoSources,
   collections,
   collectionAssets,
   changeEvents,
@@ -147,6 +149,7 @@ export interface JobOutputRecord {
 }
 
 export interface JobPageRequest extends PageRequest {
+  readonly excludePrivate?: boolean;
   readonly status?: JobStatus;
   readonly providerId?: string;
   readonly modelId?: string;
@@ -736,6 +739,7 @@ export class JobRepository {
   public page(request: JobPageRequest = {}): CursorPage<JobRecord> {
     const page = normalizePageRequest(request);
     const conditions: SQL[] = [];
+    if (request.excludePrivate) conditions.push(jobOutsidePrivateProjects());
     const scope = this.scope(); if (scope) conditions.push(scope);
     if (!request.includeDeleted) conditions.push(isNull(jobs.deletedAt));
     if (page.cursor) conditions.push(jobCursorCondition(page.cursor));
@@ -1402,10 +1406,13 @@ export class JobRepository {
       if (!current) return null;
 
       const request = requestFromJson(current.requestJson, `Job ${current.id} request`);
-      const parentAssetId =
-        request.operation === 'image.edit'
+      let parentAssetId = request.maskProcessing?.sourceAssetId ?? (
+        ['image.edit', 'video.edit', 'video.extend'].includes(request.operation)
           ? (request.inputs.find((input) => input.role === 'source')?.assetId ?? null)
-          : null;
+          : null);
+      const frameId = parentAssetId ?? request.inputs.find(input => input.role === 'reference')?.assetId;
+      const frame = frameId ? transaction.select().from(assets).where(eq(assets.id, frameId)).get() : undefined;
+      if (frame && JSON.parse(frame.metadataJson).temporaryVideoFrame === true) parentAssetId = frame.parentAssetId;
       if (request.operation === 'image.edit' && parentAssetId === null) {
         throw new JobRepositoryError(
           'source_input_required',
@@ -1519,6 +1526,15 @@ export class JobRepository {
             .run();
         }
 
+        const manifest = JSON.parse(current.resultManifestJson) as Array<{ resultAssets?: Array<{ source?: string; remoteJobId?: string }> ; source?: string; remoteJobId?: string }>;
+        const results = manifest[0]?.resultAssets ?? manifest;
+        const resultSource = results[index];
+        const nativeResultId = input.resultId && request.profile === 'gemini-omni-interactions-video-v1' ? `interaction:${input.resultId}` : input.resultId && request.profile === 'gemini-veo-operation-v1' ? `operation:${input.resultId}` : undefined;
+        const sourceId = current.remoteJobId ?? nativeResultId ?? (resultSource?.source === 'provider' ? resultSource.remoteJobId : undefined);
+        if (input.type === 'video' && sourceId && request.profile && transaction.select({ id: providers.id }).from(providers).where(eq(providers.id, request.providerId)).get()) {
+          transaction.insert(assetVideoSources).values({ assetId, providerId: request.providerId, modelId: request.modelId, profile: request.profile,
+            remoteJobId: sourceId, resultId: input.resultId ?? null, expiresAt: current.resultExpiresAt?.toISOString() ?? null }).onConflictDoNothing().run();
+        }
         const bound = transaction
           .update(jobOutputs)
           .set({ assetId, updatedAt: now })

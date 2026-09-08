@@ -86,6 +86,7 @@ export class FamilyProvider implements ProviderAdapter {
     for (const type of candidates) {
       const candidate = this.adapters.get(type);
       if (!candidate || candidate === adapter) continue;
+      if (context.imageResolution?.mode === 'native' && nativeRequest.resolution && !/^(auto|\d+x\d+)$/.test(nativeRequest.resolution) && ['openai-images-v1', 'openai-responses-image-v1'].includes(type)) continue;
       context.signal?.throwIfAborted();
       // Validate without dropping options or inputs that a different protocol cannot represent.
       try { await candidate.validate(nativeRequest, context); } catch { continue; }

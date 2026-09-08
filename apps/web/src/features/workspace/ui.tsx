@@ -2,7 +2,11 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Popover from '@radix-ui/react-popover';
-import { X } from 'lucide-react';
+import { ChevronDown, X } from 'lucide-react';
+
+export function SettingValue({ children }: { children: ReactNode }) {
+  return <><span className="setting-value-label">{children}</span><ChevronDown size={14} aria-hidden="true" /></>;
+}
 
 export function Tool({ label, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return <Tooltip.Root><Tooltip.Trigger asChild><button type="button" aria-label={label} className={`tool ${className}`} {...props}>{children}</button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="tip" sideOffset={8}>{label}<Tooltip.Arrow /></Tooltip.Content></Tooltip.Portal></Tooltip.Root>;

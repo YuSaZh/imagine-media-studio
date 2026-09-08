@@ -13,7 +13,7 @@ describe('account boundaries', () => {
   afterEach(async () => { if (server) await server.app.close(); if (root) await rm(root, { recursive: true, force: true }); });
   async function setup() {
     root = await mkdtemp(join(tmpdir(), 'imagine-accounts-'));
-    server = await createServer({ config: loadConfig({ DATA_DIR: root, NODE_ENV: 'test' }), startRunner: false, logger: false });
+    server = await createServer({ config: loadConfig({ DATA_DIR: root, NODE_ENV: 'test', MOCK_PROVIDER_ENABLED: 'true' }), startRunner: false, logger: false });
   }
   async function login(username: string, password = 'admin') {
     const result = await server.app.inject({ method: 'POST', url: '/internal/auth/login', payload: { username, password } });
@@ -41,6 +41,8 @@ describe('account boundaries', () => {
     const oldCollection = server.collections.create('Same project');
     expect((await server.app.inject({ method: 'POST', url: '/internal/accounts', headers: admin, payload: { username: 'alice', password: 'alice-password' } })).statusCode).toBe(201);
     const alice = await login('alice', 'alice-password');
+    expect((await server.app.inject({ method: 'PATCH', url: `/internal/collections/${oldCollection.id}`, headers: alice, payload: { isPrivate: true } })).statusCode).toBe(404);
+    expect(server.collections.get(oldCollection.id)?.isPrivate).toBe(false);
     for (const path of ['assets', 'jobs', 'collections']) {
       const result = await server.app.inject({ url: `/internal/${path}`, headers: alice });
       expect(result.statusCode).toBe(200); expect(result.json().items).toEqual([]);
@@ -104,6 +106,8 @@ describe('account boundaries', () => {
     const source = new URL('../../migrations/', import.meta.url);
     const manifest = JSON.parse(await readFile(new URL('manifest.json', source), 'utf8')) as { version: number; migrations: Record<string, string> };
     delete manifest.migrations['0008_accounts.sql'];
+    delete manifest.migrations['0009_video_sources.sql'];
+    delete manifest.migrations['0010_collection_privacy.sql'];
     for (const name of Object.keys(manifest.migrations)) await copyFile(new URL(name, source), join(legacy, name));
     await writeFile(join(legacy, 'manifest.json'), JSON.stringify(manifest));
     const db = createDatabase(join(root, 'app.db'), legacy);

@@ -9,6 +9,7 @@ export function parameterFields(model: WorkspaceModel | undefined): JsonObject {
   return object(object(model?.raw.capabilities.customFields).properties);
 }
 export function allowsCustomSize(model: WorkspaceModel | undefined): boolean {
+  if (model?.imageResolution) return model.imageResolution.allowCustomDimensions;
   return object(parameterFields(model).size).type === 'string';
 }
 const labels: Record<string, string> = { quality: '质量', output_format: '输出格式', output_compression: '压缩质量', background: '背景', input_fidelity: '输入保真度', moderation: '内容审核', stream: '流式返回', partial_images: '中间预览数量' };

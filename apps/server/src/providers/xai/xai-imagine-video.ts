@@ -1,5 +1,7 @@
 import type { GenerationRequest } from '@imagine/shared';
 import { publicInputUrl } from '../public-input-url.js';
+import { sourceVideo } from '../video-input.js';
+import { videoOperationPolicies } from '../video-operation-policy.js';
 import type {
   ModelCapabilities,
   ProviderAdapter,
@@ -337,6 +339,10 @@ function validateRequest(
     throw new XaiImagineVideoValidationError('xai_model_unsupported', `xAI video model ${request.modelId} is not supported by this profile.`);
   }
   const capabilities = videoCapabilitiesFor(request.modelId);
+  if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+    try { sourceVideo(request, context, 'xai-imagine-video-v1'); } catch (error) { throw new XaiImagineVideoValidationError('xai_video_input_invalid', error instanceof Error ? error.message : 'Invalid video'); }
+    return;
+  }
   if (request.prompt.trim().length === 0 || request.prompt.length > MAX_PROMPT_CHARS) {
     throw new XaiImagineVideoValidationError('xai_prompt_invalid', 'xAI video prompts must contain 1 through 32000 characters.');
   }
@@ -801,9 +807,10 @@ function videoCapabilities(modelId: string): ModelCapabilities {
   const supportsReferenceToVideo = modelId === XAI_IMAGINE_VIDEO_MODEL;
   const supports1080p = modelId === XAI_IMAGINE_VIDEO_MODEL;
   return {
+    operationPolicies: videoOperationPolicies('xai-imagine-video-v1', modelId),
     operations: supportsReferenceToVideo
       ? ['video.generate', 'video.image_to_video', 'video.reference_to_video']
-      : ['video.generate', 'video.image_to_video'],
+      : ['video.generate', 'video.image_to_video', 'video.edit', 'video.extend'],
     aspectRatios: [...VIDEO_ASPECT_RATIOS],
     resolutions: supports1080p ? [...VIDEO_RESOLUTIONS] : ['480p', '720p'],
     durations: { min: 1, max: 15 },
@@ -940,6 +947,11 @@ export function buildXaiImagineVideoPayload(
   if (request.resolution !== undefined) body.resolution = request.resolution;
   if (request.audio !== undefined) body.generate_audio = request.audio;
   if (request.operation === 'video.generate') return { body };
+  if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+    const input = sourceVideo(request, context, 'xai-imagine-video-v1');
+    body.video = { url: `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString('base64')}` };
+    return { body };
+  }
   const inputs = requestInputs(request, context);
   assertTotalInputBytes(inputs);
   if (request.operation === 'video.image_to_video') {
@@ -1100,7 +1112,7 @@ export class XaiImagineVideoProvider implements ProviderAdapter {
   public async submit(request: GenerationRequest, context: ProviderContext): Promise<SubmitResult> {
     const runtime = context as XaiImagineVideoProviderContext;
     const payload = buildXaiImagineVideoPayload(request, runtime, this.configuredModels);
-    const body = await this.requestJson(runtime, '/videos/generations', true, {
+    const body = await this.requestJson(runtime, request.operation === 'video.edit' ? '/videos/edits' : request.operation === 'video.extend' ? '/videos/extensions' : '/videos/generations', true, {
       method: 'POST',
       body: JSON.stringify(payload.body),
     });

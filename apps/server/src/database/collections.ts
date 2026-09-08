@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, count, desc, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 
 import type { AppDatabase } from './client.js';
 import { toChangeEventValues } from './events.js';
@@ -15,6 +15,7 @@ import { assets, changeEvents, collectionAssets, collections } from './schema.js
 export interface CollectionRecord {
   readonly id: string;
   readonly name: string;
+  readonly isPrivate: boolean;
   readonly itemCount: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -48,7 +49,7 @@ export class CollectionRepository {
       .select({ value: count() })
       .from(collectionAssets)
       .innerJoin(assets, eq(collectionAssets.assetId, assets.id))
-      .where(and(eq(collectionAssets.collectionId, row.id), isNull(assets.deletedAt)))
+      .where(and(eq(collectionAssets.collectionId, row.id), isNull(assets.deletedAt), sql`coalesce(json_extract(${assets.metadataJson}, '$.temporaryVideoFrame'), 0) != 1`))
       .get()?.value ?? 0;
     return { ...row, itemCount };
   }
@@ -74,11 +75,11 @@ export class CollectionRepository {
     }));
   }
 
-  public create(name: string): CollectionRecord {
+  public create(name: string, isPrivate = false): CollectionRecord {
     const id = randomUUID();
     const now = new Date();
     this.database.transaction((transaction) => {
-      transaction.insert(collections).values({ id, ownerId: this.owner?.() ?? 'admin', name, createdAt: now, updatedAt: now }).run();
+      transaction.insert(collections).values({ id, ownerId: this.owner?.() ?? 'admin', name, isPrivate, createdAt: now, updatedAt: now }).run();
       transaction
         .insert(changeEvents)
         .values(
@@ -98,12 +99,16 @@ export class CollectionRepository {
   }
 
   public rename(id: string, name: string): CollectionRecord | null {
+    return this.update(id, { name });
+  }
+
+  public update(id: string, input: { name?: string | undefined; isPrivate?: boolean | undefined }): CollectionRecord | null {
     if (!this.get(id)) return null;
     const updatedAt = new Date();
     const changed = this.database.transaction((transaction) => {
       const result = transaction
         .update(collections)
-        .set({ name, updatedAt })
+        .set({ ...input, updatedAt })
         .where(eq(collections.id, id))
         .run();
       if (result.changes === 0) return false;
@@ -114,7 +119,7 @@ export class CollectionRepository {
             aggregateType: 'collection',
             aggregateId: id,
             eventType: 'collection.updated',
-            payload: { id, name },
+            payload: { id, ...input },
             createdAt: updatedAt,
           }),
         )
@@ -160,7 +165,7 @@ export class CollectionRepository {
       const activeAssets = transaction
         .select({ id: assets.id })
         .from(assets)
-        .where(and(inArray(assets.id, uniqueAssetIds), isNull(assets.deletedAt), this.owner ? eq(assets.ownerId, this.owner()) : undefined))
+        .where(and(inArray(assets.id, uniqueAssetIds), isNull(assets.deletedAt), sql`coalesce(json_extract(${assets.metadataJson}, '$.temporaryVideoFrame'), 0) != 1`, this.owner ? eq(assets.ownerId, this.owner()) : undefined))
         .all();
       if (activeAssets.length !== uniqueAssetIds.length) {
         throw new CollectionRepositoryError('asset_not_found', 'One or more assets were not found.');
@@ -227,7 +232,7 @@ export class CollectionRepository {
       .select({ id: collectionAssets.assetId })
       .from(collectionAssets)
       .innerJoin(assets, eq(collectionAssets.assetId, assets.id))
-      .where(and(eq(collectionAssets.collectionId, collectionId), isNull(assets.deletedAt)))
+      .where(and(eq(collectionAssets.collectionId, collectionId), isNull(assets.deletedAt), sql`coalesce(json_extract(${assets.metadataJson}, '$.temporaryVideoFrame'), 0) != 1`))
       .all()
       .map((row) => row.id);
   }

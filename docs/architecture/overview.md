@@ -28,6 +28,12 @@ FFmpeg/ffprobe subprocesses and trusted adapter worker threads do not introduce
 another application service. An operator may supply an existing reverse proxy;
 the project does not require a proxy container, Redis, PostgreSQL, or object store.
 
+Mock generation is opt-in through `MOCK_PROVIDER_ENABLED=true`. Server, Compose
+and environment examples default to false. With the switch off, catalog queries
+exclude stored Mock connections and models before pagination, and the registry
+rejects Mock execution. Existing media, task history and saved test configuration
+are retained. Isolated browser and Docker tests explicitly enable the switch.
+
 ## Module and State Ownership
 
 | Area | Responsibility |
@@ -53,11 +59,21 @@ secrets and full videos from caches. See the [workspace spec](../design-spec/wor
 
 Model capabilities and stored parameter policies drive controls and server
 validation. The server selects and snapshots the model's wire protocol for a job.
+Image resolution metadata declares native/pixel mode, permitted values and
+dimension limits. The server owns the durable `imageResolutionPolicy` snapshot,
+ignores a client's replacement, and passes it to adapters through context while
+excluding it from the Provider request. Frontend and server use shared validators;
+known model names only supply default metadata, never override explicit policy.
 Generation count is an application fan-out count (1-32), excluded from model
 parameter policy even when legacy model records contain count rules. The job
 route creates that many durable jobs with one requested output each; queue
 limits govern execution concurrency independently of upstream batch capabilities.
 Adapters map vendor payloads and normalize URLs, Base64, MIME, states, and errors.
+Operation-specific policies and video input constraints are shared with the UI
+and snapshotted by the server. Editing/extension inputs use stored assets and
+server-only `asset_video_sources` records, never client-supplied remote IDs.
+The additive migration backfills eligible existing video jobs; output finalization
+stores provenance atomically and links derived assets to their source.
 Large Base64 payloads use a shared linear canonical validator before decoding;
 encoded and decoded byte limits remain enforced. Unexpected internal processing
 failures are classified separately from missing model protocols and do not
@@ -98,3 +114,13 @@ Subsystem references, with their original milestone evidence retained:
 For local verification use the [contribution matrix](../../CONTRIBUTING.md#verification).
 For deployment use [RELEASE.md](../../RELEASE.md). Outstanding external acceptance
 and known limitations are recorded in [Hold.md](../../Hold.md).
+
+### Mask input preparation
+
+`supportsMask` continues to describe native protocol support. Image-input models without native masks can accept a server-prepared overlay: canonical mask alpha 0 denotes edited pixels, alpha 255 preserved pixels, and intermediate values partial coverage. Version 1 uses RGB (235, 64, 82) with opacity 104/255. Browser previews and server compositing share these constants.
+
+New masked jobs snapshot `maskProcessing` in request JSON: version, native/overlay mode, source identity, output MIME and optional model byte bound. The input resolver derives it from stored capabilities, overwriting client values. Historical jobs without the snapshot retain their previous behavior. No database migration or standalone composite asset is required. Source/mask ownership, parent relation, dimensions and input counts are validated before processing.
+
+The existing input loader uses bounded Sharp processing for overlay snapshots (up to 16,777,216 decoded pixels, also subject to existing editor/upload/model limits), preserves dimensions and checks encoded size against model/application limits. It replaces the source bytes in memory, strips its original public URL, and removes the independent mask from provider inputs. Native snapshots retain source and mask separately. `providerGenerationRequest` strips processing metadata and appends fixed overlay guidance only to the outbound prompt; the user's stored prompt and original media remain unchanged. Submit-time validation and the durable runner use the same preparation path, including retries and recovery. Model edits cannot change a queued job's snapshot. Non-native overlay guidance is not a guarantee of exact regional editing.
+
+Job detail responses map input records to the shared DTO (`assetId`, `role`, `sortOrder`), excluding repository-only `jobId`, so editors can validate and observe jobs that contain image inputs.

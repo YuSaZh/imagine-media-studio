@@ -1,3 +1,4 @@
+import { COMPATIBLE_MODEL_IDENTITIES, RemoteModelCatalogSchema } from '@imagine/shared';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -91,6 +92,30 @@ async function createHarness(
 }
 
 describe('provider family migration', () => {
+  it('recognizes and loads every compatible template and alias without replacing saved edits', async () => {
+    const ids = COMPATIBLE_MODEL_IDENTITIES.flatMap(model => [model.id, ...model.aliases]);
+    const { service, models } = await createHarness(undefined, { http: { request: async () => ({ status: 200, statusCode: 200, headers: { 'content-type': 'application/json' }, json: { data: [...ids.map(id => ({ id })), { id: 'seedream-future' }] }, dispose: async () => {} }) } });
+    const provider = service.create({ name: 'Compatible templates', type: 'openai', baseUrl: 'https://fixture.example/v1', apiKey: 'fixture-only' });
+    const templates = await service.modelCapabilityTemplates(provider.id);
+    const catalog = RemoteModelCatalogSchema.parse(await service.discoverModels(provider.id));
+    for (const item of catalog.models) {
+      if (item.id === 'seedream-future') { expect(item.recognized).toBe(false); continue; }
+      expect(item.recognized).toBe(true);
+      const template = templates.models.find(model => model.modelId === item.template!.modelId && model.capabilities.profile === item.template!.profile)!;
+      expect(template).toBeDefined();
+      const preset = await service.modelCapabilityPreset(provider.id, { modelId: item.id, operation: template.capabilities.operations[0]! });
+      expect(preset.capabilities).toEqual(template.capabilities);
+    }
+    service.saveManualModel({ providerId: provider.id, modelId: ids[0]!, displayName: 'My edited template', enabled: true, capabilities: { operations: ['image.generate'], maxReferenceImages: 0 } });
+    const before = models.listForProvider(provider.id);
+    await service.discoverModels(provider.id);
+    await service.modelCapabilityTemplates(provider.id);
+    await service.modelCapabilityPreset(provider.id, { modelId: ids[0]!, operation: 'image.generate' });
+    expect(models.listForProvider(provider.id)).toEqual(before);
+    const copied = service.saveManualModel({ providerId: provider.id, modelId: 'unknown-private-image', displayName: 'Copied template', enabled: true, capabilities: templates.models.find(model => model.modelId === 'MAI-Image-2.5')!.capabilities });
+    expect(copied.capabilities).toMatchObject({ operations: ['image.generate', 'image.edit'], maxReferenceImages: 1 });
+  });
+
   it('matches native protocols and capabilities when an OpenAI catalog contains other families', async () => {
     const { service } = await createHarness(undefined, { http: { request: async () => ({ status: 200, statusCode: 200, headers: { 'content-type': 'application/json' }, json: { data: [{ id: 'gpt-image-2' }, { id: 'gemini-3.1-flash-image' }, { id: 'grok-imagine-image' }] }, dispose: async () => {} }) } });
     const provider = service.create({ name: 'Mixed catalog', type: 'openai', apiKey: 'fixture-only', baseUrl: 'https://example.com/v1' });
@@ -117,7 +142,7 @@ describe('provider family migration', () => {
     } } });
     const provider = service.create({ name: 'Catalog', type: 'openai', baseUrl: 'https://example.com/v1', apiKey: 'catalog-key' });
     expect(await service.discoverModels(provider.id)).toEqual({ models: [
-      { id: 'gpt-image-2', displayName: 'GPT Image 2' }, { id: 'unknown-text-model', displayName: 'unknown-text-model' }, { id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2' },
+      { id: 'gpt-image-2', displayName: 'GPT Image 2', recognized: true, template: { modelId: 'gpt-image-2', profile: 'openai-images-v1' } }, { id: 'unknown-text-model', displayName: 'unknown-text-model', recognized: false }, { id: 'gemini-3.1-flash-image', displayName: 'Nano Banana 2', recognized: true, template: { modelId: 'gemini-3.1-flash-image', profile: 'gemini-generate-content-image-v1' } },
     ] });
     expect(urls[1]).toBe('https://example.com/v1/models?after=unknown-text-model');
     expect(dispose).toHaveBeenCalledTimes(2);
@@ -530,7 +555,7 @@ describe('ProviderService', () => {
     });
     expect(refreshed.map((model) => model.modelId)).toEqual(expect.arrayContaining(['sora-2', 'sora-2-pro']));
     expect(refreshed.find((model) => model.modelId === 'sora-2')?.capabilities).toMatchObject({
-      operations: ['video.generate', 'video.image_to_video'],
+      operations: ['video.generate', 'video.image_to_video', 'video.edit', 'video.extend'],
       supportsProgress: true,
       supportsCancel: false,
     });
@@ -636,7 +661,7 @@ describe('ProviderService', () => {
     ]));
     expect(refreshed).toHaveLength(2);
     expect(refreshed.find((model) => model.modelId === 'veo-3.1-generate-preview')?.capabilities)
-      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'], resolutions: ['720p', '1080p', '4k'] });
+      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video', 'video.extend'], resolutions: ['720p', '1080p', '4k'] });
     expect(refreshed.find((model) => model.modelId === 'veo-future-preview')?.capabilities)
       .toMatchObject({ operations: ['video.generate'], resolutions: ['720p'], maxReferenceImages: 0 });
     await expect(service.testConnection(provider.id)).resolves.toMatchObject({ ok: true });
@@ -680,7 +705,7 @@ describe('ProviderService', () => {
     ]));
     expect(refreshed).toHaveLength(2);
     expect(refreshed.find((model) => model.modelId === 'gemini-omni-flash-preview')?.capabilities)
-      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'], supportsCancel: false });
+      .toMatchObject({ operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video', 'video.edit', 'video.extend'], supportsCancel: false });
     expect(refreshed.find((model) => model.modelId === 'gemini-omni-future-preview')?.capabilities)
       .toMatchObject({ operations: ['video.generate'], maxReferenceImages: 0, supportsAudio: false });
     await expect(service.testConnection(provider.id)).resolves.toMatchObject({ ok: true });

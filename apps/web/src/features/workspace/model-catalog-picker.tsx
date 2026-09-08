@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 
-interface CatalogModel { id: string; displayName: string }
+interface CatalogModel { id: string; displayName: string; recognized?: boolean | undefined }
 
 export function ModelCatalogPicker({ models, value, loading, onSelect }: {
   models: readonly CatalogModel[]; value: string; loading: boolean; onSelect: (id: string) => void;
@@ -13,7 +13,7 @@ export function ModelCatalogPicker({ models, value, loading, onSelect }: {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const filtered = models.filter(model => terms.every(term => `${model.id} ${model.displayName}`.toLowerCase().includes(term)));
+  const filtered = models.filter(model => terms.every(term => `${model.id} ${model.displayName}`.toLowerCase().includes(term))).sort((a, b) => Number(!!b.recognized) - Number(!!a.recognized));
   const index = Math.min(active, filtered.length - 1);
   const selected = models.find(model => model.id === value);
   const label = (model: CatalogModel) => model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`;
@@ -43,7 +43,7 @@ export function ModelCatalogPicker({ models, value, loading, onSelect }: {
       }} /><button type="button" aria-label="展开模型目录" title="展开模型目录" disabled={loading} onMouseDown={event => event.preventDefault()} onClick={() => { if (open) setOpen(false); else { input.current?.focus(); expand(); } }}><ChevronDown size={16} /></button></div>
     {open && <div className="catalog-search-popup"><div ref={list} id={listId} role="listbox" aria-label="可选模型" className="catalog-search-results">
       {filtered.map((model, i) => <div id={`${listId}-${i}`} key={model.id} role="option" aria-selected={index === i} className="catalog-search-option" onMouseDown={event => event.preventDefault()} onClick={() => choose(model.id)}>
-        <span><strong>{model.displayName}</strong>{model.displayName !== model.id && <small>{model.id}</small>}</span>{model.id === value && <Check size={15} />}
+        <span><strong className={model.recognized ? 'recognized-model-name' : undefined}>{model.displayName}</strong>{model.displayName !== model.id && <small>{model.id}</small>}</span>{model.id === value && <Check size={15} />}
       </div>)}
     </div>{!filtered.length && <p className="menu-empty" role="status">没有匹配的模型</p>}</div>}
   </div>;

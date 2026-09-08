@@ -1,5 +1,8 @@
+import { MaskProcessingSchema, MASK_OVERLAY_INSTRUCTION } from './mask-processing.js';
 import { z } from 'zod';
 import { NativeProviderProfileSchema } from './provider-protocols.js';
+import { ImageResolutionCapabilitySchema } from './image-resolution.js';
+import { OperationPolicySchema } from './operation-policy.js';
 
 export const MediaOperationSchema = z.enum([
   'image.generate',
@@ -28,6 +31,9 @@ export const GenerationRequestSchema = z.object({
   providerId: z.string().trim().min(1),
   modelId: z.string().trim().min(1),
   profile: NativeProviderProfileSchema.optional(),
+  imageResolutionPolicy: ImageResolutionCapabilitySchema.optional(),
+  operationPolicy: OperationPolicySchema.optional(),
+  maskProcessing: MaskProcessingSchema.optional(),
   collectionId: z.string().trim().min(1).max(255).optional(),
   prompt: z.string().trim().min(1),
   negativePrompt: z.string().optional(),
@@ -58,6 +64,13 @@ export function normalizeAutomaticParameters(request: GenerationRequest): Genera
 export function providerGenerationRequest(request: GenerationRequest): GenerationRequest {
   const result = normalizeAutomaticParameters(request);
   delete result.collectionId;
+  delete result.imageResolutionPolicy;
+  delete result.operationPolicy;
+  delete result.maskProcessing;
+  if (request.maskProcessing?.mode === 'overlay') {
+    result.inputs = result.inputs.filter(input => input.role !== 'mask');
+    result.prompt = `${request.prompt}\n\n${MASK_OVERLAY_INSTRUCTION}`;
+  }
   return result;
 }
 

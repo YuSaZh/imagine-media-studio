@@ -1,5 +1,6 @@
 export * from './app.js';
 export * from './generation.js';
+export * from './operation-policy.js';
 export * from './image-resolution.js';
 export * from './provider-protocols.js';
 export * from './model-names.js';
@@ -11,3 +12,7 @@ export * from './mask-document.js';
 export * from './mask-target.js';
 export * from './viewport-transform.js';
 export * from './custom-fields-security.js';
+
+export * from './compatible-models.js';
+
+export * from './mask-processing.js';

@@ -50,6 +50,69 @@ class AsyncValidationProvider implements ProviderAdapter {
 }
 
 describe('resource job route provider error normalization', () => {
+  it('derives compatible video constraints from the stored model and discards client policy', async () => {
+    const app = Fastify({ logger: false });
+    const adapter = new AsyncValidationProvider();
+    Object.defineProperty(adapter, 'type', { value: 'openai' });
+    const validate = vi.spyOn(adapter, 'validate');
+    const capabilities = { profile: 'openai-videos-v1-compatible', operations: ['video.generate'], durations: [5, 7, 9], resolutions: ['1080p'], aspectRatios: ['1:1'] };
+    const options = { providers: { resolve: () => ({ adapter, secrets: {}, submitReplaySafe: false }) }, inputResolver: { resolve: () => ({ model: { capabilities } }) }, inputLoader: { load: async () => [] } } as unknown as ResourceRoutesOptions;
+    try {
+      await registerResourceRoutes(app, options);
+      const payload = { ...createMockGenerationRequest(), modelId: 'unknown-video', operation: 'video.generate', resolution: '1080p', aspectRatio: '1:1', durationSeconds: 7, operationPolicy: { durations: [100], resolutions: ['4k'] } };
+      await app.inject({ method: 'POST', url: '/internal/jobs', payload });
+      expect(validate).toHaveBeenCalledOnce();
+      const policy = { durations: [5, 7, 9], resolutions: ['1080p'], aspectRatios: ['1:1'], inputRoles: [] };
+      expect(validate.mock.calls[0]![0]).not.toHaveProperty('operationPolicy');
+      expect(validate.mock.calls[0]![1]).toMatchObject({ modelId: 'unknown-video', operationPolicy: policy });
+      validate.mockClear();
+      expect((await app.inject({ method: 'POST', url: '/internal/jobs', payload: { ...payload, durationSeconds: 100 } })).statusCode).toBe(400);
+      expect(validate).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it('validates and snapshots stored resolution capabilities instead of client overrides', async () => {
+    const app = Fastify({ logger: false });
+    const adapter = new AsyncValidationProvider();
+    const validate = vi.spyOn(adapter, 'validate');
+    const imageResolution = { mode: 'pixels', values: ['1024x1024'], allowCustomDimensions: false, dimensions: { maxWidth: 1024, maxHeight: 1024 } };
+    const options = {
+      providers: { resolve: () => ({ adapter, secrets: {}, submitReplaySafe: false }) },
+      inputResolver: { resolve: () => ({ model: { capabilities: { operations: ['image.generate'], imageResolution } } }) },
+      inputLoader: { load: async () => [] },
+    } as unknown as ResourceRoutesOptions;
+    try {
+      await registerResourceRoutes(app, options);
+      const spoofed = { ...createMockGenerationRequest(), resolution: '3840x3840', imageResolutionPolicy: { mode: 'pixels', values: ['3840x3840'], allowCustomDimensions: true } };
+      expect((await app.inject({ method: 'POST', url: '/internal/jobs', payload: spoofed })).statusCode).toBe(400);
+      expect(validate).not.toHaveBeenCalled();
+      await app.inject({ method: 'POST', url: '/internal/jobs', payload: { ...spoofed, resolution: '1024x1024' } });
+      expect(validate).toHaveBeenCalledOnce();
+      expect(validate.mock.calls[0]![0]).not.toHaveProperty('imageResolutionPolicy');
+      expect(validate.mock.calls[0]![1]).toMatchObject({ imageResolution });
+    } finally { await app.close(); }
+  });
+  it.each([false, true])('handles explicit auto after applying stored defaults (locked=%s)', async locked => {
+    const app = Fastify({ logger: false });
+    const adapter = new AsyncValidationProvider();
+    const validate = vi.spyOn(adapter, 'validate');
+    const options = {
+      providers: { resolve: () => ({ adapter, secrets: {}, submitReplaySafe: false }) },
+      inputResolver: { resolve: () => ({ model: { capabilities: { operations: ['image.generate'], parameters: [
+        { path: 'aspectRatio', label: 'Ratio', type: 'select', options: ['1:1'], defaultValue: '1:1', locked },
+        { path: 'resolution', label: 'Resolution', type: 'select', options: ['1024x1024'], defaultValue: '1024x1024', locked },
+      ] } } }) },
+      inputLoader: { load: async () => [] },
+    } as unknown as ResourceRoutesOptions;
+    try {
+      await registerResourceRoutes(app, options);
+      await app.inject({ method: 'POST', url: '/internal/jobs', payload: { ...createMockGenerationRequest(), aspectRatio: 'auto', resolution: 'auto' } });
+      expect(validate).toHaveBeenCalledOnce();
+      const input = validate.mock.calls[0]![0];
+      if (locked) expect(input).toMatchObject({ aspectRatio: '1:1', resolution: '1024x1024' });
+      else { expect(input).not.toHaveProperty('aspectRatio'); expect(input).not.toHaveProperty('resolution'); }
+    } finally { await app.close(); }
+  });
   it('derives protocol and locked defaults from the stored model before validation', async () => {
     const app = Fastify({ logger: false });
     const adapter = new AsyncValidationProvider();

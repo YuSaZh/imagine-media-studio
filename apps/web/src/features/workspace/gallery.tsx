@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bookmark, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
+import { Bookmark, Copy, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
+import { copyPrompt } from './copy-prompt';
 import { createSelectionGestureState, LONG_PRESS_DURATION_MS, reduceSelectionGesture } from '../gallery/model/selection-gesture';
 import type { MediaItem } from './data';
 import { Choice, Options } from './ui';
@@ -8,6 +9,10 @@ import type { PendingStudy } from './pending-studies';
 import { JOB_LABELS } from './data';
 
 interface GalleryProps {
+  onNotice?: (message: string) => void;
+  onVideoContinue?: (item: MediaItem, operation: 'edit' | 'extend') => void;
+  canEditVideo?: boolean;
+  canExtendVideo?: boolean;
   pending?: PendingStudy[];
   onCancelJob?: (id: string) => void;
   onRetryJob?: (id: string) => void;
@@ -78,10 +83,13 @@ function Card({ item, props }: { item: MediaItem; props: GalleryProps }) {
       {props.selecting && <span className="select-mark">{selected && <Check size={17} />}</span>}
     </button>
     {!props.selecting && <>
+      {item.prompt && <button className="card-copy-prompt" aria-label={`复制提示词 ${item.title}`} title="复制提示词" onClick={event => { event.stopPropagation(); void copyPrompt(item.prompt, props.onNotice ?? (() => {})); }}><Copy size={17} /></button>}
       <button className={`card-bookmark ${item.saved ? 'is-saved' : ''}`} disabled={!props.online} aria-label={item.saved ? `取消收藏 ${item.title}` : `收藏 ${item.title}`} onClick={() => props.onSave(item)}><Bookmark size={17} fill={item.saved ? 'currentColor' : 'none'} /></button>
       <button className="card-reference" disabled={!props.online} aria-label={`加入参考 ${item.title}`} title="加入参考" onClick={() => props.onReference?.(item)}><ImagePlus size={17} /></button>
       <Options label={`${item.title} 更多操作`} className="card-more" trigger={<MoreHorizontal size={19} />}>
         <Choice active={false} onClick={() => props.onSelect(item)}><CheckCheck size={15} />选择作品</Choice>
+        {item.kind === 'video' && props.online && props.canEditVideo && <Choice active={false} onClick={() => props.onVideoContinue?.(item, 'edit')}>编辑视频</Choice>}
+        {item.kind === 'video' && props.online && props.canExtendVideo && <Choice active={false} onClick={() => props.onVideoContinue?.(item, 'extend')}>续写视频</Choice>}
         {props.online && <Choice active={false} onClick={() => props.onDelete(item)}><Trash2 size={15} />删除</Choice>}
       </Options>
     </>}

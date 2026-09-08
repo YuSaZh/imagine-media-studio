@@ -177,7 +177,7 @@ describe('OpenAI provider profiles', () => {
     ]);
     expect(capabilities.models[0]?.capabilities).toMatchObject({
       resolutions: expect.arrayContaining(['2048x2048', '3840x2160']),
-      aspectRatios: expect.not.arrayContaining(['4:3', '3:4']),
+      aspectRatios: expect.arrayContaining(['3:2', '2:3', '4:3', '3:4']),
     });
     expect(capabilities.models[0]?.capabilities.customFields).not.toMatchObject({
       properties: { input_fidelity: expect.anything() },
@@ -185,6 +185,7 @@ describe('OpenAI provider profiles', () => {
     expect(capabilities.models[1]?.capabilities.customFields).toMatchObject({
       properties: { input_fidelity: { enum: ['low', 'high'] } },
     });
+    expect(capabilities.models[1]?.capabilities.aspectRatios).not.toEqual(expect.arrayContaining(['4:3', '3:4']));
 
     await expect(provider.validate(request({ modelId: 'gpt-image-2', extra: { input_fidelity: 'high' } }), context)).rejects.toThrow('input_fidelity');
     await expect(provider.validate(request({ modelId: 'gpt-image-1.5', extra: { input_fidelity: 'high' } }), context)).resolves.toBeUndefined();
@@ -907,7 +908,7 @@ describe('OpenAI provider profiles', () => {
     })).toThrow('oversized image URL');
   });
 
-  it('keeps image payload validation model-aware and limits compression to encoded formats', async () => {
+  it('keeps image payload validation policy-aware and limits compression to encoded formats', async () => {
     expect(() => assertImageGenerationPayload({
       model: 'gpt-image-1',
       prompt: 'a test image',
@@ -917,7 +918,7 @@ describe('OpenAI provider profiles', () => {
       model: 'gpt-image-2',
       prompt: 'a test image',
       input_fidelity: 'high',
-    })).toThrow('input_fidelity');
+    }, { supportsInputFidelity: false })).toThrow('input_fidelity');
     expect(() => assertImageGenerationPayload({
       model: 'gpt-image-1',
       prompt: 'a test image',
@@ -991,7 +992,7 @@ describe('OpenAI Videos compatible profile', () => {
     const defaults = await provider.getCapabilities(videoContext);
     expect(defaults.models.map((model) => model.id)).toEqual(['sora-2', 'sora-2-pro', 'sora-2-2025-10-06', 'sora-2-pro-2025-10-06', 'sora-2-2025-12-08']);
     expect(defaults.models[0]?.capabilities).toMatchObject({
-      operations: ['video.generate', 'video.image_to_video'],
+      operations: ['video.generate', 'video.image_to_video', 'video.edit', 'video.extend'],
       durations: [4, 8, 12, 16, 20],
       supportsProgress: true,
       supportsCancel: false,
@@ -1003,7 +1004,7 @@ describe('OpenAI Videos compatible profile', () => {
       .toEqual(expect.arrayContaining(['1920x1080', '1080x1920']));
     const live = await provider.getLiveCapabilities(videoContext);
     expect(live.models.map((model) => model.id)).toEqual(['sora-2', 'sora-2-pro']);
-    expect(live.models[0]?.capabilities.operations).toEqual(['video.generate', 'video.image_to_video']);
+    expect(live.models[0]?.capabilities.operations).toEqual(['video.generate', 'video.image_to_video', 'video.edit', 'video.extend']);
   });
 
   it('only admits an unknown catalog model when it is explicitly configured', async () => {

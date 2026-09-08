@@ -1,4 +1,4 @@
-import type { GenerationRequest } from '@imagine/shared';
+import { assertImageResolution, prepareNativeImageResolution, type GenerationRequest } from '@imagine/shared';
 import { publicInputUrl } from '../public-input-url.js';
 import { parseOpenAiImageStream } from '../openai/stream.js';
 import type {
@@ -395,7 +395,7 @@ function validateCommonRequest(request: GenerationRequest, context: ProviderCont
       'The generation request provider does not match the active xAI provider.',
     );
   }
-  if (!isSupportedModel(request.modelId)) {
+  if (!isSupportedModel(request.modelId) && context.modelId !== request.modelId) {
     throw new XaiImagineValidationError(
       'xai_model_unsupported',
       `xAI Imagine model ${request.modelId} is not supported by this profile.`,
@@ -415,8 +415,9 @@ function validateCommonRequest(request: GenerationRequest, context: ProviderCont
       `xAI Imagine does not support aspect ratio ${request.aspectRatio}.`,
     );
   }
+  if (context.imageResolution) assertImageResolution(request, context.imageResolution);
   if (
-    request.resolution !== undefined &&
+    !context.imageResolution && request.resolution !== undefined &&
     (!(RESOLUTIONS as readonly string[]).includes(request.resolution) ||
       (conservativeModel && request.resolution !== '1k'))
   ) {
@@ -478,7 +479,7 @@ function validateCommonRequest(request: GenerationRequest, context: ProviderCont
   responseFormat(request.format);
 }
 
-function validateImageInputs(request: GenerationRequest): void {
+function validateImageInputs(request: GenerationRequest, context?: ProviderContext): void {
   if (request.operation === 'image.generate') {
     if (request.inputs.length > 0) {
       throw new XaiImagineValidationError(
@@ -495,10 +496,8 @@ function validateImageInputs(request: GenerationRequest): void {
       'The xAI Imagine image profile only supports image.generate and image.edit.',
     );
   }
-  const maxReferences = isKnownImageModel(canonicalModelId(request.modelId)) ? 3 : 1;
-  const referenceLimitMessage = maxReferences === 3
-    ? 'xAI Imagine image edits require one source and at most three references.'
-    : 'xAI Imagine image edits require one source and at most one reference.';
+  const maxReferences = context?.operationPolicy?.maxReferenceImages ?? (canonicalModelId(request.modelId) === XAI_IMAGE_2_MODEL ? 4 : isKnownImageModel(canonicalModelId(request.modelId)) ? 3 : 1);
+  const referenceLimitMessage = `xAI Imagine image edits require one source and at most ${maxReferences} references.`;
   if (request.inputs.length < 1 || request.inputs.length > maxReferences + 1) {
     throw new XaiImagineValidationError(
       'xai_reference_limit',
@@ -532,9 +531,7 @@ function validateImageInputs(request: GenerationRequest): void {
   if (referenceCount > maxReferences) {
     throw new XaiImagineValidationError(
       'xai_reference_limit',
-      maxReferences === 3
-        ? 'xAI Imagine image edits accept at most three references.'
-        : 'xAI Imagine image edits accept at most one reference.',
+      referenceLimitMessage,
     );
   }
   if (request.inputs.length === 1 && request.aspectRatio !== undefined) {
@@ -562,8 +559,17 @@ export function buildXaiImagineImagePayload(
   request: GenerationRequest,
   context: XaiImagineProviderContext,
 ): XaiImagineImagePayload {
+  if (context.imageResolution) {
+    try {
+      const prepared = prepareNativeImageResolution(request, context.imageResolution, true);
+      request = prepared.request;
+      context = { ...context, imageResolution: prepared.capability };
+    } catch (error) {
+      throw new XaiImagineValidationError('xai_resolution_unsupported', error instanceof Error ? error.message : 'Invalid resolution');
+    }
+  }
   validateCommonRequest(request, context);
-  validateImageInputs(request);
+  validateImageInputs(request, context);
   const body: JsonRecord = {
     model: canonicalModelId(request.modelId),
     prompt: request.prompt,
@@ -830,10 +836,11 @@ function modelCapabilities(modelId: string): ModelCapabilities {
   const quality = modelId === XAI_IMAGE_2_MODEL;
   const batch = modelId !== XAI_IMAGE_QUALITY_MODEL;
   return {
+    imageResolution: { mode: 'native', values: [...RESOLUTIONS], allowCustomDimensions: false },
     operations: ['image.generate', 'image.edit'],
     aspectRatios: ASPECT_RATIOS,
     resolutions: RESOLUTIONS,
-    maxReferenceImages: 3,
+    maxReferenceImages: modelId === XAI_IMAGE_2_MODEL ? 4 : 3,
     supportsMask: false,
     supportsNegativePrompt: false,
     supportsSeed: false,
@@ -864,6 +871,7 @@ const MAX_MODEL_DISPLAY_NAME_CHARS = 255;
 function conservativeModelCapabilities(modelId: string): ModelCapabilities {
   return {
     ...modelCapabilities(modelId),
+    imageResolution: { mode: 'native', values: ['1k'], allowCustomDimensions: false },
     aspectRatios: ['1:1'],
     resolutions: ['1k'],
     maxReferenceImages: 1,

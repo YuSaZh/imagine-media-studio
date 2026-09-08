@@ -707,7 +707,7 @@ export class AssetMediaService {
           this.recordInput(input, prepared, contentPath, {
             durationMs: null,
             height: metadata.height,
-            metadata: { format: metadata.format, pages: metadata.pages },
+            metadata: { format: metadata.format, pages: metadata.pages, ...('temporaryVideoFrame' in input && input.temporaryVideoFrame === true ? { temporaryVideoFrame: true } : {}) },
             posterPath: null,
             thumbnailPath: input.role === 'mask' ? null : thumbnailPath,
             width: metadata.width,

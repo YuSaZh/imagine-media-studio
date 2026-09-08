@@ -61,6 +61,7 @@ export interface MediaSourceInput {
 }
 
 export interface UploadMediaInput extends MediaSourceInput {
+  temporaryVideoFrame?: boolean;
   source: Readable;
 }
 

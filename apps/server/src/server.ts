@@ -1,3 +1,4 @@
+import { TemporaryVideoFrames } from './media/temporary-video-frames.js';
 import { existsSync } from 'node:fs';
 import { AccountAuth } from './security/account-auth.js';
 import { accountContext, requestOwner } from './security/account-context.js';
@@ -376,6 +377,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   });
   ledger.trustedAdapterService = trustedAdapterService;
   const providerRegistry = new ProviderRegistry(providerRepository, vault, {
+    mockProviderEnabled: options.config.mockProviderEnabled,
     adapterDefinitions,
     adapterWorkerHost,
     http: providerHttp,
@@ -447,6 +449,8 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     paths: storage,
     repository: mediaRepository,
   });
+  const temporaryVideoFrames = new TemporaryVideoFrames(assets, storage.root, () => outbox.flush());
+  await temporaryVideoFrames.run();
   await mediaRepairCoordinator.reconcile();
   const runner = new JobRunner({
     ...createSqliteRunnerOptions({
@@ -464,7 +468,9 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     bodyLimit: SERVER_BODY_LIMIT,
     logger: options.logger ?? { level: options.config.logLevel },
   });
+  app.addHook('onReady', async () => { temporaryVideoFrames.start(); });
   app.addHook('onClose', async () => {
+    await temporaryVideoFrames.stop();
     await closeCreatedResources(ledger);
   });
   registerRawDocumentParsers(app);
@@ -606,6 +612,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       providers: providerService,
     });
     await registerResourceRoutes(app, {
+      mockProviderEnabled: options.config.mockProviderEnabled,
       assets: routeAssets,
       collections: accounts ? new CollectionRepository(database.orm, requestOwner) : collections,
       jobs: routeJobs,

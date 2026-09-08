@@ -106,6 +106,7 @@ jobs:
           echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
           echo "APP_SECRET=github-actions-pr6-smoke-secret-not-for-production" >> "$GITHUB_ENV"
           echo "APP_PASSWORD=github-actions-pr6-smoke-password-not-for-production" >> "$GITHUB_ENV"
+          echo "MOCK_PROVIDER_ENABLED=true" >> "$GITHUB_ENV"
           echo "PUID=$(id -u)" >> "$GITHUB_ENV"
           echo "PGID=$(id -g)" >> "$GITHUB_ENV"
           echo "IMAGINE_MEDIA_HOST_PORT=$host_port" >> "$GITHUB_ENV"

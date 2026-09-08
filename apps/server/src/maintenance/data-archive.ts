@@ -971,7 +971,7 @@ async function validateArchivedDatabase(
     const report = checkSqliteIntegrity(snapshot);
     if (!report.ok) throw new DataArchiveIntegrityError('Archive database integrity validation failed.');
     const rows = snapshot.prepare(
-      'SELECT file_path AS filePath, thumbnail_path AS thumbnailPath, poster_path AS posterPath, role, file_size AS fileSize, sha256 FROM assets',
+      'SELECT file_path AS filePath, thumbnail_path AS thumbnailPath, poster_path AS posterPath, role, file_size AS fileSize, sha256, deleted_at AS deletedAt, metadata_json AS metadataJson FROM assets',
     ).iterate() as Iterable<unknown>;
     const map = archiveEntryMap(manifest);
     let rowCount = 0;
@@ -980,6 +980,7 @@ async function validateArchivedDatabase(
       if (rowCount > MAX_ARCHIVE_ENTRIES) throw new DataArchiveIntegrityError('Archive database contains too many asset rows.');
       if (row === null || typeof row !== 'object') throw new DataArchiveIntegrityError('Archive database asset row is invalid.');
       const record = row as Record<string, unknown>;
+      const retiredTemporary = typeof record.deletedAt === 'number' && typeof record.metadataJson === 'string' && JSON.parse(record.metadataJson).temporaryVideoFrame === true;
       if (typeof record.role !== 'string' || (record.role !== 'output' && record.role !== 'mask' && !INPUT_ASSET_ROLES.has(record.role))) {
         throw new DataArchiveIntegrityError('Archive database asset role is invalid.');
       }
@@ -997,11 +998,12 @@ async function validateArchivedDatabase(
         const value = record[key];
         if (value === null && key !== 'filePath') continue;
         const prefix = prefixes.get(key)!;
-        if (typeof value !== 'string' || !value.startsWith(prefix) || map.get(value) === undefined) {
+        if (typeof value !== 'string' || !value.startsWith(prefix) || (!retiredTemporary && map.get(value) === undefined)) {
           throw new DataArchiveIntegrityError('Archive database references an unarchived media file.');
         }
       }
       const file = map.get(record.filePath as string);
+      if (retiredTemporary && file === undefined) continue;
       if (
         file === undefined
         || file.size !== record.fileSize

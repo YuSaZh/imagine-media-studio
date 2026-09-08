@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, desc, eq, isNotNull, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, ne, or, type SQL } from 'drizzle-orm';
 
 import type { AppDatabase } from './client.js';
 import { toChangeEventValues } from './events.js';
@@ -52,6 +52,7 @@ export interface UpdateProviderInput {
 export interface ProviderPageRequest extends PageRequest {
   readonly enabled?: boolean;
   readonly type?: string;
+  readonly excludeType?: string;
 }
 
 export class ProviderRepositoryError extends Error {
@@ -128,6 +129,7 @@ export class ProviderRepository {
     if (page.cursor) conditions.push(providerCursorCondition(page.cursor));
     if (request.enabled !== undefined) conditions.push(eq(providers.enabled, request.enabled));
     if (request.type !== undefined) conditions.push(eq(providers.type, request.type));
+    if (request.excludeType !== undefined) conditions.push(ne(providers.type, request.excludeType));
     const rows = this.database
       .select()
       .from(providers)

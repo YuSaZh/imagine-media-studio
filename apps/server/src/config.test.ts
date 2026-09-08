@@ -19,6 +19,7 @@ describe('server configuration', () => {
       providerInputMaxTotalBytes: 256 * 1024 * 1024,
       mediaProcessTimeoutMs: 30_000,
       nodeEnvironment: 'development',
+      mockProviderEnabled: false,
     });
   });
 
@@ -52,6 +53,8 @@ describe('server configuration', () => {
     expect(config.providerInputMaxBytesPerFile).toBe(2048);
     expect(config.providerInputMaxTotalBytes).toBe(4096);
     expect(config.appPassword).toBe('deployment-password');
+    expect(config.mockProviderEnabled).toBe(false);
+    expect(loadConfig({ MOCK_PROVIDER_ENABLED: 'true' }).mockProviderEnabled).toBe(true);
   });
 
   it('rejects an aggregate provider input limit below the per-file limit', () => {

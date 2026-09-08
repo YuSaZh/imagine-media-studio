@@ -1,5 +1,5 @@
 import { SquareDashed } from 'lucide-react';
-import { Choice, Options } from './ui';
+import { Choice, Options, SettingValue } from './ui';
 
 export function AspectRatioChoices({ options, value, onChange }: { options: string[]; value: string; onChange: (value: string) => void }) {
   const columns = Math.max(1, Math.ceil(options.length / Math.max(1, Math.ceil(options.length / 6))));
@@ -10,7 +10,7 @@ export function AspectRatioChoices({ options, value, onChange }: { options: stri
 }
 
 export function AspectRatioSetting({ options, value, onChange, disabled = false, label = '画幅' }: { options: string[]; value: string; onChange: (value: string) => void; disabled?: boolean; label?: string }) {
-  return <div className="setting-line"><span>{label}</span><Options label={label} disabled={disabled} trigger={<span>{value}</span>}>
+  return <div className="setting-line"><span>{label}</span><Options label={label} disabled={disabled} trigger={<SettingValue>{value}</SettingValue>}>
     <div className="option-heading">{label}</div><AspectRatioChoices options={options} value={value} onChange={onChange} />
   </Options></div>;
 }

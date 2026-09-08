@@ -23,7 +23,9 @@ export type FixtureMediaOperation =
   | 'image.edit'
   | 'video.generate'
   | 'video.image_to_video'
-  | 'video.reference_to_video';
+  | 'video.reference_to_video'
+  | 'video.edit'
+  | 'video.extend';
 
 export type FixtureAspectRatio = string;
 

@@ -13,7 +13,7 @@ services:
       APP_SECRET: "${APP_SECRET:?APP_SECRET must be set to at least 32 random characters}"
       ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin}"
-      MOCK_PROVIDER_ENABLED: "${MOCK_PROVIDER_ENABLED:-true}"
+      MOCK_PROVIDER_ENABLED: "${MOCK_PROVIDER_ENABLED:-false}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
       TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-0}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"

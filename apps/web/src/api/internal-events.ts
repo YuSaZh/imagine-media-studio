@@ -26,7 +26,7 @@ function queryKeysForEvent(event: InternalEvent): readonly QueryKey[] {
     ];
   }
   if (event.type === 'collection.updated') {
-    return [internalQueryKeys.collections, internalQueryKeys.assets, internalQueryKeys.gallery];
+    return [internalQueryKeys.collections, internalQueryKeys.assets, internalQueryKeys.jobs, internalQueryKeys.gallery];
   }
   if (event.type === 'provider.updated') {
     return [internalQueryKeys.providers, internalQueryKeys.models];

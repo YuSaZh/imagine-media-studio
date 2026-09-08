@@ -1,9 +1,12 @@
+import { compatibleModelIdentity } from './compatible-models.js';
 import { z } from 'zod';
 import type { NativeProviderProfile } from './provider-protocols.js';
 
 export const RemoteModelCatalogSchema = z.object({ models: z.array(z.object({
   id: z.string().min(1).max(255).refine(value => ![...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)),
   displayName: z.string().min(1).max(255),
+  recognized: z.boolean().optional(),
+  template: z.object({ modelId: z.string(), profile: z.string() }).optional(),
 })).max(4096) });
 
 const MODEL_NAMES: Readonly<Record<string, string>> = {
@@ -16,24 +19,35 @@ const MODEL_NAMES: Readonly<Record<string, string>> = {
   'gemini-3.1-flash-image': 'Nano Banana 2',
   'gemini-3.1-flash-image-preview': 'Nano Banana 2',
   'gemini-3-pro-image-preview': 'Nano Banana Pro',
+  'gemini-3-pro-image': 'Nano Banana Pro',
+  'gemini-3.1-flash-lite-image': 'Nano Banana 2 Lite',
+  'gemini-omni-1.1-flash': 'Gemini Omni 1.1 Flash',
+  'gemini-omni-flash-preview': 'Gemini Omni Flash Preview',
   'gemini-2.5-flash-image': 'Nano Banana',
   'grok-imagine-image': 'Grok Imagine Image',
   'grok-imagine-image-pro': 'Grok Imagine Image Pro',
+  'grok-imagine-image-2.0': 'Grok Imagine Image 2.0',
+  'grok-imagine-image-quality': 'Grok Imagine Image Quality',
+  'grok-imagine-video-1.5': 'Grok Imagine Video 1.5',
   'grok-imagine-video': 'Grok Imagine Video',
   'sora-2': 'Sora 2',
   'sora-2-pro': 'Sora 2 Pro',
   'veo-3.1-generate-preview': 'Veo 3.1',
   'veo-3.1-fast-generate-preview': 'Veo 3.1 Fast',
+  'veo-3.1-lite-generate-preview': 'Veo 3.1 Lite',
   'veo-3.0-generate-001': 'Veo 3',
   'veo-3.0-fast-generate-001': 'Veo 3 Fast',
 };
 
 export function modelDisplayName(modelId: string): string {
   const id = modelId.replace(/^models\//, '');
+  if (compatibleModelIdentity(id)) return compatibleModelIdentity(id)!.name;
   return Object.hasOwn(MODEL_NAMES, id) ? MODEL_NAMES[id]! : modelId;
 }
 
 export function matchModelProtocol(modelId: string): NativeProviderProfile | undefined {
+  const compatible = compatibleModelIdentity(modelId);
+  if (compatible) return compatible.kind === 'image' ? 'openai-images-v1' : 'openai-videos-v1-compatible';
   const id = modelId.trim().replace(/^models\//i, '').toLowerCase();
   if (/^(gpt-image-|dall-e-)/.test(id)) return 'openai-images-v1';
   if (/^(gpt-|o[134](?:-|$))/.test(id)) return 'openai-responses-image-v1';

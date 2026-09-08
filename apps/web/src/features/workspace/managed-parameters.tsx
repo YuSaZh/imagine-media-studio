@@ -2,7 +2,7 @@ import { Select, SelectItem } from './select';
 import { ModelParametersSchema, type JsonObject, type ModelParameter } from '@imagine/shared';
 import type { WorkspaceModel } from './data';
 import { AspectRatioSetting } from './aspect-ratio-options';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 
 export function managedParameters(model: WorkspaceModel | undefined): ModelParameter[] | undefined {
   const parsed = ModelParametersSchema.safeParse(model?.raw.capabilities.parameters);
@@ -17,7 +17,7 @@ export function managedParameters(model: WorkspaceModel | undefined): ModelParam
 export function ManagedParameters({ rules, values, onChange, resolutionControl }: { rules: ModelParameter[]; values: JsonObject; onChange: (values: JsonObject) => void; resolutionControl?: ReactNode }) {
   const set = (rule: ModelParameter, value: string | number | boolean | undefined) => { const next = { ...values }; if (value === undefined) delete next[rule.path]; else next[rule.path] = value; onChange(next); };
   return <>{rules.filter(rule => rule.enabled && rule.visible).map(rule => {
-    if (rule.path === 'resolution' && resolutionControl) return <div key={rule.path}>{resolutionControl}</div>;
+    if (rule.path === 'resolution' && resolutionControl) return <Fragment key={rule.path}>{resolutionControl}</Fragment>;
     const options = ['aspectRatio', 'resolution'].includes(rule.path) ? ['auto', ...rule.options?.filter(option => option !== 'auto') ?? []] : rule.options;
     const value = rule.locked ? rule.defaultValue : values[rule.path] ?? rule.defaultValue;
     if (rule.path === 'aspectRatio') return <AspectRatioSetting key={rule.path} label={rule.label} options={options?.map(String) ?? []} value={String(value ?? 'auto')} disabled={rule.locked} onChange={value => set(rule, value)} />;

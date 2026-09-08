@@ -1231,6 +1231,8 @@ export class JobRunner {
       providerId: job.request.providerId,
       jobId: job.id,
       modelId: job.request.modelId,
+      ...(job.request.imageResolutionPolicy ? { imageResolution: job.request.imageResolutionPolicy } : {}),
+      ...(job.request.operationPolicy ? { operationPolicy: job.request.operationPolicy } : {}),
       ...(job.request.profile ? { profile: job.request.profile } : {}),
       idempotencyKey: job.idempotencyKey,
       attempt: job.attempt,

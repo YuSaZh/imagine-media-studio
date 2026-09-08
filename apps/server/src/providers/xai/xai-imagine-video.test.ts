@@ -96,7 +96,7 @@ describe('XaiImagineVideoProvider', () => {
         {
           id: 'grok-imagine-video',
           capabilities: {
-            operations: ['video.generate', 'video.image_to_video'],
+            operations: ['video.generate', 'video.image_to_video', 'video.edit', 'video.extend'],
             resolutions: ['480p', '720p'],
             maxReferenceImages: 0,
           },
@@ -492,7 +492,7 @@ describe('XaiImagineVideoProvider', () => {
     expect(live).toMatchObject({
       providerType: 'xai-imagine-video-v1',
       models: [
-        { id: 'grok-imagine-video', capabilities: { operations: ['video.generate', 'video.image_to_video'], maxReferenceImages: 0 } },
+        { id: 'grok-imagine-video', capabilities: { operations: ['video.generate', 'video.image_to_video', 'video.edit', 'video.extend'], maxReferenceImages: 0 } },
         { id: 'grok-imagine-video-1.5', capabilities: { operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'], maxReferenceImages: 7 } },
         { id: 'grok-video-unknown-preview', capabilities: { operations: ['video.generate'], maxReferenceImages: 0 } },
         { id: 'video-model', capabilities: { operations: ['video.generate'], maxReferenceImages: 0 } },

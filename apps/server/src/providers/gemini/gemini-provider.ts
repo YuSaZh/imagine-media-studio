@@ -302,14 +302,14 @@ export class GeminiNativeImageProvider implements ProviderAdapter {
     const geminiContext = contextWithGeminiFields(context);
     contextApiKey(geminiContext);
     buildGeminiGenerateContentPayload(request, geminiContext);
-    buildGeminiGenerateContentUrl(contextBaseUrl(geminiContext, this.baseUrl), request.modelId);
+    buildGeminiGenerateContentUrl(contextBaseUrl(geminiContext, this.baseUrl), request.modelId, !!geminiContext.imageResolution);
   }
 
   public async submit(request: GenerationRequest, context: ProviderContext): Promise<SubmitResult> {
     const geminiContext = contextWithGeminiFields(context);
     const payload = buildGeminiGenerateContentPayload(request, geminiContext);
     const apiKey = contextApiKey(geminiContext);
-    const url = buildGeminiGenerateContentUrl(contextBaseUrl(geminiContext, this.baseUrl), request.modelId);
+    const url = buildGeminiGenerateContentUrl(contextBaseUrl(geminiContext, this.baseUrl), request.modelId, !!geminiContext.imageResolution);
     const headers = buildRequestHeaders(geminiContext, apiKey, this.headers);
     const transport = resolveTransport(geminiContext, this.transport);
     geminiContext.signal?.throwIfAborted();

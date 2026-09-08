@@ -1,6 +1,6 @@
-import { imageDimensionsPreset, type GenerationRequest } from '@imagine/shared';
+import { assertImageResolution, imageDimensionsPreset, type GenerationRequest, type ImageResolutionCapability } from '@imagine/shared';
 import type { SubmittedAsset } from '@imagine/provider-contract';
-import { dataUrlForAsset, normalizeImageResponse } from './protocol.js';
+import { inlineDataUrlForAsset, normalizeImageResponse } from './protocol.js';
 import { parseSseEvents } from './stream.js';
 import { OpenAiResponseError, OpenAiValidationError, type OpenAiInputAsset } from './types.js';
 
@@ -8,7 +8,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-export function validateChatImageOptions(request: GenerationRequest): void {
+export function validateChatImageOptions(request: GenerationRequest, capability?: ImageResolutionCapability): void {
+  if (capability) {
+    try { assertImageResolution(request, capability); } catch { throw new OpenAiValidationError('unsupported_option', 'Chat image resolution does not satisfy the configured model capability.'); }
+  }
   if (request.count !== undefined && request.count !== 1) throw new OpenAiValidationError('unsupported_option', 'Chat image generation creates one image per call.');
   for (const key of ['negativePrompt', 'width', 'height', 'durationSeconds', 'fps', 'quality', 'format', 'seed', 'audio'] as const) {
     if (request[key] !== undefined) throw new OpenAiValidationError('unsupported_option', `Chat image generation does not support ${key}.`);
@@ -17,14 +20,14 @@ export function validateChatImageOptions(request: GenerationRequest): void {
     if (key !== 'stream' || typeof value !== 'boolean') throw new OpenAiValidationError('unsupported_option', `Chat image generation does not support extra.${key}.`);
   }
   if (request.aspectRatio !== undefined && !/^(auto|[1-9]\d*:[1-9]\d*)$/.test(request.aspectRatio)) throw new OpenAiValidationError('unsupported_option', 'Chat image aspect ratio is invalid.');
-  const dimensions = request.resolution ? imageDimensionsPreset(request.resolution) : undefined;
-  if (request.resolution !== undefined && !dimensions && !['auto', '512', '1K', '2K', '4K'].includes(request.resolution)) throw new OpenAiValidationError('unsupported_option', 'Chat image pixel dimensions must map to a supported aspect ratio and 1K, 2K or 4K preset.');
+  const dimensions = request.resolution ? imageDimensionsPreset(request.resolution, capability?.dimensions?.multipleOf) : undefined;
+  if (request.resolution !== undefined && !dimensions && (capability ? /^\d+x\d+$/.test(request.resolution) : !['auto', '512', '1K', '2K', '4K'].includes(request.resolution))) throw new OpenAiValidationError('unsupported_option', 'Chat image pixel dimensions must map to a supported native preset.');
   if (dimensions && request.aspectRatio && request.aspectRatio !== 'auto' && request.aspectRatio !== dimensions.ratio) throw new OpenAiValidationError('unsupported_option', 'Chat image pixel dimensions conflict with the selected aspect ratio.');
 }
 
-export function buildChatImagePayload(request: GenerationRequest, inputs: readonly OpenAiInputAsset[]): Record<string, unknown> {
-  validateChatImageOptions(request);
-  const dimensions = request.resolution ? imageDimensionsPreset(request.resolution) : undefined;
+export function buildChatImagePayload(request: GenerationRequest, inputs: readonly OpenAiInputAsset[], capability?: ImageResolutionCapability): Record<string, unknown> {
+  validateChatImageOptions(request, capability);
+  const dimensions = request.resolution ? imageDimensionsPreset(request.resolution, capability?.dimensions?.multipleOf) : undefined;
   const imageConfig = {
     ...(request.aspectRatio && request.aspectRatio !== 'auto' ? { aspect_ratio: request.aspectRatio } : {}),
     ...(request.resolution && request.resolution !== 'auto' ? { image_size: request.resolution } : {}),
@@ -34,7 +37,8 @@ export function buildChatImagePayload(request: GenerationRequest, inputs: readon
     model: request.modelId.replace(/^models\//, ''),
     messages: [{ role: 'user', content: [
       { type: 'text', text: request.prompt },
-      ...inputs.map(input => ({ type: 'image_url', image_url: { url: dataUrlForAsset(input) } })),
+      // Gemini Chat bridges can silently discard HTTP references instead of fetching them.
+      ...inputs.map(input => ({ type: 'image_url', image_url: { url: inlineDataUrlForAsset(input) } })),
     ] }],
     modalities: ['image', 'text'],
     stream: request.extra?.stream === true,

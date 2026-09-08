@@ -71,7 +71,7 @@ describe('GeminiOmniVideoProvider', () => {
     const capabilities = await provider.getCapabilities({ providerId: 'gemini-omni', secrets: {} });
     expect(provider.type).toBe('gemini-omni-interactions-video-v1');
     expect(capabilities.models[0]?.capabilities).toMatchObject({
-      operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
+      operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video', 'video.edit', 'video.extend'],
       aspectRatios: ['9:16', '16:9'],
       maxReferenceImages: 3,
       supportsCancel: false,
@@ -222,7 +222,7 @@ describe('GeminiOmniVideoProvider', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
 
-    await expect(provider.validate(request({ operation: 'video.extend' }), context())).rejects.toMatchObject({ code: 'gemini_operation_unsupported' });
+    await expect(provider.validate(request({ operation: 'video.extend' }), context())).rejects.toMatchObject({ code: 'gemini_video_input_invalid' });
     await expect(provider.validate(request({ operation: 'video.reference_to_video', inputs: [{ assetId: 'a', role: 'reference' }], extra: { unknown: true } }), context(undefined, {
       inputs: [{ assetId: 'a', role: 'reference', mimeType: 'image/png', bytes }],
     }))).rejects.toMatchObject({ code: 'gemini_extra_fields_unsupported' });

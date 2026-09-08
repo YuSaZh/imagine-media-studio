@@ -3,6 +3,8 @@ import {
   CollectionDtoSchema,
   JobDtoSchema,
   ModelDtoSchema,
+  ModelCapabilitiesSchema,
+  matchModelProtocol,
   ProviderDtoSchema,
   type AssetDto,
   type CollectionDto,
@@ -16,6 +18,7 @@ import type { CollectionRecord } from '../database/collections.js';
 import type { JobRecord } from '../database/jobs.js';
 import type { ModelRecord } from '../database/models.js';
 import type { ProviderStorageRecord } from '../database/providers.js';
+import { storedImageResolution } from '../providers/image-resolution-defaults.js';
 
 function timestamp(value: Date | null): string | null {
   return value?.toISOString() ?? null;
@@ -38,12 +41,15 @@ export function toProviderDto(record: ProviderStorageRecord): ProviderDto {
 }
 
 export function toModelDto(record: ModelRecord): ModelDto {
+  const parsed = ModelCapabilitiesSchema.safeParse(record.capabilities);
+  const capabilities = parsed.success && parsed.data.operations.some(operation => operation.startsWith('image.'))
+    ? { ...record.capabilities, imageResolution: storedImageResolution(parsed.data, record.modelId, parsed.data.profile ?? matchModelProtocol(record.modelId)) } : record.capabilities;
   return ModelDtoSchema.parse({
     id: record.id,
     providerId: record.providerId,
     modelId: record.modelId,
     displayName: record.displayName,
-    capabilities: record.capabilities,
+    capabilities,
     capabilitySource: record.capabilitySource,
     enabled: record.enabled,
     createdAt: record.createdAt.toISOString(),
@@ -111,6 +117,7 @@ export function toCollectionDto(record: CollectionRecord): CollectionDto {
   return CollectionDtoSchema.parse({
     id: record.id,
     name: record.name,
+    isPrivate: record.isPrivate,
     itemCount: record.itemCount,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),

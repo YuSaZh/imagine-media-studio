@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AssetRecord } from '../database/assets.js';
 import { ProviderInputLoader } from './provider-input-loader.js';
+import { PublicInputLinks } from '../security/public-input-links.js';
 
 const roots: string[] = [];
 
@@ -66,7 +67,7 @@ function asset(id: string, bytes: Buffer, overrides: Partial<AssetRecord> = {}):
   };
 }
 
-async function harness(records: readonly AssetRecord[], files: Readonly<Record<string, Buffer>>) {
+async function harness(records: readonly AssetRecord[], files: Readonly<Record<string, Buffer>>, publicLinks?: PublicInputLinks) {
   const root = await mkdtemp(join(tmpdir(), 'imagine-provider-input-'));
   roots.push(root);
   await mkdir(join(root, 'media', 'uploads'), { recursive: true });
@@ -79,10 +80,19 @@ async function harness(records: readonly AssetRecord[], files: Readonly<Record<s
     dataRoot: root,
     maxBytesPerFile: 8,
     maxTotalBytes: 12,
+    ...(publicLinks ? { publicLinks } : {}),
   });
 }
 
 describe('ProviderInputLoader', () => {
+  it('loads verified video bytes even when image public links are enabled', async () => {
+    const bytes = Buffer.from('video');
+    const source = asset('video', bytes, { type: 'video', mimeType: 'video/mp4', durationMs: 4000 });
+    const loader = await harness([source], { 'video.png': bytes }, new PublicInputLinks('fixture-key', 'https://fixture.example'));
+    const result = await loader.load({ ...request(['video']), operation: 'video.edit', operationPolicy: { video: { mimeTypes: ['video/mp4'], source: 'uploaded-or-generated', requireLiveSource: false, allowUploaded: false } } });
+    expect(result[0]).toMatchObject({ durationSeconds: 4, mimeType: 'video/mp4', bytes });
+    expect(result[0]).not.toHaveProperty('publicUrl');
+  });
   it('loads ordered immutable inputs and sanitizes filenames', async () => {
     const first = Buffer.from('first');
     const second = Buffer.from('second');

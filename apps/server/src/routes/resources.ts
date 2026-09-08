@@ -16,6 +16,8 @@ import {
   resolveModelProfile,
   normalizeAutomaticParameters,
   providerGenerationRequest,
+  assertImageResolution,
+  assertOperationParameters,
 } from '@imagine/shared';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -44,15 +46,19 @@ import { isSecretLikeKey, sanitizeLegacyJsonValue } from '../security/config-san
 import { discardStagedFile, stageReadable, type StagedFile } from '../storage/atomic-file.js';
 import type { StoragePaths } from '../storage/paths.js';
 import { AccountSettingsRepository } from '../database/account-settings.js';
+import { storedImageResolution } from '../providers/image-resolution-defaults.js';
+import { videoOperationPolicies } from '../providers/video-operation-policy.js';
 import { toAssetDto, toCollectionDto, toJobDto, toModelDto } from './dto.js';
 
 const JobPageQuerySchema = CursorPageQuerySchema.extend({
+  excludePrivate: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   status: JobStatusSchema.optional(),
   providerId: z.string().min(1).optional(),
   modelId: z.string().min(1).optional(),
 }).strict();
 
 const AssetPageQuerySchema = CursorPageQuerySchema.extend({
+  excludePrivate: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   type: AssetTypeSchema.optional(),
   role: AssetRoleSchema.optional(),
   favorite: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
@@ -70,6 +76,7 @@ const ModelPageQuerySchema = CursorPageQuerySchema.extend({
 type Parsed<T extends z.ZodType> = z.infer<T>;
 
 export interface ResourceRoutesOptions {
+  mockProviderEnabled?: boolean;
   assets: AssetRepository;
   collections: CollectionRepository;
   jobs: JobRepository;
@@ -198,6 +205,7 @@ function registerModelRoutes(app: FastifyInstance, options: ResourceRoutesOption
     const query = parseOrReply(ModelPageQuerySchema, request.query, reply);
     if (!query) return;
     const page = options.models.page({
+      ...(options.mockProviderEnabled === false ? { excludeProviderType: 'mock' } : {}),
       limit: query.limit,
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.providerId === undefined ? {} : { providerId: query.providerId }),
@@ -212,6 +220,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
     const query = parseOrReply(JobPageQuerySchema, request.query, reply);
     if (!query) return;
     const page = options.jobs.page({
+      ...(query.excludePrivate ? { excludePrivate: true } : {}),
       limit: query.limit,
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.status === undefined ? {} : { status: query.status }),
@@ -235,7 +244,7 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
     });
     return {
       job: toJobDto(job, outputs.length),
-      inputs: options.jobs.listInputs(job.id),
+      inputs: options.jobs.listInputs(job.id).map(({ assetId, role, sortOrder }) => ({ assetId, role, sortOrder })),
       assets: outputAssets,
     };
   });
@@ -255,14 +264,29 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       return errorResponse(reply, 503, 'provider_unavailable', error instanceof Error ? error.message : undefined);
     }
     try {
+      delete input.maskProcessing;
       const resolved = options.inputResolver.resolve(input);
+      input = resolved.request ?? input;
       const capabilities = ModelCapabilitiesSchema.parse(resolved.model.capabilities);
       // Protocol and parameter policy come from the persisted model, never the client.
       delete input.profile;
-      input = normalizeAutomaticParameters(applyModelParameters(normalizeAutomaticParameters(input), capabilities.parameters));
+      delete input.imageResolutionPolicy;
+      delete input.operationPolicy;
       if (['openai', 'gemini', 'xai'].includes(registration.adapter.type)) {
         const profile = resolveModelProfile(registration.adapter.type, input.operation, input.modelId, capabilities.profile);
         if (profile) input.profile = profile;
+      }
+      const declaredPolicy = capabilities.operationPolicies?.[input.operation] ?? videoOperationPolicies(input.profile ?? capabilities.profile ?? registration.adapter.type, input.modelId)[input.operation];
+      const compatibleVideo = input.profile === 'openai-videos-v1-compatible' && ['video.generate', 'video.image_to_video'].includes(input.operation);
+      const videoPolicy = compatibleVideo ? { ...(capabilities.resolutions ? { resolutions: capabilities.resolutions } : {}), ...(capabilities.durations ? { durations: capabilities.durations } : {}), ...(capabilities.aspectRatios ? { aspectRatios: capabilities.aspectRatios } : {}), inputRoles: input.operation === 'video.image_to_video' ? ['first_frame' as const] : [] } : {};
+      const operationPolicy = declaredPolicy || compatibleVideo || capabilities.maxReferenceImages !== undefined ? { ...videoPolicy, ...(capabilities.maxReferenceImages === undefined ? {} : { maxReferenceImages: capabilities.maxReferenceImages }), ...declaredPolicy } : undefined;
+      if (operationPolicy) assertOperationParameters(input, operationPolicy);
+      const rules = (operationPolicy?.parameters ?? capabilities.parameters)?.filter(rule => !operationPolicy?.unsupportedParameters?.includes(rule.path));
+      input = normalizeAutomaticParameters(applyModelParameters(input, rules));
+      if (operationPolicy) { input.operationPolicy = operationPolicy; assertOperationParameters(input, operationPolicy); }
+      if (input.operation.startsWith('image.')) {
+        input.imageResolutionPolicy = storedImageResolution(capabilities, input.modelId, input.profile);
+        assertImageResolution(input, input.imageResolutionPolicy);
       }
     } catch (error) {
       if (error instanceof GenerationInputError) {
@@ -286,6 +310,8 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       await registration.adapter.validate(providerGenerationRequest(input), {
         providerId: input.providerId,
         modelId: input.modelId,
+        ...(input.imageResolutionPolicy ? { imageResolution: input.imageResolutionPolicy } : {}),
+        ...(input.operationPolicy ? { operationPolicy: input.operationPolicy } : {}),
         ...(registration.baseUrl ? { baseUrl: registration.baseUrl } : {}),
         config: registration.config ?? {},
         ...(registration.http ? { http: registration.http } : {}),
@@ -362,7 +388,7 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
     let mimetype: string | null = null;
     const fields = new Map<string, string>();
     try {
-      const parts = request.parts({ limits: { files: 1, fileSize: options.maxUploadBytes, fields: 2, parts: 3 } });
+      const parts = request.parts({ limits: { files: 1, fileSize: options.maxUploadBytes, fields: 3, parts: 4 } });
       for await (const part of parts) {
         if (part.type === 'file') {
           if (staged !== null) {
@@ -386,7 +412,7 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
           mimetype = part.mimetype;
           continue;
         }
-        if (!['parentAssetId', 'role'].includes(part.fieldname) || fields.has(part.fieldname)) {
+        if (!['parentAssetId', 'role', 'temporaryVideoFrame'].includes(part.fieldname) || fields.has(part.fieldname)) {
           if (staged) await discardStagedFile(staged);
           staged = null;
           return errorResponse(reply, 400, 'invalid_upload_field');
@@ -414,13 +440,20 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
       return errorResponse(reply, 400, 'invalid_upload_role');
     }
     const parentAssetId = fields.get('parentAssetId');
+    const temporaryVideoFrame = fields.get('temporaryVideoFrame');
     try {
+      if (parentAssetId && parsedRole.data !== 'mask') {
+        const parent = options.assets.get(parentAssetId);
+        if (!parent || parent.deletedAt) return errorResponse(reply, 400, 'parent_asset_not_found', '原素材不存在或不可访问');
+      }
+      if (temporaryVideoFrame !== undefined && (temporaryVideoFrame !== 'true' || parsedRole.data !== 'reference' || !parentAssetId || options.assets.get(parentAssetId)?.type !== 'video')) return errorResponse(reply, 400, 'invalid_temporary_frame');
       const asset = await options.media.materializeUpload({
         source: createReadStream(staged.temporaryPath),
         role: parsedRole.data,
         originalFilename: filename,
         claimedMimeType: mimetype,
         ...(parentAssetId ? { parentAssetId } : {}),
+        ...(temporaryVideoFrame === 'true' ? { temporaryVideoFrame: true, expectedKind: 'image' as const } : {}),
       });
       options.outbox.flush();
       const dto = assetDto(options, asset.id);
@@ -438,6 +471,7 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
     const query = parseOrReply(AssetPageQuerySchema, request.query, reply);
     if (!query) return;
     const page = options.assets.page({
+      ...(query.excludePrivate ? { excludePrivate: true } : {}),
       limit: query.limit,
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.type === undefined ? {} : { type: query.type }),
@@ -503,7 +537,7 @@ function registerCollectionRoutes(app: FastifyInstance, options: ResourceRoutesO
     const input = parseOrReply(CollectionCreateSchema, request.body, reply);
     if (!input) return;
     try {
-      const collection = await publishCommitted(options, () => options.collections.create(input.name));
+      const collection = await publishCommitted(options, () => options.collections.create(input.name, input.isPrivate));
       return reply.code(201).send({ collection: toCollectionDto(collection) });
     } catch (error) {
       if (isSqliteConstraint(error)) return errorResponse(reply, 409, 'collection_name_conflict');
@@ -515,7 +549,7 @@ function registerCollectionRoutes(app: FastifyInstance, options: ResourceRoutesO
     const input = parseOrReply(CollectionPatchSchema, request.body, reply);
     if (!input) return;
     try {
-      const collection = await publishCommitted(options, () => options.collections.rename(request.params.id, input.name));
+      const collection = await publishCommitted(options, () => options.collections.update(request.params.id, input));
       return collection
         ? { collection: toCollectionDto(collection) }
         : errorResponse(reply, 404, 'collection_not_found');

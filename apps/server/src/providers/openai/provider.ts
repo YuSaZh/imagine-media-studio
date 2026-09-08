@@ -1,7 +1,10 @@
+import { compatibleModelCapabilities } from '../compatible-model-catalog.js';
 import type {
   GenerationRequest,
   MediaOperation,
 } from '@imagine/shared';
+import { inferImageResolution } from '@imagine/shared';
+import { builtinImageResolution } from '../image-resolution-defaults.js';
 import type {
   ModelCapabilities,
   ProviderAdapter,
@@ -22,6 +25,7 @@ import {
   normalizeImageResponse,
   RESPONSES_EXTRA_KEYS,
   type OpenAiImageRequestOptions,
+  type OpenAiImageRequestPolicy,
 } from './protocol.js';
 import { parseOpenAiImageStream } from './stream.js';
 import { buildChatImagePayload, normalizeChatImageResponse, validateChatImageOptions } from './chat.js';
@@ -213,7 +217,8 @@ function displayName(profile: OpenAiProfile, model: string): string {
 type ImageModelId = (typeof IMAGE_MODELS)[number];
 
 function imageModelId(modelId: string): ImageModelId | undefined {
-  return (IMAGE_MODELS as readonly string[]).includes(modelId) ? modelId as ImageModelId : undefined;
+  const canonical = modelId.replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  return (IMAGE_MODELS as readonly string[]).includes(canonical) ? canonical as ImageModelId : undefined;
 }
 
 function isKnownResponsesModel(modelId: string): boolean {
@@ -233,12 +238,18 @@ function imageCapabilities(
   modelId?: string,
   conservative = false,
 ): ModelCapabilities {
-  if (profile === 'openai-chat-image-v1') return {
+  const compatible = compatibleModelCapabilities(modelId ?? '', profile);
+  if (compatible) return compatible;
+  if (profile === 'openai-chat-image-v1') {
+    const imageResolution = builtinImageResolution(modelId ?? '', profile) ?? { mode: 'native' as const, values: ['auto'], allowCustomDimensions: false };
+    return {
+    imageResolution,
     operations: ['image.generate', 'image.edit'], aspectRatios: ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'],
-    resolutions: ['auto', '512', '1K', '2K', '4K'], maxReferenceImages: 4, supportsMask: false,
+    resolutions: imageResolution.values, maxReferenceImages: 4, supportsMask: false,
     supportsBatchCount: false, maxBatchCount: 1,
     customFields: { type: 'object', properties: { stream: { type: 'boolean' } }, additionalProperties: false },
   };
+  }
   // Responses image_generation intentionally has no mask or Files API path in PR4;
   // mask editing is provided by the Images multipart profile below.
   const imageModel = profile === 'openai-images-v1' ? imageModelId(modelId ?? '') : undefined;
@@ -262,8 +273,9 @@ function imageCapabilities(
     if (supportsInputFidelity) customProperties.input_fidelity = { enum: ['low', 'high'] };
   }
   const capabilities: ModelCapabilities = {
+    imageResolution: builtinImageResolution(modelId ?? '', profile) ?? { mode: 'pixels', values: resolutions, allowCustomDimensions: false },
     operations: ['image.generate', 'image.edit'],
-    aspectRatios: ['1:1', '16:9', '9:16', 'auto'],
+    aspectRatios: flexibleSize ? ['1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4', 'auto'] : ['1:1', '16:9', '9:16', 'auto'],
     resolutions,
     maxReferenceImages: profile === 'openai-images-v1' ? MAX_REFERENCES : 4,
     supportsMask: profile === 'openai-images-v1',
@@ -290,6 +302,7 @@ function imageCapabilities(
   if (!conservative) return capabilities;
   return {
     ...capabilities,
+    imageResolution: { mode: 'pixels', values: profile === 'openai-images-v1' ? ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '1920x1080', '1080x1920'] : ['auto', '1024x1024'], allowCustomDimensions: profile === 'openai-images-v1' },
     aspectRatios: profile === 'openai-images-v1' ? ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', 'auto'] : ['1:1'],
     resolutions: profile === 'openai-images-v1' ? ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '1920x1080', '1080x1920'] : ['auto', '1024x1024'],
     maxReferenceImages: 1,
@@ -310,7 +323,7 @@ function countRole(request: GenerationRequest, role: GenerationRequest['inputs']
   return request.inputs.filter((input) => input.role === role).length;
 }
 
-function validateInputs(request: GenerationRequest, profile: OpenAiProfile): void {
+function validateInputs(request: GenerationRequest, profile: OpenAiProfile, context: OpenAiRuntimeContext): void {
   const ids = new Set<string>();
   for (const candidate of request.inputs as readonly unknown[]) {
     if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
@@ -329,7 +342,7 @@ function validateInputs(request: GenerationRequest, profile: OpenAiProfile): voi
     ids.add(input.assetId);
   }
   const references = countRole(request, 'reference');
-  if (references > (profile === 'openai-images-v1' ? MAX_REFERENCES : 4)) {
+  if (references > (context.operationPolicy?.maxReferenceImages ?? compatibleModelCapabilities(request.modelId, profile)?.operationPolicies?.[request.operation]?.maxReferenceImages ?? (profile === 'openai-images-v1' ? MAX_REFERENCES : 4))) {
     throw new OpenAiValidationError('reference_limit_exceeded', 'OpenAI image profiles accept too many reference images.');
   }
   if (request.operation === 'image.generate') {
@@ -359,17 +372,15 @@ function modelAllowed(model: string, configured: readonly string[], profile: Ope
   if (profile === 'openai-chat-image-v1') return configured.includes(model) || OPENAI_IMAGE_MODEL_PATTERN.test(model);
   if (profile === 'openai-images-v1') {
     if (/^dall-e(?:-|$)/i.test(model)) return false;
-    return configured.includes(model) || isCompatibleImageModel(profile, model);
+    return configured.includes(model) || !!compatibleModelCapabilities(model, profile) || isCompatibleImageModel(profile, model);
   }
   if (configured.includes(model)) return true;
   return /^gpt-[a-z0-9._-]+$/i.test(model);
 }
 
-function requestPolicy(profile: OpenAiProfile, modelId: string): { flexibleSize?: boolean; supportsInputFidelity?: boolean; compatibleSize?: boolean } {
-  if (profile !== 'openai-images-v1') return {};
+function requestPolicy(profile: OpenAiProfile, modelId: string, context?: OpenAiRuntimeContext): OpenAiImageRequestPolicy {
   return {
-    flexibleSize: imageModelId(modelId) === 'gpt-image-2',
-    compatibleSize: imageModelId(modelId) === undefined,
+    imageResolution: context?.imageResolution ?? inferImageResolution(imageCapabilities(profile, modelId, imageModelId(modelId) === undefined), profile),
     supportsInputFidelity: imageModelId(modelId) !== 'gpt-image-2',
   };
 }
@@ -402,15 +413,17 @@ function validateRequest(request: GenerationRequest, context: OpenAiRuntimeConte
   if (request.operation !== 'image.generate' && request.operation !== 'image.edit') {
     throw requestOperationError(request.operation);
   }
-  validateInputs(request, profile);
-  if (profile === 'openai-chat-image-v1') { validateChatImageOptions(request); return; }
+  const compatible = compatibleModelCapabilities(request.modelId, profile);
+  if (context.modelId !== request.modelId && compatible && (!compatible.operations.includes(request.operation) || request.inputs.some(input => input.role === 'mask'))) throw new OpenAiValidationError('operation_not_supported', 'The compatible model does not support this operation or mask input.');
+  validateInputs(request, profile, context);
+  if (profile === 'openai-chat-image-v1') { validateChatImageOptions(request, context.imageResolution); return; }
   if (profile === 'openai-responses-image-v1' && request.count !== undefined && request.count !== 1) {
     throw new OpenAiValidationError('unsupported_option', 'Responses image_generation creates one image per call.');
   }
   const options = imageRequestOptions(
     request,
     profile === 'openai-images-v1' ? undefined : RESPONSES_EXTRA_KEYS,
-    requestPolicy(profile, request.modelId),
+    requestPolicy(profile, request.modelId, context),
   );
   if (profile === 'openai-responses-image-v1' && options.outputFormat !== undefined) {
     throw new OpenAiValidationError('unsupported_option', 'Responses image_generation does not accept output format options.');
@@ -794,7 +807,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
     const options: OpenAiImageRequestOptions = this.options.profile === 'openai-chat-image-v1' ? { model: request.modelId, prompt: request.prompt } : imageRequestOptions(
       request,
       this.options.profile === 'openai-images-v1' ? undefined : RESPONSES_EXTRA_KEYS,
-      requestPolicy(this.options.profile, request.modelId),
+      requestPolicy(this.options.profile, request.modelId, runtime),
     );
     const headers = this.requestHeaders(runtime);
     let body: string | Uint8Array;
@@ -803,7 +816,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
     const isImagesEdit = this.options.profile === 'openai-images-v1' &&
       (request.operation === 'image.edit' || inputs.length > 0);
     if (this.options.profile === 'openai-chat-image-v1') {
-      body = JSON.stringify(buildChatImagePayload(request, inputs));
+      body = JSON.stringify(buildChatImagePayload(request, inputs, runtime.imageResolution));
       contentType = 'application/json';
       path = '/chat/completions';
     } else if (this.options.profile === 'openai-images-v1' && isImagesEdit) {
@@ -813,7 +826,7 @@ export class OpenAiProviderAdapter implements ProviderAdapter {
       path = '/images/edits';
     } else if (this.options.profile === 'openai-images-v1') {
       const payload = buildImageGenerationPayload(options);
-      assertImageGenerationPayload(payload, requestPolicy(this.options.profile, request.modelId));
+      assertImageGenerationPayload(payload, requestPolicy(this.options.profile, request.modelId, runtime));
       body = JSON.stringify(payload);
       contentType = 'application/json';
       path = '/images/generations';

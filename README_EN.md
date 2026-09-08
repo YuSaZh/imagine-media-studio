@@ -48,24 +48,35 @@ Screenshots come from this project's automated workspace checks and show uploade
 - Text-to-image generation, reference-image editing, and masked editing, with file upload, clipboard paste, and drag and drop.
 - A built-in mask canvas with brush, eraser, undo, and redo.
 - Model-aware aspect ratio, resolution, and quality controls; compatible models support custom pixel dimensions.
+- Selecting a recognized catalog model automatically loads its capabilities and parameter rules. Unknown models can copy a built-in template or an existing model configuration while retaining their own ID, display name and connection.
+- Galleries show a return-to-top button after 600px of scrolling, positioned above the Composer on both layouts. Login names start empty while retaining browser autofill.
+- Built-in MAI-Image, Seedream and Seedance templates cover compatible channels for reviewed image generation/editing and text/first-frame video models; native-only features remain disabled by default.
+- Edit and generate directly in the image viewer with an expandable Composer, desktop wheel zoom and reusable result thumbnails. Image-input models support either native masks or a composited translucent overlay; video first frames use the clean original.
+- Video details share the floating Composer and in-place editing/extension. Image mode keeps the video seekable and captures its current frame only when opening masks or sending; temporary frames stay out of the library and are cleaned after jobs finish, without an additional player or browser decoder.
+- Recognized models are highlighted and listed first in the add-model catalog; see the [model capability table](./docs/model-capabilities.md). Media cards can copy the complete prompt directly. Mobile card actions use icons without background fill or blur; prompt focus keeps its height, and generation settings share consistent field styling across both layouts.
 - Both layouts offer count presets 1 / 2 / 4 / 8 and a plus button for custom counts (1–32). Count creates independent single-output jobs, unaffected by model batch capabilities or parameter rules; the server queue controls execution concurrency.
 - Both layouts offer auto / 1K / 2K / 4K / custom image resolution popovers. Unlocking the aspect ratio switches it to auto while retaining the custom dimensions. Dimensions align to the nearest multiple of 16 on blur or apply; auto aspect ratio keeps the edges independent.
 - Selection controls throughout the app use consistent rounded popovers; aspect-ratio choices balance their rows by option count on both layouts.
 - Mobile generation settings offer auto / 1K / 2K / 4K / custom resolution, sharing desktop aspect-ratio mapping and model limits.
 - Mobile image mode places desktop-style aspect-ratio, resolution and count shortcuts beside the image/video switch, synchronized with generation settings.
 - Connection settings no longer bulk-refresh models. Discovered models can be deleted directly; adding models uses a read-only catalog, and capability loading fills protocol presets while preserving edited parameters.
-- Channels supporting resolution presets receive them directly; pixel-only models map the selected ratio and preset to dimensions, such as 16:9 + 4K to 3840x2160. Chat adapters also translate representable legacy pixel dimensions; actual output dimensions depend on the model.
+- Channels supporting resolution presets receive them directly; pixel-only models map an explicit aspect ratio to dimensions, with a 3840-pixel longest edge for 4K and edges rounded to the nearest multiple of 16, such as 16:9 + 4K to 3840x2160. Auto never maps to a square: native tiers support automatic aspect ratio, while pixel presets require a selected ratio. Chat adapters also translate representable legacy pixel dimensions; actual output dimensions and limits depend on the model.
+- With auto aspect ratio, selecting a pixel resolution tier opens supported ratio choices and applies both together. Among standard ratios, GPT Image 2 supports 4K at 16:9 and 9:16; other combinations exceed its total-pixel limit.
+- Resolution controls follow model capabilities: permitted native tiers work directly with auto aspect ratio, while pixel sizes map an explicit ratio. Model settings expose parameter type, allowed values, custom dimensions and edge/pixel limits; unknown or custom models can add new native tiers. Legacy configurations retain their declared values without automatic tier expansion. Frontend and server share validation, and jobs snapshot the capabilities used at submission.
 - Chat image generation supports CPA structured images and New API Markdown inline images, including streaming responses, and maps image settings to each gateway's parameter locations.
 - Reuse a result as a reference for the next creation, inspect original images, and download originals.
 
 ### Video Creation
 
 - Text-to-video, first-frame video, and multi-reference video, depending on the selected model.
+- Video editing, extension and first/last-frame generation for capable models, with operation-specific source, expiry, duration and parameter checks. Results are saved as separate assets.
 - Dedicated desktop controls for video input mode, resolution, and duration, including custom values within model limits.
 - Asynchronous job tracking, cancellation, retry, video posters, browser playback, and original downloads.
 - Batches become independent jobs so individual failures can be handled separately.
 
 ### Connections and Models
+
+The project menu can mark a project private: its content is excluded from the home recent feed and All Works, with generation placeholders also hidden from the home feed, and the project list uses an obscured cover. Opening the project shows its content; privacy can be turned off at any time. Clicking anywhere in the image/video capsule toggles the mode.
 
 - OpenAI / OpenAI-compatible, Google Gemini, xAI, and custom HTTP or trusted JavaScript adapters.
 - Multiple models per connection, with per-model protocols, parameter choices, defaults, and locked values.
@@ -188,7 +199,7 @@ These are implemented protocol adapters, not a guarantee that every provider or 
 
 1. Add a connection under **Settings > Connections (设置 > 连接)** with its interface type, Base URL, and API key.
 2. Check connectivity and select a model from the remote catalog, or enter its complete model ID manually.
-3. Review the model protocol and supported operations, then configure parameter rules as needed.
+3. Review the model protocol and supported operations, then expand the initially collapsed generation parameters as needed. The editor scrolls without visible scrollbar tracks and keeps Save visible at the bottom.
 4. Return to the workspace, choose image or video mode and a model, enter a prompt, and submit.
 
 An OpenAI-compatible Base URL commonly includes `/v1`, such as `https://api.example.com/v1`. Follow your provider's documentation, and do not use a complete operation path such as `/chat/completions` as the Base URL.
@@ -213,7 +224,7 @@ Manage custom adapters from their connection's adapter page. See [examples/custo
 | `DATA_DIR` | Application data directory; use `/data` inside the container |
 | `PUBLIC_BASE_URL` | Public application URL for signed reference links; can be overridden in settings |
 | `TRUST_PROXY_HOPS` | Defaults to `0`; use `1` only behind a trusted reverse proxy |
-| `MOCK_PROVIDER_ENABLED` | Test Provider switch; disabled in the deployment example above |
+| `MOCK_PROVIDER_ENABLED` | Test Provider switch, defaults to `false`; requires explicit `true`. When disabled, existing Mock connections and models are hidden while media and job history remain intact |
 | `ALLOW_INSECURE_PROVIDER_HTTP` | Allow HTTP Providers; disabled by default |
 | `ALLOW_PRIVATE_NETWORK_ACCESS` | Allow private-network Provider or media addresses; disabled by default |
 | `ALLOW_HTTP_MEDIA_DOWNLOADS` | Allow downloading returned media over HTTP; disabled by default |

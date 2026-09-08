@@ -18,7 +18,7 @@ import {
   type CursorPage,
   type PageRequest,
 } from './pagination.js';
-import { changeEvents, models } from './schema.js';
+import { changeEvents, models, providers } from './schema.js';
 
 export interface ModelRecord {
   readonly id: string;
@@ -67,6 +67,7 @@ export class ModelRepositoryError extends Error {
 }
 
 export interface ModelPageRequest extends PageRequest {
+  readonly excludeProviderType?: string;
   readonly providerId?: string;
   readonly enabled?: boolean;
 }
@@ -202,6 +203,8 @@ export class ModelRepository {
     if (page.cursor) conditions.push(modelCursorCondition(page.cursor));
     if (request.providerId !== undefined) conditions.push(eq(models.providerId, request.providerId));
     if (request.enabled !== undefined) conditions.push(eq(models.enabled, request.enabled));
+    if (request.excludeProviderType !== undefined) conditions.push(notInArray(models.providerId,
+      this.database.select({ id: providers.id }).from(providers).where(eq(providers.type, request.excludeProviderType))));
     const rows = this.database
       .select()
       .from(models)

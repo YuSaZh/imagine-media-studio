@@ -103,6 +103,11 @@ export async function registerProviderRoutes(
     catch (error) { return providerError(reply, error); }
   });
 
+  app.get<{ Params: { id: string } }>('/internal/providers/:id/models/templates', async (request, reply) => {
+    try { return await options.providers.modelCapabilityTemplates(request.params.id); }
+    catch (error) { return providerError(reply, error); }
+  });
+
   app.get<{ Params: { id: string } }>('/internal/providers/:id', async (request, reply) => {
     const provider = options.providers.get(request.params.id);
     return provider
@@ -126,6 +131,7 @@ export async function registerProviderRoutes(
       }));
       return reply.code(201).send({ provider });
     } catch (error) {
+      if (error instanceof ProviderRegistryError) return providerError(reply, error);
       if (isSqliteConstraint(error)) {
         return reply.code(409).send({ error: 'provider_name_conflict' });
       }

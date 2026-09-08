@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { assetOutsidePrivateProjects } from './recent-visibility.js';
+import type { ProviderVideoSource } from '@imagine/provider-contract';
 
-import { and, asc, desc, eq, exists, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 
 import type { AppDatabase } from './client.js';
 import { toChangeEventValues } from './events.js';
@@ -10,7 +12,7 @@ import {
   type CursorPage,
   type PageRequest,
 } from './pagination.js';
-import { assets, changeEvents, collectionAssets, jobs } from './schema.js';
+import { assets, assetVideoSources, changeEvents, collectionAssets, jobInputs, jobs } from './schema.js';
 
 export interface AssetRecord {
   readonly id: string;
@@ -54,6 +56,7 @@ export interface CreateAssetInput {
 }
 
 export interface AssetPageRequest extends PageRequest {
+  readonly excludePrivate?: boolean;
   readonly type?: 'image' | 'video';
   readonly role?: string;
   readonly favorite?: boolean;
@@ -109,6 +112,12 @@ function assetCursorCondition(cursor: { timestampMs: number; id: string }): SQL 
 }
 
 export class AssetRepository {
+  public getVideoSource(id: string): ProviderVideoSource | undefined {
+    if (!this.get(id)) return undefined;
+    const source = this.database.select().from(assetVideoSources).where(eq(assetVideoSources.assetId, id)).get();
+    return source ? { providerId: source.providerId, modelId: source.modelId, profile: source.profile, remoteJobId: source.remoteJobId,
+      ...(source.resultId ? { resultId: source.resultId } : {}), ...(source.expiresAt ? { expiresAt: source.expiresAt } : {}) } : undefined;
+  }
   public constructor(private readonly database: AppDatabase, private readonly owner?: () => string) {}
 
   private scope(): SQL | undefined { return this.owner ? eq(assets.ownerId, this.owner()) : undefined; }
@@ -123,7 +132,8 @@ export class AssetRepository {
 
   public page(request: AssetPageRequest = {}): CursorPage<AssetRecord> {
     const page = normalizePageRequest(request);
-    const conditions: SQL[] = [];
+    const conditions: SQL[] = [sql`coalesce(json_extract(${assets.metadataJson}, '$.temporaryVideoFrame'), 0) != 1`];
+    if (request.excludePrivate) conditions.push(assetOutsidePrivateProjects());
     const scope = this.scope(); if (scope) conditions.push(scope);
     if (!request.includeDeleted) conditions.push(isNull(assets.deletedAt));
     if (page.cursor) conditions.push(assetCursorCondition(page.cursor));
@@ -176,7 +186,9 @@ export class AssetRepository {
   }
 
   public create(input: CreateAssetInput): AssetRecord {
-    if (input.parentAssetId && !this.get(input.parentAssetId)) throw new Error('Parent asset not found.');
+    const parent = input.parentAssetId ? this.get(input.parentAssetId) : null;
+    if (input.parentAssetId && !parent) throw new Error('Parent asset not found.');
+    const temporary = input.metadata?.temporaryVideoFrame === true || input.role === 'mask' && parent?.metadata.temporaryVideoFrame === true;
     const id = randomUUID();
     const now = new Date();
     return this.database.transaction((transaction) => {
@@ -199,12 +211,17 @@ export class AssetRepository {
           durationMs: input.durationMs ?? null,
           fileSize: input.fileSize,
           sha256: input.sha256,
-          metadataJson: JSON.stringify(input.metadata ?? {}),
+          metadataJson: JSON.stringify({ ...input.metadata, ...(temporary ? { temporaryVideoFrame: true } : {}) }),
           favorite: input.favorite ?? false,
           createdAt: now,
           deletedAt: null,
         })
         .run();
+      // Derived references (such as video frames) inherit privacy before becoming visible.
+      if (input.role === 'reference' && input.parentAssetId) {
+        const memberships = transaction.select().from(collectionAssets).where(eq(collectionAssets.assetId, input.parentAssetId)).all();
+        for (const membership of memberships) transaction.insert(collectionAssets).values({ ...membership, assetId: id }).run();
+      }
       transaction
         .insert(changeEvents)
         .values(
@@ -288,6 +305,30 @@ export class AssetRepository {
       const row = transaction.select().from(assets).where(eq(assets.id, id)).get();
       return row ? mapAssetRow(row) : null;
     });
+  }
+
+  /** Claim before asynchronous file removal so new submissions cannot reuse retired inputs. */
+  public claimTemporaryFrames(now = Date.now()): AssetRecord[] {
+    return this.database.transaction(transaction => {
+      const roots = transaction.select().from(assets).where(and(eq(assets.role, 'reference'), sql`json_extract(${assets.metadataJson}, '$.temporaryVideoFrame') = 1`, sql`(coalesce(json_extract(${assets.metadataJson}, '$.temporaryPurged'), 0) != 1 OR EXISTS (SELECT 1 FROM assets AS temporary_child WHERE temporary_child.parent_asset_id = ${assets.id} AND json_extract(temporary_child.metadata_json, '$.temporaryVideoFrame') = 1 AND coalesce(json_extract(temporary_child.metadata_json, '$.temporaryPurged'), 0) != 1))`)).all();
+      const claimed: AssetRecord[] = [];
+      for (const root of roots) {
+        const group = transaction.select().from(assets).where(or(eq(assets.id, root.id), and(eq(assets.parentAssetId, root.id), eq(assets.role, 'mask'), sql`json_extract(${assets.metadataJson}, '$.temporaryVideoFrame') = 1`))).all();
+        const ids = group.map(row => row.id);
+        const linked = transaction.select({ status: jobs.status }).from(jobInputs).innerJoin(jobs, eq(jobs.id, jobInputs.jobId)).where(inArray(jobInputs.assetId, ids)).all();
+        if (linked.some(job => !['completed', 'failed', 'cancelled', 'rejected', 'expired'].includes(job.status))) continue;
+        if (!root.deletedAt && !linked.length && now - root.createdAt.getTime() < 24 * 60 * 60 * 1000) continue;
+        for (const row of group) {
+          this.softDelete(row.id);
+          if (JSON.parse(row.metadataJson).temporaryPurged !== true) claimed.push(mapAssetRow(row));
+        }
+      }
+      return claimed;
+    });
+  }
+
+  public markTemporaryPurged(id: string): void {
+    this.database.update(assets).set({ metadataJson: sql`json_set(${assets.metadataJson}, '$.temporaryPurged', json('true'))` }).where(and(eq(assets.id, id), sql`json_extract(${assets.metadataJson}, '$.temporaryVideoFrame') = 1`)).run();
   }
 
   public softDelete(id: string): boolean {

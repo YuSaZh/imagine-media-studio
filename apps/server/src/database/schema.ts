@@ -15,6 +15,16 @@ export const settings = sqliteTable('settings', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
+export const assetVideoSources = sqliteTable('asset_video_sources', {
+  assetId: text('asset_id').primaryKey().references(() => assets.id, { onDelete: 'cascade' }),
+  providerId: text('provider_id').notNull().references(() => providers.id, { onDelete: 'cascade' }),
+  modelId: text('model_id').notNull(),
+  profile: text('profile').notNull(),
+  remoteJobId: text('remote_job_id').notNull(),
+  resultId: text('result_id'),
+  expiresAt: text('expires_at'),
+});
+
 export const providers = sqliteTable(
   'providers',
   {
@@ -261,6 +271,7 @@ export const collections = sqliteTable(
     ownerId: text('owner_id').notNull().default('admin'),
     id: text('id').primaryKey(),
     name: text('name').notNull(),
+    isPrivate: integer('is_private', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },

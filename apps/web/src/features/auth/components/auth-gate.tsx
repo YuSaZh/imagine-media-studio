@@ -5,8 +5,6 @@ import {
   Sparkles,
   ArrowRight,
   LoaderCircle,
-  LockKeyhole,
-  LogIn,
   RotateCcw,
   ShieldAlert,
 } from 'lucide-react';
@@ -116,7 +114,7 @@ interface AuthPromptProps {
 }
 
 export function AuthPrompt({
-  username = 'admin',
+  username = '',
   onUsernameChange,
   error,
   onPasswordChange,
@@ -128,18 +126,15 @@ export function AuthPrompt({
     <AuthFrame>
       <form aria-busy={pending} className="auth-gate-form" onSubmit={onSubmit}>
         <div>
-          <p className="auth-caption">受保护的工作区</p>
           <h2>登录 Imagine</h2>
         </div>
         {onUsernameChange && <label><span>用户名</span><input name="username" autoComplete="username" required value={username} disabled={pending} maxLength={64} onChange={event => onUsernameChange(event.target.value)} /></label>}
         <label>
-          <span>应用密码</span>
+          <span>密码</span>
           <span className="auth-password-field">
-            <LockKeyhole aria-hidden="true" size={17} />
             <input
               aria-invalid={error !== null}
               autoComplete="current-password"
-              autoFocus
               disabled={pending}
               maxLength={1024}
               name="password"
@@ -156,11 +151,9 @@ export function AuthPrompt({
             {error}
           </p>
         )}
-        <button disabled={pending || password.length === 0} type="submit">
-          {pending
-            ? <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
-            : <LogIn aria-hidden="true" size={16} />}
-          {pending ? '正在登录' : '进入工作区'}
+        <button disabled={pending || password.length === 0 || !!onUsernameChange && !username.trim()} type="submit">
+          {pending && <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />}
+          {pending ? '正在登录' : '登录'}
         </button>
       </form>
     </AuthFrame>
@@ -181,9 +174,9 @@ function AuthFrame({ children }: { children: ReactNode }) {
 
 function authErrorMessage(error: unknown): string {
   if (error instanceof InternalApiError && error.code === 'invalid_app_password') {
-    return 'Password is incorrect.';
+    return '用户名或密码错误';
   }
-  return 'Sign in failed. Try again.';
+  return '登录失败，请重试';
 }
 
 export function AuthGate({
@@ -195,7 +188,7 @@ export function AuthGate({
   const [offlineBootstrap, setOfflineBootstrap] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [password, setPassword] = useState('');
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginPending, setLoginPending] = useState(false);
   const [publicAccessAcknowledged, setPublicAccessAcknowledged] = useState(false);
@@ -238,7 +231,7 @@ export function AuthGate({
     updateStatusError(false);
     setLoginError(null);
     setLoginPending(false);
-    setPassword('');
+    setPassword(''); setUsername('');
   };
   const revalidateAuth = () => {
     if (backgroundStatusRequestRef.current !== null) return;
@@ -360,13 +353,13 @@ export function AuthGate({
       }
       setLoginError(null);
       setLoginPending(false);
-      setPassword('');
+      setPassword(''); setUsername('');
     });
   }, []);
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || loginPending || !username.trim() || !password) return;
     const loginEpoch = ++loginEpochRef.current;
     const loginIsCurrent = () => mountedRef.current && loginEpoch === loginEpochRef.current;
     setLoginError(null);

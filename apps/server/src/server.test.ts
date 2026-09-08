@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMockGenerationRequest } from '@imagine/testkit';
-import type { CustomAdapterRef } from '@imagine/shared';
+import { JobDetailResponseSchema, type CustomAdapterRef } from '@imagine/shared';
 import Database from 'better-sqlite3';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -197,7 +197,7 @@ async function createTestServer(
   return server;
 }
 
-async function reopenTestServer(dataDir: string, appPassword: string | null = null): Promise<ImagineServer> {
+async function reopenTestServer(dataDir: string, appPassword: string | null = null, mockProviderEnabled = true): Promise<ImagineServer> {
   const server = await createServer({
     config: {
       allowHttpMediaDownloads: false,
@@ -215,7 +215,7 @@ async function reopenTestServer(dataDir: string, appPassword: string | null = nu
       providerInputMaxBytesPerFile: 64 * 1024 * 1024,
       providerInputMaxTotalBytes: 256 * 1024 * 1024,
       mediaProcessTimeoutMs: 30_000,
-      mockProviderEnabled: true,
+      mockProviderEnabled,
       nodeEnvironment: 'test',
       webDistDir: resolve(dataDir, 'missing-web-dist'),
     },
@@ -227,6 +227,43 @@ async function reopenTestServer(dataDir: string, appPassword: string | null = nu
 }
 
 describe('Imagine server PR 0 skeleton', () => {
+  it('persists project privacy and filters recent media and pending jobs before pagination', async () => {
+    const server = await createTestServer(false);
+    const dataDir = temporaryDirectories.at(-1)!;
+    const collectionResponse = await server.app.inject({ method: 'POST', url: '/internal/collections', payload: { name: 'Private project' } });
+    const project = collectionResponse.json().collection;
+    expect(project.isPrivate).toBe(false);
+    const sharedProject = server.collections.create('Public project');
+    const visibleJob = server.jobs.create(createMockGenerationRequest({ prompt: 'public' }));
+    const privateJob = server.jobs.create(createMockGenerationRequest({ prompt: 'private', collectionId: project.id }));
+    const assets = (['image', 'video'] as const).map((type, index) => server.assets.create({ jobId: privateJob.id, type, role: 'output', filePath: `media/private-${index}`, mimeType: type === 'image' ? 'image/png' : 'video/mp4', fileSize: 20, sha256: 'a'.repeat(64) }));
+    server.collections.addAssets(project.id, assets.map(asset => asset.id));
+    server.collections.addAssets(sharedProject.id, assets.map(asset => asset.id));
+    const visibleAsset = server.assets.create({ jobId: visibleJob.id, type: 'image', role: 'output', filePath: 'media/public', mimeType: 'image/png', fileSize: 20, sha256: 'b'.repeat(64) });
+    const patch = await server.app.inject({ method: 'PATCH', url: `/internal/collections/${project.id}`, payload: { isPrivate: true } });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().collection).toMatchObject({ name: 'Private project', isPrivate: true });
+    for (const extra of ['', '&search=private', '&type=video', '&favorite=true']) {
+      const page = (await server.app.inject({ url: `/internal/assets?excludePrivate=true&limit=1${extra}` })).json();
+      expect(page.items.map((asset: { id: string }) => asset.id)).toEqual(extra ? [] : [visibleAsset.id]);
+      expect(page.nextCursor).toBeNull();
+    }
+    const recentJobs = (await server.app.inject({ url: '/internal/jobs?excludePrivate=true&limit=1' })).json();
+    expect(recentJobs.items.map((job: { id: string }) => job.id)).toEqual([visibleJob.id]);
+    expect(recentJobs.nextCursor).toBeNull();
+    expect((await server.app.inject({ url: `/internal/assets?collectionId=${project.id}` })).json().items).toHaveLength(2);
+    expect((await server.app.inject({ url: '/internal/assets' })).json().items).toHaveLength(3);
+    expect((await server.app.inject({ method: 'PATCH', url: `/internal/collections/${project.id}`, payload: {} })).statusCode).toBe(400);
+    await server.app.inject({ method: 'PATCH', url: `/internal/collections/${project.id}`, payload: { name: 'Renamed private' } });
+    expect(server.collections.get(project.id)?.isPrivate).toBe(true);
+    await server.app.close(); servers.splice(servers.indexOf(server), 1);
+    const reopened = await reopenTestServer(dataDir);
+    expect(reopened.collections.get(project.id)).toMatchObject({ name: 'Renamed private', isPrivate: true });
+    await reopened.app.inject({ method: 'PATCH', url: `/internal/collections/${project.id}`, payload: { isPrivate: false } });
+    expect((await reopened.app.inject({ url: '/internal/assets?excludePrivate=true' })).json().items.length).toBeGreaterThanOrEqual(3);
+    expect((await reopened.app.inject({ url: '/internal/jobs?excludePrivate=true' })).json().items).toHaveLength(2);
+  });
+
   it('reports health without listening on a host port', async () => {
     const { app } = await createTestServer();
     const response = await app.inject({ method: 'GET', url: '/internal/health' });
@@ -414,6 +451,10 @@ describe('Imagine server PR 0 skeleton', () => {
     const jobId = accepted.json<{ job: { id: string } }>().job.id;
     await server.runner.waitForIdle();
     expect(server.assets.page({ jobId }).items[0]?.parentAssetId).toBe(source.id);
+    const detail = await server.app.inject({ method: 'GET', url: `/internal/jobs/${jobId}` });
+    const parsedDetail = JobDetailResponseSchema.parse(detail.json());
+    expect(parsedDetail.inputs.map(input => input.role).sort()).toEqual(['mask', 'source']);
+    expect(parsedDetail.job.request.maskProcessing?.mode).toBe('native');
 
     const defaultAssets = await server.app.inject({ method: 'GET', url: '/internal/assets' });
     expect(defaultAssets.json<{ items: Array<{ id: string }> }>().items.map((item) => item.id))
@@ -469,7 +510,7 @@ describe('Imagine server PR 0 skeleton', () => {
     });
   });
 
-  it('rejects unsupported Mock options before creating a job', async () => {
+  it('rejects incomplete image dimensions before creating a job', async () => {
     const server = await createTestServer();
     const response = await server.app.inject({
       method: 'POST',
@@ -478,12 +519,30 @@ describe('Imagine server PR 0 skeleton', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json<{ error: string }>().error).toBe('mock_validation_error');
+    expect(response.json<{ error: string }>().error).toBe('model_parameters_invalid');
     expect(server.jobs.list()).toHaveLength(0);
+  });
+
+  it('persists a server-owned resolution snapshot across later model edits', async () => {
+    const server = await createTestServer();
+    const imageResolution = { mode: 'pixels', values: ['1024x1024'], allowCustomDimensions: false, dimensions: { maxWidth: 1024, maxHeight: 1024 } };
+    const operationPolicy = { unsupportedParameters: ['durationSeconds'], maxReferenceImages: 2 };
+    const model = server.providers.saveManualModel({ providerId: MOCK_PROVIDER_ID, modelId: 'mock-image-v1', displayName: 'Snapshot model', enabled: true, capabilities: { operations: ['image.generate'], imageResolution, operationPolicies: { 'image.generate': operationPolicy } } });
+    const response = await server.app.inject({ method: 'POST', url: '/internal/jobs', payload: createMockGenerationRequest({ imageResolutionPolicy: { mode: 'native', values: ['8K'], allowCustomDimensions: false }, operationPolicy: { maxReferenceImages: 99 } }) });
+    expect(response.statusCode, response.body).toBe(202);
+    const id = response.json<{ job: { id: string } }>().job.id;
+    expect(server.jobs.get(id)?.request.imageResolutionPolicy).toEqual(imageResolution);
+    expect(server.jobs.get(id)?.request.operationPolicy).toEqual(operationPolicy);
+    server.providers.updateManualModel(model.id, { capabilities: { ...model.capabilities, operationPolicies: {}, imageResolution: { ...imageResolution, values: ['2048x2048'], dimensions: { maxWidth: 2048, maxHeight: 2048 } } } });
+    expect(server.jobs.get(id)?.request.imageResolutionPolicy).toEqual(imageResolution);
+    expect(server.jobs.get(id)?.request.operationPolicy).toEqual(operationPolicy);
   });
 
   it('does not recover or accept jobs when the Mock Provider is disabled', async () => {
     const server = await createTestServer(true, false);
+    expect((await server.app.inject({ method: 'GET', url: '/internal/providers' })).json().items).toEqual([]);
+    expect((await server.app.inject({ method: 'GET', url: '/internal/models' })).json().items).toEqual([]);
+    expect((await server.app.inject({ method: 'POST', url: '/internal/providers', payload: { name: 'Test connection', type: 'mock' } })).statusCode).toBe(409);
     const queued = server.jobs.create(createMockGenerationRequest({ prompt: 'Remain queued' }));
     const response = await server.app.inject({
       method: 'POST',
@@ -494,6 +553,42 @@ describe('Imagine server PR 0 skeleton', () => {
     await server.runner.waitForIdle();
     expect(response.statusCode).toBe(503);
     expect(server.jobs.get(queued.id)?.status).toBe('queued');
+  });
+
+  it('hides retained mock catalogs when disabled without deleting generated media or real models', async () => {
+    const first = await createTestServer();
+    const dataDir = temporaryDirectories.at(-1)!;
+    const generated = await first.app.inject({ method: 'POST', url: '/internal/jobs', payload: createMockGenerationRequest() });
+    expect(generated.statusCode).toBe(202);
+    await first.runner.waitForIdle();
+    const jobId = generated.json<{ job: { id: string } }>().job.id;
+    const assetsBefore = first.assets.countForJob(jobId);
+    expect(assetsBefore).toBe(1);
+    const real = first.providers.create({ name: 'Real connection', type: 'openai', enabled: true });
+    first.providers.saveManualModel({ providerId: real.id, modelId: 'custom-image', displayName: 'My model', enabled: true, capabilities: { operations: ['image.generate'] } });
+    // Make Mock the newest row: filtering must happen before pagination.
+    first.providers.update('mock', { name: 'Renamed test connection' });
+    await first.app.close();
+    servers.splice(servers.indexOf(first), 1);
+
+    const second = await reopenTestServer(dataDir, null, false);
+    for (const url of ['/internal/providers?limit=1', '/internal/providers?enabled=true&limit=1']) {
+      expect((await second.app.inject({ method: 'GET', url })).json()).toMatchObject({ items: [{ id: real.id }], nextCursor: null });
+    }
+    expect((await second.app.inject({ method: 'GET', url: '/internal/providers?type=mock' })).json().items).toEqual([]);
+    expect((await second.app.inject({ method: 'GET', url: '/internal/models?limit=1' })).json()).toMatchObject({ items: [{ providerId: real.id }], nextCursor: null });
+    expect((await second.app.inject({ method: 'GET', url: '/internal/models?providerId=mock&enabled=true' })).json().items).toEqual([]);
+    expect((await second.app.inject({ method: 'POST', url: '/internal/jobs', payload: createMockGenerationRequest() })).statusCode).toBe(503);
+    expect((await second.app.inject({ method: 'POST', url: '/internal/providers/mock/models/refresh' })).statusCode).toBe(409);
+    expect(second.jobs.get(jobId)?.status).toBe('completed');
+    expect(second.assets.countForJob(jobId)).toBe(assetsBefore);
+    expect((await second.app.inject({ method: 'GET', url: '/internal/providers/mock' })).statusCode).toBe(404);
+    await second.app.close();
+    servers.splice(servers.indexOf(second), 1);
+    const third = await reopenTestServer(dataDir);
+    expect(third.providers.get('mock')).toMatchObject({ name: 'Renamed test connection' });
+    expect((await third.app.inject({ method: 'GET', url: '/internal/providers?type=mock' })).json().items).toHaveLength(1);
+    expect((await third.app.inject({ method: 'GET', url: '/internal/models?providerId=mock' })).json().items).toHaveLength(2);
   });
 
   it('keeps the exact internal namespace out of the SPA fallback', async () => {
@@ -798,6 +893,15 @@ describe('Imagine server PR 0 skeleton', () => {
     const chat = await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=gemini-3.1-flash-image&profile=openai-chat-image-v1` });
     expect(chat.statusCode).toBe(200);
     expect(chat.json().capabilities.profile).toBe('openai-chat-image-v1');
+    const templates = await server.app.inject({ url: `/internal/providers/${id}/models/templates` });
+    expect(templates.statusCode).toBe(200);
+    expect(templates.json().models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ modelId: 'gpt-image-2', capabilities: expect.objectContaining({ profile: 'openai-images-v1', imageResolution: expect.objectContaining({ mode: 'pixels' }) }) }),
+      expect.objectContaining({ modelId: 'gemini-3.1-flash-image', capabilities: expect.objectContaining({ profile: 'gemini-generate-content-image-v1', maxReferenceImages: 14 }) }),
+    ]));
+    const alias = await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=gpt-image-2-2026-04-21` });
+    expect(alias.statusCode).toBe(200);
+    expect(alias.json().capabilities.imageResolution.dimensions.maxWidth).toBe(3840);
     expect((await server.app.inject({ url: '/internal/models' })).json()).toEqual(before);
     expect((await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=unknown` })).statusCode).toBe(400);
     expect((await server.app.inject({ url: `/internal/providers/${id}/models/capabilities?modelId=gemini-3.1-flash-image&profile=bad` })).statusCode).toBe(400);
@@ -1289,7 +1393,7 @@ describe('Imagine server PR 0 skeleton', () => {
       snapshot.pragma('foreign_keys = ON');
       expect(snapshot.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(snapshot.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-      expect(snapshot.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 9 });
+      expect(snapshot.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 11 });
     } finally {
       snapshot.close();
     }

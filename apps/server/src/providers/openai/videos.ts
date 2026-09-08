@@ -1,6 +1,11 @@
+import { compatibleModelCapabilities } from '../compatible-model-catalog.js';
+import { videoPixelSize, videoPolicySizes, videoDurationAllowed } from './video-policy.js';
+import type { OperationPolicy } from '@imagine/shared';
 import type {
   GenerationRequest,
 } from '@imagine/shared';
+import { sourceVideo } from '../video-input.js';
+import { videoOperationPolicies } from '../video-operation-policy.js';
 import type {
   ModelCapabilities,
   ProviderAdapter,
@@ -246,8 +251,11 @@ function displayName(id: string): string {
 }
 
 function videoCapabilities(model: string, conservative = false): ModelCapabilities {
+  const compatible = compatibleModelCapabilities(model, 'openai-videos-v1-compatible');
+  if (compatible) return compatible;
   const capabilities: ModelCapabilities = {
-    operations: conservative ? ['video.generate'] : ['video.generate', 'video.image_to_video'],
+    operations: conservative ? ['video.generate'] : ['video.generate', 'video.image_to_video', 'video.edit', 'video.extend'],
+    operationPolicies: videoOperationPolicies('openai-videos-v1-compatible', model),
     resolutions: [...sizesForModel(model, conservative)],
     durations: secondsForModel(model, conservative).map(Number),
     maxReferenceImages: 0,
@@ -329,11 +337,18 @@ function parseRemoteError(
   };
 }
 
+function modelVideoPolicy(model: string, context?: OpenAiRuntimeContext, operation = 'video.generate'): OperationPolicy | undefined {
+  if (context?.modelId === model && context.operationPolicy) return context.operationPolicy;
+  const capabilities = compatibleModelCapabilities(model, 'openai-videos-v1-compatible');
+  return capabilities?.operationPolicies?.[operation as keyof NonNullable<ModelCapabilities['operationPolicies']>] ?? capabilities?.operationPolicies?.['video.image_to_video'];
+}
+
 function parseVideo(
   value: unknown,
   secrets: Readonly<Record<string, string>> = {},
   expectedModel?: string,
   expectedRemoteId?: string,
+  policy?: OperationPolicy,
 ): VideoRecord {
   const source = record(value);
   if (source === null) throw new OpenAiResponseError('invalid_response', 'OpenAI video response must be an object.');
@@ -353,7 +368,7 @@ function parseVideo(
     throw new OpenAiResponseError('invalid_response', 'OpenAI returned a video model different from the request.');
   }
   const seconds = source.seconds === undefined ? undefined : boundedString(source.seconds, 8);
-  if (source.seconds !== undefined && (seconds === undefined || !VIDEO_SECONDS.has(seconds))) {
+  if (source.seconds !== undefined && (seconds === undefined || !/^[1-9]\d{0,3}$/.test(seconds))) {
     throw new OpenAiResponseError('invalid_response', 'OpenAI returned an invalid video duration.');
   }
   const size = source.size === undefined ? undefined : boundedString(source.size, 32);
@@ -362,9 +377,10 @@ function parseVideo(
   }
   const resultExpiresAt = parseExpiry(source.expires_at);
   const responseModel = model ?? expectedModel ?? '';
-  const validSizes = sizesForModel(responseModel, !isKnownVideoModel(responseModel));
+  policy ??= modelVideoPolicy(responseModel);
+  const validSizes = policy ? videoPolicySizes(policy) ?? sizesForModel(responseModel, !isKnownVideoModel(responseModel)) : sizesForModel(responseModel, !isKnownVideoModel(responseModel));
   const validSeconds = secondsForModel(responseModel, !isKnownVideoModel(responseModel));
-  if (seconds !== undefined && !validSeconds.includes(seconds)) {
+  if (seconds !== undefined && (policy?.durations ? !videoDurationAllowed(Number(seconds), policy.durations) : !validSeconds.includes(seconds))) {
     throw new OpenAiResponseError('invalid_response', 'OpenAI returned a duration unsupported by the video model.');
   }
   if (size !== undefined && !validSizes.includes(size)) {
@@ -558,7 +574,7 @@ function inputFromContext(
   return { ...input, mimeType };
 }
 
-function requestOptions(request: GenerationRequest, model: string): { seconds: string; size: string } {
+function requestOptions(request: GenerationRequest, model: string, runtime?: OpenAiRuntimeContext): { seconds: string; size: string } {
   if (request.count !== undefined && request.count !== 1) {
     throw new OpenAiValidationError('unsupported_option', 'OpenAI Videos creates exactly one video per call.');
   }
@@ -567,12 +583,18 @@ function requestOptions(request: GenerationRequest, model: string): { seconds: s
     request.extra !== undefined && Object.keys(request.extra).length > 0) {
     throw new OpenAiValidationError('unsupported_option', 'This OpenAI Videos profile does not support the requested option.');
   }
-  const duration = request.durationSeconds ?? 4;
+  const policy = modelVideoPolicy(model, runtime, request.operation);
+  const defaultDuration = policy?.durations ? Array.isArray(policy.durations) ? policy.durations[0] : policy.durations.min : 4;
+  const duration = request.durationSeconds ?? defaultDuration ?? 4;
   const allowedSeconds = secondsForModel(model, !isKnownVideoModel(model));
-  if (!Number.isSafeInteger(duration) || !allowedSeconds.includes(String(duration))) {
+  if (policy?.durations ? !videoDurationAllowed(duration, policy.durations) : !Number.isSafeInteger(duration) || !allowedSeconds.includes(String(duration))) {
     throw new OpenAiValidationError('invalid_option', 'OpenAI Videos duration is not supported by the selected model.');
   }
-  const requestedSize = request.resolution ?? (
+  const ratio = request.aspectRatio && request.aspectRatio !== 'auto' ? request.aspectRatio : policy?.aspectRatios?.find(ratio => ratio !== 'auto') ?? '16:9';
+  if (policy?.aspectRatios && !policy.aspectRatios.includes(ratio)) throw new OpenAiValidationError('invalid_option', 'Video aspect ratio is not supported.');
+  if ((request.width === undefined) !== (request.height === undefined)) throw new OpenAiValidationError('invalid_option', 'Video width and height must be provided together.');
+  const explicitSize = request.resolution ?? (request.width && request.height ? `${request.width}x${request.height}` : undefined);
+  const requestedSize = policy?.resolutions ? videoPixelSize(explicitSize ?? policy.resolutions[0] ?? '', ratio) ?? '' : request.resolution ?? (
     request.width !== undefined || request.height !== undefined
       ? `${request.width ?? ''}x${request.height ?? ''}`
       : request.aspectRatio === '16:9'
@@ -583,7 +605,7 @@ function requestOptions(request: GenerationRequest, model: string): { seconds: s
             ? '720x1280'
             : ''
   );
-  const allowedSizes = sizesForModel(model, !isKnownVideoModel(model));
+  const allowedSizes = policy ? videoPolicySizes(policy) ?? sizesForModel(model, !isKnownVideoModel(model)) : sizesForModel(model, !isKnownVideoModel(model));
   if (!allowedSizes.includes(requestedSize)) {
     throw new OpenAiValidationError('invalid_option', 'OpenAI Videos size is not supported.');
   }
@@ -691,16 +713,25 @@ export class OpenAiVideosProvider implements ProviderAdapter {
       throw new OpenAiValidationError('provider_mismatch', 'Generation request providerId does not match ProviderContext.');
     }
     if (request.modelId.length === 0 || request.modelId.length > MAX_MODEL_ID_CHARS ||
-      (!configured.includes(request.modelId) && (explicit !== undefined || !isKnownVideoModel(request.modelId)))) {
+      (!configured.includes(request.modelId) && (explicit !== undefined || !isKnownVideoModel(request.modelId)) && !(runtime.modelId === request.modelId && runtime.operationPolicy) && !compatibleModelCapabilities(request.modelId, this.type))) {
       throw new OpenAiValidationError('model_not_supported', 'The OpenAI Videos model is not enabled for this profile.');
     }
+    const compatible = compatibleModelCapabilities(request.modelId, this.type);
+    if (runtime.modelId !== request.modelId && compatible && !compatible.operations.includes(request.operation)) throw new OpenAiValidationError('operation_not_supported', 'The compatible model does not support this operation.');
     if (request.prompt.trim().length === 0 || request.prompt.length > MAX_PROMPT_CHARS) {
       throw new OpenAiValidationError('invalid_prompt', `Prompt must contain 1 through ${MAX_PROMPT_CHARS} characters.`);
+    }
+    if (request.operation === 'video.edit' || request.operation === 'video.extend') {
+      try {
+        const input = sourceVideo(request, runtime, 'openai-videos-v1-compatible');
+        if (request.operation === 'video.extend' && (input.videoSource?.providerId !== context.providerId || input.videoSource.modelId !== request.modelId || input.videoSource.profile !== this.type)) throw new Error('Sora 续写需要同连接生成的视频');
+      } catch (error) { throw new OpenAiValidationError('video_input_invalid', error instanceof Error ? error.message : 'Invalid video'); }
+      return;
     }
     if (request.operation !== 'video.generate' && request.operation !== 'video.image_to_video') {
       throw new OpenAiValidationError('operation_not_supported', 'This OpenAI Videos profile supports video.generate and video.image_to_video only.');
     }
-    if (!isKnownVideoModel(request.modelId) && request.operation !== 'video.generate') {
+    if (!isKnownVideoModel(request.modelId) && request.operation !== 'video.generate' && !modelVideoPolicy(request.modelId, runtime, request.operation)?.inputRoles?.includes('first_frame')) {
       throw new OpenAiValidationError(
         'operation_not_supported',
         'Explicit compatible video models conservatively support video.generate only.',
@@ -714,16 +745,16 @@ export class OpenAiVideosProvider implements ProviderAdapter {
         throw new OpenAiValidationError('input_role_invalid', 'video.image_to_video requires one first_frame input.');
       }
       const input = inputFromContext(request, runtime);
-      const options = requestOptions(request, request.modelId);
+      const options = requestOptions(request, request.modelId, runtime);
       const [width, height] = options.size.split('x').map(Number);
-      if (input.width !== width || input.height !== height) {
+      if ((isKnownVideoModel(request.modelId) || !modelVideoPolicy(request.modelId, runtime, request.operation)?.inputRoles?.includes('first_frame')) && (input.width !== width || input.height !== height)) {
         throw new OpenAiValidationError(
           'input_dimensions_mismatch',
           'The first-frame image dimensions must match the requested video size.',
         );
       }
     }
-    requestOptions(request, request.modelId);
+    requestOptions(request, request.modelId, runtime);
   }
 
   public async submit(request: GenerationRequest, context: ProviderContext): Promise<SubmitResult> {
@@ -732,11 +763,25 @@ export class OpenAiVideosProvider implements ProviderAdapter {
     const baseUrl = baseUrlFor(this.options, runtime);
     const http = this.http ?? runtime.http ?? runtime.transport;
     if (http === undefined) throw new OpenAiTransportError('OpenAI Videos requires an injected HTTP transport.');
-    const options = requestOptions(request, request.modelId);
+    const continuation = request.operation === 'video.edit' || request.operation === 'video.extend';
+    const options = continuation ? { seconds: String(request.durationSeconds ?? 8), size: '' } : requestOptions(request, request.modelId, runtime);
     const headers = this.requestHeaders(runtime);
     let input: ProviderInput | undefined;
     let requestBody: OpenAiHttpRequest;
-    if (request.operation === 'video.image_to_video') {
+    if (continuation) {
+      input = sourceVideo(request, runtime, 'openai-videos-v1-compatible');
+      const path = request.operation === 'video.edit' ? '/videos/edits' : '/videos/extensions';
+      const origin = input.videoSource;
+      if (origin?.providerId === runtime.providerId && origin.profile === this.type && origin.modelId === request.modelId) {
+        requestBody = { method: 'POST', url: endpoint(baseUrl, path), headers: { ...headers, Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ video: { id: assertRemoteId(origin.remoteJobId) }, prompt: request.prompt, ...(request.operation === 'video.extend' && request.durationSeconds !== undefined ? { seconds: String(request.durationSeconds) } : {}) }), ...(runtime.signal ? { signal: runtime.signal } : {}) };
+      } else {
+        if (request.operation !== 'video.edit') throw new OpenAiValidationError('video_source_required', '续写需要上游视频来源');
+        const boundary = '----imagine-openai-video-edit';
+        requestBody = { method: 'POST', url: endpoint(baseUrl, path), headers: { ...headers, Accept: 'application/json', 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+          bodyBytes: encodeMultipart([{ name: 'model', bytes: new TextEncoder().encode(request.modelId) }, { name: 'prompt', bytes: new TextEncoder().encode(request.prompt) }, { name: 'video', filename: 'source.mp4', contentType: input.mimeType, bytes: input.bytes }], boundary), ...(runtime.signal ? { signal: runtime.signal } : {}) };
+      }
+    } else if (request.operation === 'video.image_to_video') {
       input = inputFromContext(request, runtime);
       const parts: OpenAiMultipartPart[] = [
         { name: 'model', bytes: new TextEncoder().encode(request.modelId) },
@@ -769,7 +814,7 @@ export class OpenAiVideosProvider implements ProviderAdapter {
       };
     }
     const payload = await this.requestJson(runtime, http, requestBody);
-    const video = parseVideo(payload, runtime.secrets, request.modelId);
+    const video = parseVideo(payload, runtime.secrets, request.modelId, undefined, modelVideoPolicy(request.modelId, runtime, request.operation));
     if (video.status === 'failed') {
       throw new OpenAiResponseError(
         video.error?.code ?? 'video_failed',
@@ -803,7 +848,7 @@ export class OpenAiVideosProvider implements ProviderAdapter {
       headers: { ...this.requestHeaders(runtime), Accept: 'application/json' },
       ...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
     });
-    const video = parseVideo(payload, runtime.secrets, runtime.modelId, id);
+    const video = parseVideo(payload, runtime.secrets, runtime.modelId, id, modelVideoPolicy(runtime.modelId ?? '', runtime));
     if (video.status === 'failed') return { state: 'failed', error: video.error! };
     if (video.status === 'completed') {
       return {

@@ -76,7 +76,7 @@ describe('GeminiVeoProvider', () => {
       'veo-3.1-lite-generate-preview',
     ]);
     expect(capabilities.models[0]?.capabilities).toMatchObject({
-      operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video'],
+      operations: ['video.generate', 'video.image_to_video', 'video.reference_to_video', 'video.extend'],
       durations: [4, 6, 8],
       maxReferenceImages: 3,
       supportsCancel: false,

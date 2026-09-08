@@ -51,6 +51,43 @@ function assetInput(path: string) {
 }
 
 describe('PR 2 database repositories', () => {
+  it('inherits parent project privacy for captured references and rejects foreign parents', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm, () => 'admin');
+    const collections = new CollectionRepository(database.orm, () => 'admin');
+    const source = assets.create({ ...assetInput('video.mp4'), type: 'video', mimeType: 'video/mp4' });
+    const project = collections.create('Hidden source', true); collections.addAssets(project.id, [source.id]);
+    const frame = assets.create({ ...assetInput('frame.png'), role: 'reference', parentAssetId: source.id });
+    expect(assets.collectionIdsForAsset(frame.id)).toEqual([project.id]);
+    expect(assets.page({ excludePrivate: true }).items).toEqual([]);
+    expect(collections.get(project.id)?.itemCount).toBe(2);
+    const foreign = new AssetRepository(database.orm, () => 'another-account');
+    expect(() => foreign.create({ ...assetInput('foreign.png'), role: 'reference', parentAssetId: source.id })).toThrow('Parent asset not found');
+    expect(assets.page({ collectionId: project.id }).items).toHaveLength(2);
+  });
+
+  it('persists private video provenance and parent links atomically with outputs', async () => {
+    const database = await createTestDatabase();
+    const jobs = new JobRepository(database.orm);
+    const assets = new AssetRepository(database.orm);
+    const source = assets.create({ ...assetInput('source.mp4'), type: 'video', mimeType: 'video/mp4', durationMs: 8000 });
+    const provider = new ProviderRepository(database.orm).create({ name: 'Video provenance', type: 'mock' });
+    const job = jobs.create(createMockGenerationRequest({ providerId: provider.id, modelId: 'mock-video-v1', operation: 'video.edit', profile: 'gemini-omni-interactions-video-v1', inputs: [{ assetId: source.id, role: 'source' }] }));
+    const claimed = jobs.claimQueued(job.id)!;
+    const processing = jobs.compareAndSetStatus(job.id, claimed.revision, ['submitting'], 'processing', 'processing')!;
+    const output = { type: 'video' as const, mimeType: 'video/mp4', filePath: 'media/originals/edited.mp4', width: 1280, height: 720, durationMs: 8000, fileSize: 100, sha256: 'video-output', resultId: 'interaction-next' };
+    expect(jobs.finalizeOutputs(job.id, processing.revision + 1, [output])).toBeNull();
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM asset_video_sources').get()).toEqual({ count: 0 });
+    expect(jobs.finalizeOutputs(job.id, processing.revision, [output])?.job.status).toBe('completed');
+    const saved = assets.listForMaintenance().find(asset => asset.jobId === job.id)!;
+    expect(saved.parentAssetId).toBe(source.id);
+    expect(saved.metadata).not.toHaveProperty('videoSource');
+    expect(assets.getVideoSource(saved.id)).toMatchObject({ providerId: job.request.providerId, modelId: 'mock-video-v1', remoteJobId: 'interaction:interaction-next' });
+    const otherOwner = new AssetRepository(database.orm, () => 'other-account');
+    expect(otherOwner.getVideoSource(saved.id)).toBeUndefined();
+    assets.softDelete(saved.id);
+    expect(assets.getVideoSource(saved.id)).toBeUndefined();
+  });
   it('searches persisted filenames and job prompts with literal characters and normal pagination', async () => {
     const database = await createTestDatabase();
     const assets = new AssetRepository(database.orm);

@@ -367,7 +367,7 @@ describe('AuthGate', () => {
     unsubscribe();
   });
 
-  it('renders a compact branded password form with autofocus and errors', () => {
+  it('renders a compact branded password form without decorative input icons and with errors', () => {
     const markup = renderToStaticMarkup(
       <AuthPrompt
         error="Password is incorrect."
@@ -378,9 +378,11 @@ describe('AuthGate', () => {
       />,
     );
     expect(markup).toContain('Imagine Media Studio');
-    expect(markup).toContain('受保护的工作区');
+    expect(markup).not.toContain('受保护的工作区');
+    expect(markup).toContain('密码');
+    expect(markup).not.toContain('应用密码');
     expect(markup).toContain('type="password"');
-    expect(markup).toContain('autofocus=""');
+    expect(markup).not.toContain('autofocus=""');
     expect(markup).toContain('aria-invalid="true"');
     expect(markup).toContain('Password is incorrect.');
     expect(markup).not.toContain('marketing');
@@ -474,7 +476,7 @@ describe('AuthGate', () => {
       });
 
       expect(findByAttribute(rootElement, 'role', 'alert')).toBeNull();
-      expect(rootElement.textContent).toContain('进入工作区');
+      expect(rootElement.textContent).toContain('登录');
     } finally {
       await act(async () => { root.unmount(); });
     }

@@ -10,10 +10,22 @@ in [CONTRIBUTING.md](../../CONTRIBUTING.md) and
 
 - `/imagine`: bottom Composer on desktop and phones, with a virtual masonry gallery above. Models, input modes, aspect ratios and parameters follow enabled Provider capabilities; compatible image models also expose custom pixel dimensions and declared extra fields such as quality and output format.
 - `/library`, `/saved`, `/projects/:id`: server-filtered assets, filename/prompt/model search, pagination, selection, favorites, project membership and confirmed deletion.
+- Completed-job placeholders only bridge the delay before generated assets appear. Once a result has appeared, deleting or filtering it must not recreate a completed placeholder. Partial batch deletion refreshes successful removals and keeps failed items selected for retry; deleting assets preserves task history.
 - `?asset=:id`: original image or native video, original MIME download, zoom/gestures, request information and continued creation.
 - `/edit/:id`: responsive original-image mask canvas, brush/eraser, undo/redo and persisted source/mask inputs.
 - `/jobs`: durable status, results, cancellation and retry; also available from the header.
 - `/settings`: persisted preferences, Provider/model management, custom HTTP/trusted JavaScript adapters, database/media maintenance and PWA controls.
+
+Project actions include a persisted privacy toggle, off by default for existing
+and new projects. Private project members are excluded from the home recent feed and All Works
+before pagination and search; tasks submitted inside a private project are also
+excluded from home placeholders. Membership in any private project takes priority
+over simultaneous public membership. Turning privacy off restores recent visibility.
+Project tiles use a blurred abstract cover with a privacy indicator and do not
+load private thumbnails. Opening the project still shows its contents normally;
+favorites and task history remain available. This is a presentation
+setting within the owning account, not a separate access password. Offline recent
+views hide project items unless cached project settings establish public visibility.
 
 Grok Imagine is the sole visual reference. Its public DOM, computed styles and creation controls were inspected directly during the redesign. No Grok page source, logo or styles were copied. Existing nonvisual upload validation, mask rasterization, gestures, session/cache and adapter-security code remains in use.
 
@@ -34,6 +46,8 @@ changes must preserve the other layout's behavior.
   position across image/video modes and supported/unsupported upload states.
 - Desktop image/video switching shows an icon and label for the selected mode,
   and only an icon for the inactive mode. Mobile shows icons for both modes.
+  The entire capsule is one toggle button: clicking either half, the selected
+  label or the padding switches mode. Enter and Space operate the same control.
 - Desktop retains the aspect-ratio shortcut. Its `auto` option has a dashed-square
   marker. Mobile image mode exposes aspect ratio in its shortcut row and in
   generation settings. Mobile video keeps aspect ratio in generation settings;
@@ -48,15 +62,35 @@ changes must preserve the other layout's behavior.
 - Desktop image shortcuts place resolution directly after aspect ratio, followed
   by an icon and count. Resolution offers auto, 1K, 2K, 4K and custom pixel dimensions;
   native size names take priority when supported by the model protocol and policy.
+  The explicit `imageResolution` capability declares native or pixel mode,
+  allowed values, custom-dimension permission and optional dimension constraints.
+  It drives selection, hydration and validation independently of model ID.
+  Server catalog templates supply known-model defaults; explicit capabilities
+  override them. Legacy capability lists and parameter options retain their
+  declared values, including strict pixel enumerations on native protocols.
+  Such pixel choices still need a ratio before conversion; directly permitted
+  native tiers never require that step. Unknown capabilities do not grant
+  undeclared tiers. Native auto ratio stays omitted on the wire.
   Pixel-only models map presets by aspect ratio. For 16:9, presets
   map to 1280x720, 2048x1152, and 3840x2160; portrait swaps the dimensions.
-  Other ratios use 1024, 2048, and 4096 as the longest edge. Chat adapters map
+  Other ratios use 1024, 2048, and 3840 as the longest edge. Derived edges round
+  to the nearest multiple of 16, including 3:2 and 2:3. Auto never implies 1:1:
+  native tiers can be sent without an aspect ratio; pixel-only tiers require an
+  explicit ratio. With auto selected, clicking a pixel tier opens a ratio card
+  inside the resolution popover; selecting a supported ratio applies both values
+  atomically. Unsupported model/ratio combinations are excluded. GPT Image 2
+  shares its dimension validation between frontend and server, including the
+  8,294,400 total-pixel limit, so its 4K preset supports 16:9 and 9:16 only among
+  the standard ratios. Selecting auto in the ratio menu clears an editable pixel
+  resolution to auto, while native tiers remain selected. Custom dimensions can
+  still be explicitly applied with auto ratio. Chat adapters map
   recognized pixel sizes to upstream aspect-ratio/size fields and reject
   unrepresentable custom sizes; Images adapters retain pixel sizes. Actual
   output dimensions remain subject to the upstream model. Model rules, locks and
   custom-size limits apply; shortcuts share the saved generation settings.
-- Mobile image generation settings offer exactly `auto`, `1K`, `2K`, `4K`, and
-  custom dimensions, using the same preset mapping as desktop. This applies to
+- Mobile image generation settings offer `auto`, `1K`, `2K`, `4K`, and
+  custom dimensions, plus additional explicitly configured native values,
+  using the same preset mapping as desktop. This applies to
   both capability-based and managed parameter controls. Unsupported presets and
   locked settings remain disabled. Changing aspect ratio retains the selected
   preset and recalculates pixel dimensions; custom width/height inputs validate
@@ -79,17 +113,51 @@ changes must preserve the other layout's behavior.
   auto without clearing the draft or changing the saved resolution. This applies
   to shortcuts and generation settings on both layouts. A model-fixed non-auto
   ratio cannot be unlocked. Auto never couples the edges. The edited edge snaps
-  to the nearest multiple of 16 on blur/apply (ties round upward, minimum 16);
+  to the nearest configured multiple (16 by default) on blur/apply (ties round upward);
   the derived edge is also rounded, so the ratio may differ by rounding error.
   Both edges remain at most 16384, with at most 100 million pixels total.
   Applying custom dimensions preserves the selected aspect ratio rather than
   replacing it with a reduced width/height fraction. Native preset wire values
   and model-specific custom-size restrictions remain in effect.
+- Model editing exposes resolution mode, allowed values and dimension limits.
+  Both UI and server enforce the same capability plus stored parameter rules.
+  The server discards client-provided `imageResolutionPolicy` and snapshots its
+  own effective capability into each job; retry/recovery retain that snapshot.
+  Provider requests omit the internal snapshot and receive it through server
+  context. New native values can pass through supported adapters without adding
+  model-ID checks; this does not establish upstream support for those values.
 - Desktop video shortcuts offer resolution presets 480p, 720p, 1080p, and custom;
   duration presets 6s, 10s, 15s, and custom. Unsupported values are disabled or
   rejected according to the model's policy, including custom values and locks.
 - Aspect ratios use selection controls, not arbitrary text entry. Custom pixel
   dimensions use separate numeric controls and take precedence in the request.
+
+Video workflows include editing, extension and supported first/last-frame inputs.
+Modes derive from stored capabilities, and per-operation policies govern controls,
+input types and validation. Source videos are selected from the library or uploaded
+where the operation permits; results are independent assets linked to the source.
+Changing modes invalidates incompatible inputs. Private remote provenance is
+resolved on the server, and snapshots preserve submitted limits across recovery.
+See the maintained [model capability table](../model-capabilities.md) for coverage.
+
+Media cards with a prompt offer a bottom-right copy control. Desktop retains
+30px frosted circular buttons with 9px edge offsets. Mobile card actions use
+20px translucent white icons (78% opacity) with a light dark icon shadow, no background blur or resting
+fill, and 5px horizontal / 8px vertical visible edge offsets. Transparent 40px targets do not overlap;
+pressed feedback and filled saved icons remain available.
+It appears on hover/focus on desktop and remains visible on mobile. Selection
+mode hides it; uploaded assets without prompts omit it. Copy uses the full prompt,
+preserves card/viewer state and reports success or failure through the shared notice.
+Selected cards draw their green/white ring inside the card, preserving gallery
+geometry and avoiding clipping at scroll container edges.
+
+Focusing the mobile prompt does not change textarea or Composer height. Keyboard
+avoidance still follows the visual viewport without expanding the input.
+On both layouts, generation settings use aligned pale value fields with matching
+height, padding and typography. Selectable values include a right chevron; numeric
+and text inputs share the surface style. Ratio, resolution and count retain their
+existing popover contents. Rows have consistent separators, including managed
+resolution controls.
 
 Image resolution protocol review (2026-09-07): Gemini Generate Content uses
 `imageConfig.imageSize`, Interactions uses `image_size`, and CPA Chat uses
@@ -101,12 +169,24 @@ Sources: [Gemini](https://ai.google.dev/gemini-api/docs/image-generation),
 [OpenAI](https://developers.openai.com/api/docs/guides/image-generation), and
 [CPA translation](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/translator/gemini/openai/chat-completions/gemini_openai_request.go).
 This review and fixture coverage do not establish live Provider acceptance.
+Automatic choices survive internal request validation until server model defaults
+and locks have been applied, then are omitted from Provider requests. Model size
+and total-pixel limits remain enforced even when a preset exceeds those limits.
+Deriving new parameter rules from capabilities preserves an unconstrained string
+`customFields.properties.size` as flexible resolution input. Enumerated/constant
+size fields stay restricted; reloading capabilities preserves existing edited rules.
 
 The Chat image adapter also supplies New API's `extra_body.google.image_config`
 alongside CPA's top-level configuration, with identical values. It recognizes
 New API's Markdown inline image data URLs in message content and assembled SSE
 text chunks; ordinary text links are not downloaded. Existing image validation,
 result-count bounds and filtered/incomplete response rejection still apply.
+Chat image requests embed source/reference image bytes as Base64 data URLs even
+when public input links are enabled. CPA's Gemini Chat translator parses inline
+data but skips ordinary HTTP image URLs; sending a public link can therefore
+silently turn a reference-based request into text-only generation. Other
+protocols retain their existing public-link handling. Input roles, ordering,
+ownership, integrity and byte limits remain enforced before encoding.
 
 ## Data behavior
 
@@ -153,6 +233,12 @@ Icons use existing Lucide; dialogs/popovers/tooltips use existing Radix. No depe
 `/settings/models` provides search, connection/type filters, model creation, editing, copying, enable/disable and deletion of both manual and discovered models. Custom adapter models remain definition-managed. The model editor selects an explicit wire protocol, including a different family for compatible gateways, supported operations, reference-image limits and parameter rules. Rules define paths, scalar control types, choices, ranges, defaults, visibility, required values and locked defaults. Common configuration needs no JSON; advanced capabilities remain editable.
 
 Connection settings do not expose the bulk model refresh command. Adding models
+uses a model editor whose generation parameters start collapsed on each opening.
+Expanding or collapsing preserves unsaved values; loading capabilities does not
+force it open, and load errors remain visible. The editor body scrolls without
+visible scrollbar tracks on desktop and mobile, while Save and Cancel stay fixed
+below the scrollable content.
+Adding models
 uses a read-only remote catalog and saves only the selected model. Loading model
 capabilities queries server-side built-in presets for the selected model and
 protocol, independently of the connection family. It fills missing capabilities
@@ -161,6 +247,48 @@ to the database. Catalog lists alone do not establish upstream feature support.
 The legacy refresh API remains available for internal/custom-adapter workflows;
 its existing manual override protection is retained.
 
+Adding a recognized model from the remote catalog loads its full built-in
+capabilities. Recognized entries are highlighted and stably partitioned ahead of
+unknown entries in this picker, including filtered searches. Recognition and
+template selection share the server library; vendor-name guesses are insufficient.
+Loading fills the complete
+capabilities and derives editable parameter rules before save. Loading is read-only;
+it does not create or modify a stored model until the user saves. Switching models,
+copying a configuration or editing capabilities invalidates pending automatic
+loads. Unknown models keep an editable initial configuration without invented
+capabilities. The model editor also offers built-in templates across protocols and
+saved model configurations as explicit copy sources. Copying retains the target
+ID, display name, enabled state and connection; saved parameter rules, defaults and
+locks are preserved. Source credentials and connection settings are never copied.
+
 When parameter rules are enabled, the Composer renders only enabled, visible controls. Empty defaults are omitted from requests. The server independently applies the stored policy, rejects undeclared parameters and overrides client values for locked parameters before persisting the job. The selected model protocol is server-derived and snapshotted for asynchronous recovery. Native adapters still validate their actual wire contracts; configuring a parameter cannot make an upstream API support it.
 
 xAI video catalog discovery tries the official dedicated path and falls back to `/models` only for HTTP 404, 405 or 501. Both catalog envelopes are supported. Connection tests expose fixed explanations for normalized HTTP statuses without returning upstream response bodies or credentials. Architecture reference and exact upstream review are recorded in `docs/third-party/reuse-audit.md`.
+
+## Sign-in screen
+
+The login page uses a compact branded card with Username and Password fields
+and a Login button. It omits the protected-workspace caption and decorative
+password/button icons; submission progress and authentication errors remain visible.
+Inputs retain autocomplete and do not automatically open the mobile keyboard.
+
+### Gallery return-to-top and account login
+
+- Recent creations, all works, favorites and project-detail galleries show a return-to-top button after the active scroll container exceeds 600px. Desktop uses the internal gallery scroller; mobile uses the workspace scroller.
+- The button aligns horizontally with the Composer send button's center, 12px above the Composer. Pages without a Composer retain alignment to the gallery's right edge and a 20px viewport-bottom gap. It is 40px on desktop and 44px on mobile, with a light circular surface, fine border and subtle shadow, without backdrop blur. It hides in selection mode, the viewer/editor and while the soft keyboard reduces the visible viewport.
+- Clicking scrolls to the top smoothly, unless the application/system reduced-motion setting requests immediate movement. Route changes, layout changes and Composer resizing recompute placement.
+- Login initializes the username and password as empty, including after logout/session expiry. Either empty field disables submission. Standard `username` and `current-password` autocomplete attributes remain available to the browser; the application does not assume an account name.
+
+### In-place media editing workspace
+
+Opening an image or video shows its original content and a compact floating Composer, replacing the old action footer and zoom widget. Focusing expands the existing Composer; clicking the image stage collapses it without clearing text or settings. Settings popovers and uploads do not collapse it. Desktop wheel zoom is anchored to the pointer, clamped to 1–4×, with drag and double-click reset; mobile pinch/double-tap remains available.
+
+The editor binds the current source implicitly. Image mode prefers `image.edit`, or an explicitly declared reference-image generation operation. Video mode uses the clean original as a single first frame, temporarily hiding the mask. Task creation remains in the viewer, with progress, explicit retry/cancel actions and output thumbnails above the Composer. Clicking an image result starts a new source draft; videos play inline. Closing the viewer never cancels submitted jobs. Drafts are isolated by account/workspace mount, project and source, with eight recent in-memory source sessions retained. Model settings use a separate editing memory scope, retaining the same per-mode/per-model structure without overwriting the main Composer draft.
+
+The mask button is hidden while the prompt is unfocused, including when the viewer is idle or settings are open. Focusing the prompt reveals it; activating it preserves focus long enough for mouse/touch clicks, and keyboard focus on the entry remains supported. The mask button sits 12px above the Composer, horizontally centered on its send button, matching the return-to-top circle size (40px desktop, 44px mobile). Applying a mask returns to the same image, displaying its tinted coverage. Reopening preserves the applied document, including undo history; clearing and applying removes coverage. Dirty-state confirmation compares coverage with the last applied document. Brush, eraser, diameter, undo/redo, clear and visibility controls sit below the canvas, respecting bottom safe areas.
+
+Mobile generation settings value fields use the same 12px font as row labels, overriding only the Composer settings panel's enlarged controls. Desktop typography and option-card styling are unchanged.
+
+Video sources use the same floating Composer and inline task/results UI. Video mode offers declared editing/extension operations and sends the original video. Switching to image mode leaves the video visible and seekable and performs no capture or upload. Only opening the mask editor or pressing send pauses and captures the decoded current frame with Canvas, retaining native dimensions. A mask freezes its source frame; unmasked sends always use the video's current position. Switching modes alone never creates an asset. Capture/upload errors preserve the video and show a retryable error without submitting a job.
+
+Captured frames and their masks are server-marked temporary inputs, excluded from gallery, library, project covers and item counts immediately. They retain ownership checks and source provenance. The server removes their media/thumbnail files after all jobs referencing the frame/mask group reach a terminal state, including failures and cancellation; cleanup runs independently of the browser and resumes after restart. Unsubmitted abandoned inputs expire after 24 hours. Tombstone records preserve job history, while generated outputs link to the original video. Retrying after cleanup requires an explicit fresh send at the selected video position; the application does not silently regenerate an input or reuse a missing mask. No additional player or browser decoder dependency is introduced.
