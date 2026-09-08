@@ -1,3 +1,4 @@
+import type { APIResponse, Route } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -5,6 +6,27 @@ import { resolve } from 'node:path';
 import { AxeBuilder } from '@axe-core/playwright';
 import type { ModelDto } from '@imagine/shared';
 import { test, expect, type APIRequestContext, type Page } from './fixtures.js';
+
+// Buffer actual HTTP responses before fulfilling them to the browser. This avoids
+// Chromium CDP body eviction during the editor's rapid media/layout updates.
+async function capturePost(page: Page, path: string) {
+  let resolve!: (response: APIResponse) => void;
+  let reject!: (error: unknown) => void;
+  const response = new Promise<APIResponse>((yes, no) => { resolve = yes; reject = no; });
+  const pattern = `**${path}`;
+  const handler = async (route: Route) => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    try {
+      const upstream = await route.fetch();
+      await upstream.body();
+      await route.fulfill({ response: upstream });
+      await page.unroute(pattern, handler);
+      resolve(upstream);
+    } catch (error) { reject(error); }
+  };
+  await page.route(pattern, handler);
+  return { response };
+}
 
 async function upload(request: APIRequestContext, name = 'coast') {
   const response = await request.post('/internal/assets/upload', { multipart: {
@@ -1720,14 +1742,16 @@ test('mobile edge navigation, scroll boundaries and installed viewport remain st
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('gallery action buttons share the same frosted surface', async ({ page, request }) => {
+test('gallery action buttons share the intended surface for each layout', async ({ page, request }) => {
   await upload(request); await open(page);
   const styles = await page.locator('.study-card').first().evaluate(element => ['.card-bookmark', '.card-reference', '.card-more'].map(selector => {
     const style = getComputedStyle(element.querySelector(selector)!);
     return { background: style.backgroundColor, blur: style.backdropFilter, radius: style.borderRadius, width: style.width, height: style.height };
   }));
   expect(styles[1]).toEqual(styles[0]); expect(styles[2]).toEqual(styles[0]);
-  expect(styles[0]!.blur).toBe('blur(9px)');
+  const mobile = page.viewportSize()!.width <= 760;
+  expect(styles[0]!.blur).toBe(mobile ? 'none' : 'blur(9px)');
+  if (mobile) expect(styles[0]!.background).toBe('rgba(0, 0, 0, 0)');
 });
 
 
@@ -1898,7 +1922,7 @@ test('image editor submits overlay masks and clean first-frame videos without na
   await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
     const prompt = controls.getByLabel('创作描述', { exact: true }); await prompt.fill('Overlay mask edit fixture');
     await expect(prompt).toHaveValue('Overlay mask edit fixture');
-    let response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+    let response = (await capturePost(page, '/internal/jobs')).response;
     await controls.getByRole('button', { name: '开始生成', exact: true }).click();
     const imageResponse = await response; expect(imageResponse.status()).toBe(202);
     const imageJob = (await imageResponse.json()).job;
@@ -1908,7 +1932,7 @@ test('image editor submits overlay masks and clean first-frame videos without na
     await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(controls.getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await prompt.fill('Animate the clean sea');
-    response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+    response = (await capturePost(page, '/internal/jobs')).response;
     await controls.getByRole('button', { name: '开始生成', exact: true }).click();
     const videoResponse = await response; expect(videoResponse.status()).toBe(202);
     const videoJob = (await videoResponse.json()).job;
@@ -1968,8 +1992,8 @@ test('video workspace defers frame capture until send and removes temporary inpu
   await expect.poll(() => video.evaluate(element => !(element as HTMLVideoElement).seeking)).toBe(true);
   expect(uploads).toBe(0);
   await controls.getByLabel('创作描述', { exact: true }).fill('Edit the currently paused blue frame');
-  const capture = page.waitForResponse(response => response.url().endsWith('/internal/assets/upload') && response.request().method() === 'POST');
-  const jobResponse = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+  const capture = (await capturePost(page, '/internal/assets/upload')).response;
+  const jobResponse = (await capturePost(page, '/internal/jobs')).response;
   await controls.getByRole('button', { name: '开始生成', exact: true }).click();
   const frameResponse = await capture; expect(frameResponse.status()).toBe(201); const frame = (await frameResponse.json()).asset;
   expect(frame).toMatchObject({ parentAssetId: source.id, width: 320, height: 180, type: 'image' });
@@ -2028,7 +2052,7 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
   await expect(viewer.locator('.viewer-source-video')).toBeVisible();
   await controls.getByLabel('创作描述', { exact: true }).click();
-  const capture = page.waitForResponse(response => response.url().endsWith('/internal/assets/upload'));
+  const capture = (await capturePost(page, '/internal/assets/upload')).response;
   await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
   const frame = (await (await capture).json()).asset;
   await expect(page.locator('.mask-stage')).toBeVisible();
@@ -2036,7 +2060,7 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   const stage = (await page.locator('.mask-stage').boundingBox())!;
   await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2); await page.mouse.down();
   await page.mouse.move(stage.x + stage.width / 2 + 15, stage.y + stage.height / 2, { steps: 3 }); await page.mouse.up();
-  const uploadMask = page.waitForResponse(response => response.url().endsWith('/internal/assets/upload'));
+  const uploadMask = (await capturePost(page, '/internal/assets/upload')).response;
   await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
   const mask = (await (await uploadMask).json()).asset;
   await expect(page.locator('.mask-workspace')).toHaveCount(0);
@@ -2044,7 +2068,7 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   const library = (await (await request.get('/internal/assets?limit=100')).json()).items;
   expect(library.some((asset: { id: string }) => [frame.id, mask.id].includes(asset.id))).toBe(false);
   await controls.getByLabel('创作描述', { exact: true }).fill('Modify the marked video frame');
-  const submitted = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+  const submitted = (await capturePost(page, '/internal/jobs')).response;
   await controls.getByRole('button', { name: '开始生成', exact: true }).click();
   const result = await submitted; expect(result.status()).toBe(202);
   expect((await result.json()).job.request.inputs).toEqual([{ assetId: frame.id, role: 'source' }, { assetId: mask.id, role: 'mask' }]);
