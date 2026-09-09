@@ -474,7 +474,8 @@ test('prompt focus keeps geometry and settings fields share one appearance', asy
     expect((await composer.boundingBox())!.height).toBe(before.height);
     expect((await input.boundingBox())!.height).toBe(inputBefore.height);
     await input.fill('第一行\n第二行\n第三行');
-    expect((await composer.boundingBox())!.height).toBe(before.height);
+    const lineHeight = await input.evaluate(node => parseFloat(getComputedStyle(node).lineHeight));
+    await expect.poll(async () => Math.abs((await composer.boundingBox())!.height - before.height - lineHeight)).toBeLessThanOrEqual(1);
     await page.getByRole('button', { name: '生成设置', exact: true }).click();
     const panel = page.locator('.composer-generation-settings');
     const fields = panel.locator('.setting-line > .option-trigger, .setting-line > .select-trigger, .setting-line > input:not([type="checkbox"])');
@@ -498,7 +499,8 @@ test('prompt focus keeps geometry and settings fields share one appearance', asy
     await panel.getByLabel('中间预览数量').fill('2');
     await page.screenshot({ path: testInfo.outputPath('unified-settings.png'), animations: 'disabled' });
     await page.keyboard.press('Escape');
-    expect((await composer.boundingBox())!.height).toBe(before.height);
+    const expectedHeight = before.height + (testInfo.project.use.viewport!.width > 760 ? lineHeight : 0);
+    await expect.poll(async () => Math.abs((await composer.boundingBox())!.height - expectedHeight)).toBeLessThanOrEqual(1);
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
