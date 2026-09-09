@@ -253,14 +253,14 @@ const packageJson = JSON.parse(await readFile(new URL('../../package.json', impo
 const serverPackageJson = JSON.parse(await readFile(new URL('../../apps/server/package.json', import.meta.url), 'utf8'));
 const webPackageJson = JSON.parse(await readFile(new URL('../../apps/web/package.json', import.meta.url), 'utf8'));
 const releaseVersions = await readReleaseVersions();
-assert.equal(packageJson.version, '0.1.4');
+assert.equal(packageJson.version, '0.1.6');
 assert.equal(serverPackageJson.version, packageJson.version);
 assert.equal(webPackageJson.version, packageJson.version);
 assert.deepEqual(releaseVersions, {
-  appInfo: '0.1.4',
-  root: '0.1.4',
-  server: '0.1.4',
-  web: '0.1.4',
+  appInfo: '0.1.6',
+  root: '0.1.6',
+  server: '0.1.6',
+  web: '0.1.6',
 });
 assert.equal(validateReleaseVersions(releaseVersions), packageJson.version);
 for (const field of ['appInfo', 'server', 'web']) {
@@ -278,16 +278,16 @@ assert.throws(() => validateReleaseTag('v0.1.1', packageJson.version), /exactly 
 assert.throws(() => validateReleaseTag('v01.2.3', '01.2.3'), /stable/);
 assert.throws(() => validateReleaseTag('v1.2.3', '1.2.3', 'refs/heads/main'), /pushed tag ref/);
 assert.deepEqual(validateReleaseTag('v1.2.3', '1.2.3'), { tag: 'v1.2.3', version: '1.2.3' });
-assert.deepEqual(validateReleaseTag('v0.1.4', packageJson.version), { tag: 'v0.1.4', version: '0.1.4' });
+assert.deepEqual(validateReleaseTag('v0.1.6', packageJson.version), { tag: 'v0.1.6', version: '0.1.6' });
 
 const releaseDigest = `sha256:${'a'.repeat(64)}`;
 const releaseNotes = formatReleaseNotes(changelogText, packageJson.version, releaseDigest);
-assert.match(releaseNotes, /临时输入/u);
-assert.match(releaseNotes, /### 模型管理与使用体验/u);
+assert.match(releaseNotes, /移动到项目/u);
+assert.match(releaseNotes, /### 项目与模型管理/u);
 assert.match(releaseNotes, /### 贡献者/u);
-assert.match(releaseNotes, /compare\/v0\.1\.3\.\.\.v0\.1\.4/u);
+assert.match(releaseNotes, /compare\/v0\.1\.4\.\.\.v0\.1\.6/u);
 assert.match(releaseNotes, new RegExp(releaseDigest, 'u'));
-assert.match(releaseNotes, /blob\/v0\.1\.4\/RELEASE\.md/u);
+assert.match(releaseNotes, /blob\/v0\.1\.6\/RELEASE\.md/u);
 assert.doesNotMatch(releaseNotes, /\[Unreleased\]/u);
 assert.throws(() => formatReleaseNotes(changelogText, '0.1.1', releaseDigest), /exactly one section/u);
 assert.throws(() => formatReleaseNotes(changelogText, packageJson.version, 'sha256:bad'), /immutable/u);
