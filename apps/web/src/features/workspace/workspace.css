@@ -733,3 +733,13 @@ svg { flex-shrink: 0; }
 
 .video-editing-viewer .viewer-stage { padding-bottom: calc(var(--composer-size, 56px) + 64px); }
 .composer-source-label { margin: 0 6px 6px; font-size: 12px; color: var(--muted); }
+
+.options.asset-options { min-width: 190px; }
+.move-project-list { padding: 16px; overflow-y: auto; }
+.move-project-list button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px; border-radius: 8px; text-align: left; }
+.move-project-list button:hover { background: #edf3ee; }
+.move-project-list button span { flex: 1; overflow-wrap: anywhere; }
+.move-project-list button small { color: var(--muted); flex-shrink: 0; }
+.delete-project-files { min-height: 40px; display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 13px; }
+
+.delete-project-files input { width: 16px; height: 16px; accent-color: var(--accent); }

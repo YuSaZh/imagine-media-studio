@@ -129,9 +129,14 @@ export class CollectionRepository {
     return changed ? this.get(id) : null;
   }
 
-  public delete(id: string): boolean {
+  public delete(id: string, deleteAsset?: (assetId: string) => boolean): boolean {
     if (!this.get(id)) return false;
     return this.database.transaction((transaction) => {
+      if (deleteAsset) {
+        for (const assetId of this.listAssetIds(id)) {
+          if (!deleteAsset(assetId)) throw new CollectionRepositoryError('asset_not_found', 'Project asset could not be deleted.');
+        }
+      }
       const result = transaction.delete(collections).where(eq(collections.id, id)).run();
       if (result.changes === 0) return false;
       transaction
@@ -192,6 +197,19 @@ export class CollectionRepository {
           }),
         )
         .run();
+      return added;
+    });
+  }
+
+  public moveAssets(collectionId: string, assetIds: readonly string[]): number {
+    return this.database.transaction((transaction) => {
+      // Validate destination and every asset before removing any membership.
+      const added = this.addAssets(collectionId, assetIds);
+      const memberships = transaction.select().from(collectionAssets)
+        .where(inArray(collectionAssets.assetId, [...new Set(assetIds)])).all();
+      for (const membership of memberships) {
+        if (membership.collectionId !== collectionId) this.removeAsset(membership.collectionId, membership.assetId);
+      }
       return added;
     });
   }

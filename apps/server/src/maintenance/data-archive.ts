@@ -42,11 +42,6 @@ import {
   type DataArchiveEntry,
   type DataArchiveManifest,
 } from './archive-format.js';
-import {
-  OfflineMaintenanceLeaseError,
-  assertOfflineMaintenanceLease,
-  type OfflineMaintenanceLease,
-} from './runtime-lock.js';
 import { UnsafeStoragePathError } from '../storage/path-safety.js';
 import type { StoragePaths } from '../storage/paths.js';
 
@@ -120,7 +115,6 @@ export interface DataArchiveOptions {
   readonly fsops?: Partial<DataArchiveFsOps>;
   readonly id?: () => string;
   readonly idFactory?: () => string;
-  readonly lease?: OfflineMaintenanceLease;
   readonly maxBytes?: number;
   readonly maxEntries?: number;
   readonly paths: StoragePaths;
@@ -206,7 +200,6 @@ function publicError(error: unknown): Error {
   if (
     error instanceof DataArchiveError
     || error instanceof DataArchiveFormatError
-    || error instanceof OfflineMaintenanceLeaseError
     || error instanceof UnsafeStoragePathError
   ) return error;
   if (error instanceof AdapterManifestError || error instanceof AdapterSourcePolicyError) {
@@ -1111,7 +1104,6 @@ export class DataArchive {
   private readonly clock: DataArchiveClock;
   private readonly fsops: DataArchiveFsOps;
   private readonly idFactory: () => string;
-  private readonly lease: OfflineMaintenanceLease | undefined;
   private readonly maxBytes: number;
   private readonly maxEntries: number;
   private readonly paths: StoragePaths;
@@ -1123,7 +1115,6 @@ export class DataArchive {
     this.clock = options.clock ?? systemClock;
     this.fsops = { ...defaultFsOps, ...(options.fsops ?? {}) };
     this.idFactory = options.id ?? options.idFactory ?? (() => `data-v1-${randomUUID()}`);
-    this.lease = options.lease;
     this.maxBytes = options.maxBytes ?? MAX_ARCHIVE_BYTES;
     this.maxEntries = options.maxEntries ?? MAX_ARCHIVE_ENTRIES;
     this.paths = options.paths;
@@ -1176,7 +1167,6 @@ export class DataArchive {
     let finalReservationStats: Stats | undefined;
     let publishedStats: Stats | undefined;
     try {
-      await assertOfflineMaintenanceLease(this.lease, this.paths.root);
       const sourceScan = newDirectoryScanState();
       const root = await validateRootLayout(this.fsops, this.paths, sourceScan);
       await validateMediaLayout(this.fsops, this.paths, sourceScan);
@@ -1258,7 +1248,6 @@ export class DataArchive {
       await removeFileIfPresent(this.fsops, `${stagedDatabase}-shm`);
       addEntry('database/app.db', dbMetadata);
 
-      await assertOfflineMaintenanceLease(this.lease, root);
       const mediaFiles: { archivePath: string; sourcePath: string }[] = [];
       const inodeSet = new Set<string>();
       for (const name of MEDIA_DIRECTORY_NAMES) {
@@ -1309,7 +1298,6 @@ export class DataArchive {
       await syncDirectory(this.fsops, stagingRoot);
       await verifyDataArchive(stagingBundle, { fsops: this.fsops });
 
-      await assertOfflineMaintenanceLease(this.lease, root);
       await assertAbsent(this.fsops, finalBundle);
       try {
         await this.fsops.mkdir(finalBundle, { mode: DIRECTORY_MODE, recursive: false });

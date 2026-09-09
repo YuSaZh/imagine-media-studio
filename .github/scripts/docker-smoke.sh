@@ -85,24 +85,6 @@ fi
 
 compose up --detach --wait --wait-timeout 120
 
-running_bundle_count=$(find "$DATA_HOST_DIR/backups" -mindepth 1 -maxdepth 1 -type d -name '*.bundle' -print | wc -l | tr -d ' ')
-running_archive_output="$smoke_tmp_dir/archive-create-while-running.txt"
-if compose run --rm --no-deps --entrypoint node imagine-media \
-  dist/maintenance/data-archive-cli.js create --data-dir /data >"$running_archive_output" 2>&1; then
-  echo 'Archive creation unexpectedly succeeded while the server was running.' >&2
-  exit 1
-fi
-RUNNING_ARCHIVE_OUTPUT="$running_archive_output" APP_SECRET="$APP_SECRET" node --input-type=module <<'NODE'
-import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-
-const output = await readFile(process.env.RUNNING_ARCHIVE_OUTPUT, 'utf8');
-assert.equal(output.includes(process.env.APP_SECRET ?? ''), false);
-assert.match(output, /Offline maintenance|runtime lease|Runtime maintenance/u);
-NODE
-running_bundle_count_after=$(find "$DATA_HOST_DIR/backups" -mindepth 1 -maxdepth 1 -type d -name '*.bundle' -print | wc -l | tr -d ' ')
-test "$running_bundle_count_after" = "$running_bundle_count"
-
 IFS=$'\t' read -r job_id asset_id collection_id source_id mask_id edit_job_id edit_asset_id backup_id backup_sha256 < <(
   BASE_URL="$base_url" node --input-type=module <<'NODE'
 import { createHash } from 'node:crypto';

@@ -2077,3 +2077,174 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   await expect(viewer.locator('.viewer-source-video')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('video-mask-cleanup.png'), animations: 'disabled' });
 });
+
+test('model dialog select menus scroll by wheel without scrolling the form', async ({ page, request }, testInfo) => {
+  const { provider } = (await (await request.post('/internal/providers', { data: { name: 'Wheel fixture', type: 'openai', enabled: true } })).json());
+  try {
+    await page.route(`**/internal/providers/${provider.id}/models/catalog`, route => route.fulfill({ json: { models: [] } }));
+    await open(page, '/settings/providers');
+    await page.getByRole('region', { name: '连接 Wheel fixture', exact: true }).getByRole('button', { name: '添加模型', exact: true }).click();
+    await expect(page.getByText('正在加载内置模型…', { exact: true })).toHaveCount(0);
+    for (const label of ['配置来源模型', '模型调用协议']) {
+      await page.getByRole('combobox', { name: label, exact: true }).click();
+      const list = page.getByRole('listbox', { name: label, exact: true }); await expect(list).toBeVisible();
+      const initial = await list.evaluate(element => element.scrollTop);
+      const formScroll = await page.locator('.model-form-body').evaluate(element => element.scrollTop);
+      const bounds = (await list.boundingBox())!;
+      await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await page.mouse.wheel(0, 500);
+      await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(initial);
+      expect(await page.locator('.model-form-body').evaluate(element => element.scrollTop)).toBe(formScroll);
+      await page.screenshot({ path: testInfo.outputPath(`scroll-${label}.png`), animations: 'disabled' });
+      await page.keyboard.press('Escape'); await expect(list).toHaveCount(0);
+      await expect(page.getByRole('dialog', { name: '添加模型', exact: true })).toBeVisible();
+    }
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('add catalog excludes saved models per provider and restores deleted entries', async ({ page, request }) => {
+  const providers = [];
+  for (const name of ['Catalog current', 'Catalog other']) providers.push((await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json()).provider);
+  const save = async (providerId: string, modelId: string, enabled: boolean) => (await (await request.post('/internal/models', { data: { providerId, modelId, displayName: modelId, enabled, capabilities: { operations: ['image.generate'] } } })).json()).model;
+  try {
+    const saved = await save(providers[0].id, 'saved-disabled', false);
+    await save(providers[1].id, 'other-only', true);
+    await page.route(`**/internal/providers/${providers[0].id}/models/catalog`, route => route.fulfill({ json: { models: ['saved-disabled', 'other-only', 'unknown-future'].map(id => ({ id, displayName: id })) } }));
+    await open(page, '/settings/providers');
+    const add = page.getByRole('region', { name: '连接 Catalog current', exact: true }).getByRole('button', { name: '添加模型', exact: true });
+    await add.click();
+    const picker = page.getByRole('combobox', { name: '远端模型目录', exact: true }); await picker.click();
+    await expect(page.getByRole('option', { name: 'saved-disabled', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('option', { name: 'other-only', exact: true })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'unknown-future', exact: true })).toBeVisible();
+    await picker.fill('saved-disabled'); await expect(page.getByText('没有匹配的模型', { exact: true })).toBeVisible();
+    expect((await request.delete(`/internal/models/${saved.id}`)).ok()).toBe(true);
+    await expect(page.getByRole('option', { name: 'saved-disabled', exact: true })).toBeVisible();
+    await page.getByRole('option', { name: 'saved-disabled', exact: true }).click();
+    await expect(page.getByLabel('模型 ID', { exact: true })).toHaveValue('saved-disabled');
+  } finally { for (const provider of providers) await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('gallery shows live generation seconds and compact completed duration', async ({ page, request }, testInfo) => {
+  const submitted = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Timing completed fixture', inputs: [] } });
+  expect(submitted.status()).toBe(202); const id = (await submitted.json()).job.id;
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).job.status, { timeout: 20000 }).toBe('completed');
+  const detail = (await (await request.get(`/internal/jobs/${id}`)).json());
+  const end = Date.now(), start = end - 70000;
+  const completed = { ...detail.job, createdAt: new Date(start).toISOString(), completedAt: new Date(end).toISOString() };
+  const activeId = randomUUID(), active = { ...detail.job, id: activeId, prompt: 'Timing active fixture', status: 'submitting', stage: 'submitting', progress: null, outputCount: 0, createdAt: new Date(end - 10000).toISOString(), completedAt: null };
+  await page.route('**/internal/assets?**', async route => {
+    const response = await route.fetch(), data = await response.json();
+    if (data.jobs) data.jobs = data.jobs.map((job: { id: string }) => job.id === id ? completed : job);
+    await route.fulfill({ response, json: data });
+  });
+  await page.route('**/internal/jobs?**', async route => {
+    const response = await route.fetch(), data = await response.json();
+    data.items = [active, ...data.items]; await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  const pending = page.locator(`[data-pending-job="${activeId}"] .pending-study-copy`);
+  await expect(pending).toContainText(/生成中 · \d+s/);
+  await expect(pending).not.toContainText('正在提交');
+  const seconds = async () => Number((await pending.innerText()).match(/生成中 · (\d+)s/)![1]);
+  const first = await seconds(); expect(first).toBeGreaterThanOrEqual(10);
+  await expect.poll(seconds).toBeGreaterThan(first);
+  const caption = page.locator(`[data-study-id="${detail.assets[0].id}"] .study-caption > span`);
+  await expect(caption).toHaveText('mock-image-v1 · 1m10s');
+  await page.reload(); await expect(caption).toHaveText('mock-image-v1 · 1m10s');
+  await expect.poll(seconds).toBeGreaterThan(first);
+  await page.locator(`[data-study-id="${detail.assets[0].id}"] .study-open`).hover();
+  await page.screenshot({ path: testInfo.outputPath('generation-duration.png'), animations: 'disabled' });
+});
+
+test('prompt grows by content and mobile blur collapses without losing text', async ({ page }, testInfo) => {
+  await open(page);
+  const input = page.getByLabel('创作描述', { exact: true });
+  const mobile = page.viewportSize()!.width <= 760;
+  const dimensions = () => input.evaluate(element => { const style = getComputedStyle(element); return { height: element.getBoundingClientRect().height, line: parseFloat(style.lineHeight), padding: parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth), overflow: style.overflowY }; });
+  const expectLines = async (lines: number) => { await expect.poll(async () => { const d = await dimensions(); return Math.abs(d.height - (d.line * lines + d.padding)); }).toBeLessThan(2); };
+  await input.click(); await input.fill('first\nsecond'); await expectLines(2);
+  await input.fill('first\nsecond\nthird'); await expectLines(3);
+  const long = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n');
+  await input.fill(long); await expectLines(mobile ? 4 : 5);
+  expect((await dimensions()).overflow).toBe('auto');
+  await input.evaluate(element => (element as HTMLTextAreaElement).blur());
+  await expectLines(mobile ? 2 : 5); await expect(input).toHaveValue(long);
+  await input.click(); await expectLines(mobile ? 4 : 5);
+  await input.fill(''); await expectLines(2);
+  await input.fill('wrapped words '.repeat(100)); await expectLines(mobile ? 4 : 5);
+  await page.screenshot({ path: testInfo.outputPath('prompt-content-height.png'), animations: 'disabled' });
+});
+
+test('desktop rail expands in place with fixed logo and mobile keeps its drawer', async ({ page, request }, testInfo) => {
+  const project = (await (await request.post('/internal/collections', { data: { name: 'Sidebar project' } })).json()).collection;
+  await open(page);
+  const desktop = page.viewportSize()!.width > 760;
+  if (desktop) {
+    const rail = page.locator('.side-rail'), logo = rail.locator('.identity');
+    const before = (await logo.boundingBox())!;
+    const iconBefore = (await rail.getByRole('button', { name: '创作', exact: true }).locator('svg').boundingBox())!;
+    await logo.click(); await expect(logo).toHaveAttribute('aria-expanded', 'true');
+    expect((await rail.boundingBox())!.width).toBe(260);
+    const after = (await logo.boundingBox())!; expect(after.x).toBe(before.x); expect(after.y).toBe(before.y);
+    const iconAfter = (await rail.getByRole('button', { name: '创作', exact: true }).locator('svg').boundingBox())!;
+    expect(iconAfter.x).toBe(iconBefore.x); expect(iconAfter.y).toBe(iconBefore.y);
+    await expect(page.locator('.navigation-panel')).toHaveCount(0); await expect(page.locator('.panel-backdrop')).toHaveCount(0);
+    expect((await page.locator('.workspace').boundingBox())!.x).toBe(260);
+    const composer = (await page.locator('.creation-composer').boundingBox())!;
+    expect(composer.x).toBeGreaterThan(260); expect(composer.x + composer.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    await page.getByLabel('创作描述', { exact: true }).fill('The workspace remains interactive');
+    for (const name of ['创作', '全部作品', '收藏', '项目', 'Sidebar project']) await expect(rail.getByRole('button', { name, exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('inline-sidebar.png'), animations: 'disabled' });
+    await rail.getByRole('button', { name: 'Sidebar project', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`)); await expect(logo).toHaveAttribute('aria-expanded', 'true');
+    await expect(rail.getByRole('button', { name: 'Sidebar project', exact: true })).toHaveAttribute('aria-current', 'page');
+    await logo.click(); expect((await rail.boundingBox())!.width).toBe(72); expect((await logo.boundingBox())!.x).toBe(before.x);
+  } else {
+    await page.getByRole('button', { name: '打开导航', exact: true }).click();
+    const drawer = page.getByRole('dialog', { name: 'Imagine', exact: true }); await expect(drawer).toBeVisible();
+    await drawer.getByRole('button', { name: 'Sidebar project', exact: true }).click(); await expect(drawer).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`));
+  }
+});
+
+test('card project moves and optional project file deletion', async ({ page, request }, testInfo) => {
+  const asset = await upload(request);
+  const source = (await (await request.post('/internal/collections', { data: { name: 'Source project' } })).json()).collection;
+  const destination = (await (await request.post('/internal/collections', { data: { name: 'Destination project' } })).json()).collection;
+  await open(page, '/library');
+  const card = page.locator(`[data-study-id="${asset.id}"]`);
+  await card.hover();
+  await card.getByRole('button', { name: /更多操作/ }).click();
+  await expect(page.locator('.asset-options')).toBeVisible();
+  expect((await page.locator('.asset-options').boundingBox())!.width).toBe(190);
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('asset-menu.png') });
+  await page.getByRole('button', { name: '移动到项目', exact: true }).click();
+  await page.getByRole('dialog', { name: '移动到项目' }).getByRole('button', { name: 'Source project', exact: true }).click();
+  await expect.poll(async () => (await (await request.get(`/internal/assets/${asset.id}`)).json()).asset.collectionIds).toEqual([source.id]);
+  await open(page, `/projects/${source.id}`);
+  await card.hover();
+  await card.getByRole('button', { name: /更多操作/ }).click();
+  await page.getByRole('button', { name: '移动到项目', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '移动到项目' });
+  await expect(picker.getByRole('button', { name: 'Source project 当前项目' })).toBeDisabled();
+  await picker.getByRole('button', { name: 'Destination project', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  await expect.poll(async () => (await (await request.get(`/internal/assets/${asset.id}`)).json()).asset.collectionIds).toEqual([destination.id]);
+  await open(page, `/projects/${destination.id}`);
+  await page.getByRole('button', { name: '项目操作', exact: true }).click();
+  await page.getByRole('button', { name: '删除项目', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: '同时删除项目内文件' })).not.toBeChecked();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page).toHaveURL(/\/projects$/);
+  expect((await request.get(`/internal/assets/${asset.id}`)).status()).toBe(200);
+  await request.post(`/internal/collections/${source.id}/assets`, { data: { assetIds: [asset.id] } });
+  await open(page, `/projects/${source.id}`);
+  await page.getByRole('button', { name: '项目操作', exact: true }).click();
+  await page.getByRole('button', { name: '删除项目', exact: true }).click();
+  await page.getByRole('checkbox', { name: '同时删除项目内文件' }).check();
+  await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('delete-project.png') });
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page).toHaveURL(/\/projects$/);
+  expect((await request.get(`/internal/assets/${asset.id}`)).status()).toBe(404);
+});

@@ -23,6 +23,10 @@ Separate desktop and mobile layouts, deployed as a single container.
 > This project provides a web interface for generation jobs. It does not include model inference or API credits. Real generation requires an external API; prompts and reference media are sent to your chosen provider. Media and jobs are stored on your server, and API keys are encrypted on the server.
 
 <a id="screenshots"></a>
+Prompts grow with content up to five desktop lines or four mobile lines; mobile blur collapses them to two. The application no longer uses runtime lock files; operators stop the service before offline archive operations.
+
+Click the desktop rail logo to expand navigation and projects in place; the main content uses the remaining space.
+
 ## Screenshots
 
 <details>
@@ -53,6 +57,7 @@ Screenshots come from this project's automated workspace checks and show uploade
 - Built-in MAI-Image, Seedream and Seedance templates cover compatible channels for reviewed image generation/editing and text/first-frame video models; native-only features remain disabled by default.
 - Edit and generate directly in the image viewer with an expandable Composer, desktop wheel zoom and reusable result thumbnails. Image-input models support either native masks or a composited translucent overlay; video first frames use the clean original.
 - Video details share the floating Composer and in-place editing/extension. Image mode keeps the video seekable and captures its current frame only when opening masks or sending; temporary frames stay out of the library and are cleaned after jobs finish, without an additional player or browser decoder.
+- Generation cards show elapsed seconds live and compact completion times beside model names. Model-adding catalogs hide models already saved in the current connection and restore them after deletion.
 - Recognized models are highlighted and listed first in the add-model catalog; see the [model capability table](./docs/model-capabilities.md). Media cards can copy the complete prompt directly. Mobile card actions use icons without background fill or blur; prompt focus keeps its height, and generation settings share consistent field styling across both layouts.
 - Both layouts offer count presets 1 / 2 / 4 / 8 and a plus button for custom counts (1–32). Count creates independent single-output jobs, unaffected by model batch capabilities or parameter rules; the server queue controls execution concurrency.
 - Both layouts offer auto / 1K / 2K / 4K / custom image resolution popovers. Unlocking the aspect ratio switches it to auto while retaining the custom dimensions. Dimensions align to the nearest multiple of 16 on blur or apply; auto aspect ratio keeps the edges independent.
@@ -86,7 +91,7 @@ The project menu can mark a project private: its content is excluded from the ho
 ### Workspace and Media Library
 
 - A virtualized masonry gallery for images and videos, with search, type filters, favorites, and batch actions.
-- Organize media into projects; new output generated inside a project is added to that project.
+- Organize media into projects; new output generated inside a project is added to that project. Move media to another project from its menu. Deleting a project preserves media by default, with an option to delete its files too.
 - Generation preferences are remembered per account, project, image/video mode, and model.
 - Desktop and mobile layouts are maintained separately: desktop has fixed header controls and a scrolling gallery, while mobile retains compact controls and touch interactions.
 

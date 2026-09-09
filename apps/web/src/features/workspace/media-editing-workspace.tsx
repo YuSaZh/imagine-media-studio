@@ -1,3 +1,4 @@
+import { GenerationStatus } from './generation-status';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { DEFAULT_IMAGE_INPUT_POLICY, MASK_OVERLAY_COLOR, ModelCapabilitiesSchema, type AssetDto, type MaskDocument, type MediaOperation } from '@imagine/shared';
@@ -8,7 +9,7 @@ import { createBrowserId } from '../../browser-id';
 import { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
 import { usePatchSettings, useSettingsQuery } from '../settings/api/settings-query';
 import { readGenerationMemory, updateGenerationMemory } from './generation-memory';
-import { ACTIVE_JOB_STATUSES, JOB_LABELS, generationRequest, mapMedia, modelForOperation, type Creation, type MediaKind, type MediaItem, type ReferenceInput, type WorkspaceModel } from './data';
+import { ACTIVE_JOB_STATUSES, generationRequest, mapMedia, modelForOperation, type Creation, type MediaKind, type MediaItem, type ReferenceInput, type WorkspaceModel } from './data';
 import { Composer } from './composer';
 import { Viewer, type ViewerProps } from './viewer';
 import { ReferencePicker } from './reference-picker';
@@ -161,7 +162,7 @@ function EditingSession(props: ViewerProps & { models: WorkspaceModel[]; project
     <div className={`image-editing-controls ${expanded ? 'is-expanded' : ''}`}>
       {draft.jobs.length > 0 && <div className="editing-results" aria-label="本次编辑结果">{jobs.map((query, index) => {
         const result = query.data, job = result?.job;
-        return <div className="editing-result" key={draft.jobs[index]}>{result?.assets.length ? result.assets.map(asset => asset.type === 'image' ? <button type="button" key={asset.id} aria-label="编辑此生成结果" onClick={() => props.onSelectResult(mapMedia(asset, job))}><img src={asset.thumbnailUrl ?? asset.contentUrl} alt="生成结果" /></button> : <video key={asset.id} controls playsInline src={asset.contentUrl} poster={asset.posterUrl ?? undefined} aria-label="生成的视频" />) : <div className="editing-job"><span>{query.isError ? '任务读取失败' : job ? JOB_LABELS[job.status] : '正在读取任务'}</span>{job?.errorMessage && <small className="editing-job-error" title={job.errorMessage}>{job.errorMessage}</small>}{job?.progress !== null && job?.progress !== undefined && <span>{job.progress}%</span>}{query.isError && <button type="button" onClick={() => void query.refetch()}>重试读取</button>}{job && ACTIVE_JOB_STATUSES.has(job.status) && <button type="button" disabled={!props.online || actionJobs.includes(job.id)} onClick={() => void jobAction(job.id, false)}>取消</button>}{job && ['failed', 'cancelled', 'expired'].includes(job.status) && <button type="button" disabled={!props.online || actionJobs.includes(job.id)} onClick={() => void jobAction(job.id, true)}>重试</button>}</div>}</div>;
+        return <div className="editing-result" key={draft.jobs[index]}>{result?.assets.length ? result.assets.map(asset => asset.type === 'image' ? <button type="button" key={asset.id} aria-label="编辑此生成结果" onClick={() => props.onSelectResult(mapMedia(asset, job))}><img src={asset.thumbnailUrl ?? asset.contentUrl} alt="生成结果" /></button> : <video key={asset.id} controls playsInline src={asset.contentUrl} poster={asset.posterUrl ?? undefined} aria-label="生成的视频" />) : <div className="editing-job">{query.isError ? <span>任务读取失败</span> : job ? <GenerationStatus status={job.status} createdAt={job.createdAt} completedAt={job.completedAt} /> : <span>正在读取任务</span>}{job?.errorMessage && <small className="editing-job-error" title={job.errorMessage}>{job.errorMessage}</small>}{job?.progress !== null && job?.progress !== undefined && <span>{job.progress}%</span>}{query.isError && <button type="button" onClick={() => void query.refetch()}>重试读取</button>}{job && ACTIVE_JOB_STATUSES.has(job.status) && <button type="button" disabled={!props.online || actionJobs.includes(job.id)} onClick={() => void jobAction(job.id, false)}>取消</button>}{job && ['failed', 'cancelled', 'expired'].includes(job.status) && <button type="button" disabled={!props.online || actionJobs.includes(job.id)} onClick={() => void jobAction(job.id, true)}>重试</button>}</div>}</div>;
       })}</div>}
       {capturing && <p className="composer-notice editing-error" role="status">正在截取并上传当前视频帧…</p>}
       {sourceQuery.isError && <p className="composer-notice editing-error" role="alert">原素材暂时无法读取<button type="button" onClick={() => void sourceQuery.refetch()}>重试</button></p>}

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,6 @@ import { MOCK_PROVIDER_ID } from './providers/provider-registry.js';
 import type { ProviderHttpExecutor } from './providers/provider-http-client.js';
 import { canonicalDeclarativeSpec, parseDeclarativeJson } from './providers/custom-http/index.js';
 import { createServer, type ImagineServer } from './server.js';
-import { acquireOfflineMaintenanceLease, OfflineMaintenanceLeaseError } from './maintenance/runtime-lock.js';
 
 const temporaryDirectories: string[] = [];
 const servers: ImagineServer[] = [];
@@ -227,6 +226,39 @@ async function reopenTestServer(dataDir: string, appPassword: string | null = nu
 }
 
 describe('Imagine server PR 0 skeleton', () => {
+  it('moves project membership atomically and optionally deletes project assets', async () => {
+    const server = await createTestServer(false);
+    const source = server.collections.create('Move source');
+    const other = server.collections.create('Other membership');
+    const destination = server.collections.create('Private destination', true);
+    const asset = server.assets.create({ type: 'image', role: 'output', filePath: 'media/move.png', mimeType: 'image/png', fileSize: 20, sha256: 'a'.repeat(64) });
+    server.collections.addAssets(source.id, [asset.id]);
+    server.collections.addAssets(other.id, [asset.id]);
+    const move = (assetIds: string[], id = destination.id) => server.app.inject({ method: 'POST', url: `/internal/collections/${id}/assets/move`, payload: { assetIds } });
+    expect((await move([asset.id, 'missing'])).statusCode).toBe(404);
+    expect([...server.assets.collectionIdsForAsset(asset.id)].sort()).toEqual([source.id, other.id].sort());
+    expect(server.collections.listAssetIds(destination.id)).toEqual([]);
+    expect((await move([asset.id], 'missing')).statusCode).toBe(404);
+    expect((await move([asset.id])).statusCode).toBe(200);
+    expect(server.assets.collectionIdsForAsset(asset.id)).toEqual([destination.id]);
+    expect(server.collections.get(source.id)?.itemCount).toBe(0);
+    expect((await server.app.inject({ url: '/internal/assets?excludePrivate=true' })).json().items).toEqual([]);
+    expect((await server.app.inject({ method: 'DELETE', url: `/internal/collections/${destination.id}` })).statusCode).toBe(204);
+    expect(server.assets.get(asset.id)).not.toBeNull();
+    expect(server.assets.collectionIdsForAsset(asset.id)).toEqual([]);
+    server.collections.addAssets(source.id, [asset.id]);
+    server.collections.addAssets(other.id, [asset.id]);
+    expect((await server.app.inject({ method: 'DELETE', url: `/internal/collections/${source.id}?deleteAssets=invalid` })).statusCode).toBe(400);
+    expect(server.assets.get(asset.id)).not.toBeNull();
+    expect(() => server.collections.delete(source.id, id => { server.assets.softDelete(id); throw new Error('rollback'); })).toThrow('rollback');
+    expect(server.assets.get(asset.id)).not.toBeNull();
+    expect(server.collections.get(source.id)?.itemCount).toBe(1);
+    expect((await server.app.inject({ method: 'DELETE', url: `/internal/collections/${source.id}?deleteAssets=true` })).statusCode).toBe(204);
+    expect(server.assets.get(asset.id)).toBeNull();
+    expect(server.collections.get(other.id)?.itemCount).toBe(0);
+    expect((await server.app.inject({ url: `/internal/assets/${asset.id}/content` })).statusCode).toBe(404);
+  });
+
   it('persists project privacy and filters recent media and pending jobs before pagination', async () => {
     const server = await createTestServer(false);
     const dataDir = temporaryDirectories.at(-1)!;
@@ -283,61 +315,24 @@ describe('Imagine server PR 0 skeleton', () => {
     });
   });
 
-  it('holds the shared runtime gate until the server closes its SQLite resources', async () => {
-    const server = await createTestServer(false, false);
-    const dataDir = temporaryDirectories.at(-1)!;
-    const lockPath = join(dataDir, '.offline-maintenance.lock');
-    expect(await readFile(lockPath, 'utf8')).toContain('server-runtime-lease-v1');
-    await expect(acquireOfflineMaintenanceLease({
-      assertServerStopped: () => true,
-      dataRoot: dataDir,
-    })).rejects.toThrow(OfflineMaintenanceLeaseError);
-
-    await server.app.close();
-    servers.splice(servers.indexOf(server), 1);
-    await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  it('starts and reopens without a runtime lock even when a legacy file remains', async () => {
+    const first = await createTestServer(false, false);
+    const root = temporaryDirectories.at(-1)!;
+    const legacy = join(root, '.offline-maintenance.lock');
+    await expect(lstat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
+    await first.app.close(); servers.splice(servers.indexOf(first), 1);
+    await writeFile(legacy, 'obsolete runtime file', { mode: 0o600 });
+    const second = await reopenTestServer(root);
+    expect((await second.app.inject({ method: 'GET', url: '/internal/health' })).statusCode).toBe(200);
+    expect(await readFile(legacy, 'utf8')).toBe('obsolete runtime file');
+    await second.app.close(); servers.splice(servers.indexOf(second), 1);
+    await rm(legacy);
+    const third = await reopenTestServer(root);
+    expect((await third.app.inject({ method: 'GET', url: '/internal/health' })).statusCode).toBe(200);
+    await expect(lstat(legacy)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('does not initialize an offline-held root before the server gate is acquired', async () => {
-    const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-server-offline-held-'));
-    temporaryDirectories.push(dataDir);
-    const offlineLease = await acquireOfflineMaintenanceLease({
-      assertServerStopped: () => true,
-      dataRoot: dataDir,
-    });
-    try {
-      await expect(createServer({
-        config: {
-          allowHttpMediaDownloads: false,
-          allowInsecureProviderHttp: false,
-          allowPrivateNetworkAccess: false,
-          appPort: 3030,
-          appPassword: null,
-          appSecret: 'test-app-secret-with-at-least-32-characters',
-          dataDir,
-          logLevel: 'silent',
-          maxImageUploadBytes: 32 * 1024 * 1024,
-          maxRemoteImageBytes: 64 * 1024 * 1024,
-          maxRemoteVideoBytes: 1024 * 1024 * 1024,
-          maxVideoUploadBytes: 512 * 1024 * 1024,
-          providerInputMaxBytesPerFile: 64 * 1024 * 1024,
-          providerInputMaxTotalBytes: 256 * 1024 * 1024,
-          mediaProcessTimeoutMs: 30_000,
-          mockProviderEnabled: false,
-          nodeEnvironment: 'test',
-          webDistDir: resolve(dataDir, 'missing-web-dist'),
-        },
-        logger: false,
-        migrationsDirectory,
-        startRunner: false,
-      })).rejects.toThrow();
-      expect(await readdir(dataDir)).toEqual(['.offline-maintenance.lock']);
-    } finally {
-      await offlineLease.release();
-    }
-  });
-
-  it('releases the runtime gate when database initialization fails', async () => {
+  it('does not leave a runtime lock when database initialization fails', async () => {
     await expect(createTestServer(
       false,
       false,
@@ -351,7 +346,7 @@ describe('Imagine server PR 0 skeleton', () => {
     await expect(lstat(join(dataDir, '.offline-maintenance.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('fails closed and releases the runtime gate when startup media reconciliation cannot persist', async () => {
+  it('closes initialized resources when startup media reconciliation cannot persist', async () => {
     const first = await createTestServer(false, false);
     const dataDir = temporaryDirectories.at(-1)!;
     await first.app.close();
@@ -366,12 +361,6 @@ describe('Imagine server PR 0 skeleton', () => {
 
     await expect(reopenTestServer(dataDir)).rejects.toThrow('Media repair queue scan could not be stored.');
     const lockPath = join(dataDir, '.offline-maintenance.lock');
-    await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    const offlineLease = await acquireOfflineMaintenanceLease({
-      assertServerStopped: () => true,
-      dataRoot: dataDir,
-    });
-    await offlineLease.release();
     await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -2011,7 +2000,7 @@ describe('Imagine server PR 0 skeleton', () => {
     await expect(server.app.close()).rejects.toBeInstanceOf(AggregateError);
     expect(phases).toEqual(['worker', 'store']);
     expect(() => server.adapterDefinitions.getCurrent('missing')).toThrow();
-    expect(await readFile(join(dataDir, '.offline-maintenance.lock'), 'utf8')).toContain('server-runtime-lease-v1');
+    await expect(lstat(join(dataDir, '.offline-maintenance.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
     servers.splice(servers.indexOf(server), 1);
   });
 });

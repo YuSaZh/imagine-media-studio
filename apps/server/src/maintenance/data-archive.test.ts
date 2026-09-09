@@ -35,14 +35,11 @@ import {
   verifyDataArchive,
 } from './data-archive.js';
 import type { DataArchiveOptions } from './data-archive.js';
-import { acquireOfflineMaintenanceLease, type OfflineMaintenanceLease } from './runtime-lock.js';
 
 const migrationsDirectory = fileURLToPath(new URL('../../migrations', import.meta.url));
 const adapterFixtureDirectory = fileURLToPath(new URL('../../../../fixtures/adapters/trusted-fixture-v1', import.meta.url));
 const temporaryDirectories: string[] = [];
 const databases: Database.Database[] = [];
-const activeLeases = new Map<string, OfflineMaintenanceLease>();
-const leases: OfflineMaintenanceLease[] = [];
 const CREATED_AT = new Date('2026-08-29T00:00:00.000Z');
 
 interface Deferred<T> {
@@ -61,25 +58,17 @@ async function fixture(prefix: string): Promise<{ readonly paths: StoragePaths; 
   temporaryDirectories.push(root);
   const paths = getStoragePaths(root);
   await ensureStorage(paths);
-  const offlineLease = await acquireOfflineMaintenanceLease({
-    assertServerStopped: () => true,
-    dataRoot: root,
-  });
-  activeLeases.set(root, offlineLease);
-  leases.push(offlineLease);
   const sqlite = createDatabase(paths.database, migrationsDirectory).sqlite;
   databases.push(sqlite);
   return { paths, sqlite };
 }
 
 function service(paths: StoragePaths, sqlite: Database.Database, overrides: Partial<DataArchiveOptions> = {}): DataArchive {
-  const currentLease = activeLeases.get(paths.root);
   return new DataArchive({
     clock: { now: () => CREATED_AT },
     id: () => 'archive-test',
     paths,
     sqlite,
-    ...(currentLease === undefined ? {} : { lease: currentLease }),
     ...overrides,
   });
 }
@@ -88,22 +77,11 @@ afterEach(async () => {
   for (const sqlite of databases.splice(0)) {
     try { sqlite.close(); } catch { /* A failure test may close it. */ }
   }
-  for (const offlineLease of leases.splice(0)) {
-    try { await offlineLease.release(); } catch { /* Keep fixture cleanup progressing. */ }
-    activeLeases.delete(offlineLease.dataRoot);
-  }
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
   vi.restoreAllMocks();
 });
 
 describe('DataArchive', () => {
-  it('fails closed without an offline maintenance lease', async () => {
-    const { paths, sqlite } = await fixture('ims-data-archive-lease-');
-    const archive = new DataArchive({ paths, sqlite });
-    await expect(archive.create()).rejects.toThrow('verifiable offline maintenance lease');
-    await expect(readdir(join(paths.backups, '.staging'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-
   it('creates and verifies a deterministic directory bundle with allowlisted media', async () => {
     const { paths, sqlite } = await fixture('ims-data-archive-basic-');
     const payload = Buffer.from('archive-media-payload');

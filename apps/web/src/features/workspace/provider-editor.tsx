@@ -60,6 +60,8 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
   const remoteModels = useQuery({ queryKey: ['provider-model-catalog', providerId], queryFn: () => internalClient.discoverProviderModels(providerId), enabled: !model, staleTime: 60000, retry: false });
   const templates = useQuery({ queryKey: ['model-capability-templates', providerId], queryFn: () => internalClient.getModelCapabilityTemplates(providerId), staleTime: 60000, retry: false });
   const catalog = useWorkspaceCatalog();
+  const addedIds = new Set((catalog.models.data ?? []).filter(item => item.providerId === providerId).map(item => item.modelId));
+  const availableModels = (remoteModels.data?.models ?? []).filter(item => !addedIds.has(item.id));
   const [copySource, setCopySource] = useState('');
   const [loadingCapabilities, setLoadingCapabilities] = useState(false);
   const [notice, setNotice] = useState('');
@@ -116,7 +118,7 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
       } catch (failure) { setError(failure instanceof Error ? failure.message : '模型保存失败'); }
       finally { setSaving(false); }
     })();
-  }}><div className="model-form-body">{!model && <div className="catalog-field"><span>远端模型目录</span><div className="catalog-model-picker"><ModelCatalogPicker models={remoteModels.data?.models ?? []} value={form.modelId} loading={remoteModels.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !remoteModels.data.models.length && <span>没有可用的远端模型</span>}</div>}
+  }}><div className="model-form-body">{!model && <div className="catalog-field"><span>远端模型目录</span><div className="catalog-model-picker"><ModelCatalogPicker models={availableModels} value={form.modelId} loading={remoteModels.isPending || catalog.models.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !availableModels.length && !catalog.models.isPending && <span>{remoteModels.data.models.length ? '远端模型均已添加' : '没有可用的远端模型'}</span>}</div>}
     <div className="form-columns"><label><span>模型 ID</span><input aria-label="模型 ID" required value={form.modelId} onChange={event => selectModel(event.target.value, false)} /></label><label><span>显示名称</span><input aria-label="模型显示名称" required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div>
     <label><span>复制模型配置</span><Select aria-label="配置来源模型" value={copySource} onChange={event => setCopySource(event.target.value)}><SelectItem value="">选择来源模型</SelectItem>{sources.map(source => <SelectItem key={source.key} value={source.key}>{source.label}</SelectItem>)}</Select></label>
     <button type="button" className="quiet-command" disabled={!copySource || saving} onClick={copyCapabilities}><Copy size={16} />复制配置</button>

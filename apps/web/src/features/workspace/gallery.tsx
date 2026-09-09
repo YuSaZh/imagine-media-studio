@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bookmark, Copy, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
+import { Bookmark, FolderInput, Copy, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { copyPrompt } from './copy-prompt';
 import { createSelectionGestureState, LONG_PRESS_DURATION_MS, reduceSelectionGesture } from '../gallery/model/selection-gesture';
 import type { MediaItem } from './data';
 import { Choice, Options } from './ui';
 import type { PendingStudy } from './pending-studies';
-import { JOB_LABELS } from './data';
+import { GenerationStatus } from './generation-status';
+import { formatGenerationTime, generationSeconds } from './generation-time';
 
 interface GalleryProps {
   onNotice?: (message: string) => void;
@@ -27,6 +28,7 @@ interface GalleryProps {
   onSelect: (item: MediaItem) => void;
   onSave: (item: MediaItem) => void;
   onDelete: (item: MediaItem) => void;
+  onMoveProject?: (item: MediaItem) => void;
   hasMore: boolean;
   fetching: boolean;
   error: boolean;
@@ -44,6 +46,7 @@ function Card({ item, props }: { item: MediaItem; props: GalleryProps }) {
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressClick = useRef(false);
   const selected = props.selected.includes(item.id);
+  const elapsed = item.job?.completedAt ? generationSeconds(item.job.createdAt, item.job.completedAt) : null;
   const reset = () => {
     if (timeout.current) clearTimeout(timeout.current);
     timeout.current = null;
@@ -79,15 +82,16 @@ function Card({ item, props }: { item: MediaItem; props: GalleryProps }) {
       }}>
       {broken ? <span className="media-unavailable"><ImageIcon size={25} /><span>预览不可用</span></span> : <img src={item.thumbnail} alt={item.title} loading="lazy" draggable={false} onError={() => setBroken(true)} />}
       {item.kind === 'video' && <span className="video-tag"><Play size={11} fill="currentColor" />{durationLabel(item.durationSeconds ?? 0)}</span>}
-      <span className="study-caption"><strong>{item.title}</strong><span>{item.model}</span></span>
+      <span className="study-caption"><strong>{item.title}</strong><span>{item.model}{elapsed !== null ? ` · ${formatGenerationTime(elapsed)}` : ''}</span></span>
       {props.selecting && <span className="select-mark">{selected && <Check size={17} />}</span>}
     </button>
     {!props.selecting && <>
       {item.prompt && <button className="card-copy-prompt" aria-label={`复制提示词 ${item.title}`} title="复制提示词" onClick={event => { event.stopPropagation(); void copyPrompt(item.prompt, props.onNotice ?? (() => {})); }}><Copy size={17} /></button>}
       <button className={`card-bookmark ${item.saved ? 'is-saved' : ''}`} disabled={!props.online} aria-label={item.saved ? `取消收藏 ${item.title}` : `收藏 ${item.title}`} onClick={() => props.onSave(item)}><Bookmark size={17} fill={item.saved ? 'currentColor' : 'none'} /></button>
       <button className="card-reference" disabled={!props.online} aria-label={`加入参考 ${item.title}`} title="加入参考" onClick={() => props.onReference?.(item)}><ImagePlus size={17} /></button>
-      <Options label={`${item.title} 更多操作`} className="card-more" trigger={<MoreHorizontal size={19} />}>
+      <Options label={`${item.title} 更多操作`} className="card-more" contentClassName="asset-options" trigger={<MoreHorizontal size={19} />}>
         <Choice active={false} onClick={() => props.onSelect(item)}><CheckCheck size={15} />选择作品</Choice>
+        {props.online && props.onMoveProject && <Choice active={false} onClick={() => props.onMoveProject?.(item)}><FolderInput size={15} />移动到项目</Choice>}
         {item.kind === 'video' && props.online && props.canEditVideo && <Choice active={false} onClick={() => props.onVideoContinue?.(item, 'edit')}>编辑视频</Choice>}
         {item.kind === 'video' && props.online && props.canExtendVideo && <Choice active={false} onClick={() => props.onVideoContinue?.(item, 'extend')}>续写视频</Choice>}
         {props.online && <Choice active={false} onClick={() => props.onDelete(item)}><Trash2 size={15} />删除</Choice>}
@@ -149,7 +153,7 @@ export function Gallery(props: GalleryProps) {
 function PendingCard({ task, props }: { task: PendingStudy; props: GalleryProps }) {
   const failed = ['failed', 'rejected', 'expired'].includes(task.status);
   return <article className={`study-card pending-study ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? '生成失败' : task.kind === 'image' ? '正在生成图片' : '正在生成视频'} aria-busy={!failed}>
-    <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div><div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? '生成失败'}</span> : <><LoaderCircle size={17} className="spin" /><span>{JOB_LABELS[task.status] ?? '正在生成'}{task.progress !== null ? ` ${Math.round(task.progress)}%` : ''}</span></>}<p>{task.prompt}</p></div>
+    <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div><div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? '生成失败'}</span> : <><LoaderCircle size={17} className="spin" /><GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />{task.progress !== null && <span>{Math.round(task.progress)}%</span>}</>}<p>{task.prompt}</p></div>
     {task.jobId && <button type="button" className="pending-study-action" aria-label={failed ? '重试生成' : '取消生成'} title={failed ? '重试生成' : '取消生成'} disabled={!props.online} onClick={() => failed ? props.onRetryJob?.(task.jobId!) : props.onCancelJob?.(task.jobId!)}>{failed ? <RefreshCw size={17} /> : <X size={17} />}</button>}
     {failed && task.jobId && <button type="button" className="pending-study-action pending-study-delete" aria-label="删除失败任务" title="删除失败任务" disabled={!props.online} onClick={() => props.onDeleteJob?.(task.jobId!)}><Trash2 size={17} /></button>}
   </article>;

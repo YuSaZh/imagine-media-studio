@@ -29,7 +29,7 @@ export function Select({ value, onChange, children, disabled, iconOnly = false, 
   }));
   const selected = options.find(option => option.value === String(value));
   const buttons = () => Array.from(content.current?.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)') ?? []);
-  return <Popover.Root open={open} onOpenChange={setOpen}>
+  return <Popover.Root modal open={open} onOpenChange={setOpen}>
     <Popover.Trigger asChild><button type="button" className="select-trigger" role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? listId : undefined} aria-haspopup="listbox" disabled={disabled || !options.length} onKeyDown={event => {
       if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setOpen(true); }
     }}>{!iconOnly && <span>{selected?.label ?? '请选择'}</span>}<ChevronDown size={14} aria-hidden="true" /></button></Popover.Trigger>

@@ -9,10 +9,6 @@ import {
   type DataArchiveResult,
 } from './data-archive.js';
 import { DataRestoreError, restoreDataArchive, type DataRestoreResult } from './data-restore.js';
-import {
-  acquireOfflineMaintenanceLease,
-  OfflineMaintenanceLeaseError,
-} from './runtime-lock.js';
 import { getStoragePaths } from '../storage/paths.js';
 
 export type DataArchiveCliCommand =
@@ -37,20 +33,13 @@ export interface DataArchiveCliDependencies {
 
 async function createOfflineDataArchive(dataDir: string): Promise<DataArchiveResult> {
   const paths = getStoragePaths(dataDir);
-  // The atomic gate is the authoritative server/CLI exclusion mechanism. The
-  // legacy callback remains true because a successful O_EXCL acquisition is
-  // the stopped-server proof; a concurrent server loses the same race.
-  const lease = await acquireOfflineMaintenanceLease({
-    assertServerStopped: () => true,
-    dataRoot: paths.root,
-  });
   let sqlite: Database.Database | undefined;
   let archive: DataArchive | undefined;
   let operationError: unknown;
   let result: DataArchiveResult | undefined;
   try {
     sqlite = new Database(paths.database, { fileMustExist: true, readonly: true });
-    archive = new DataArchive({ lease, paths, sqlite });
+    archive = new DataArchive({ paths, sqlite });
     result = await archive.create();
   } catch (error) {
     operationError = error;
@@ -63,7 +52,6 @@ async function createOfflineDataArchive(dataDir: string): Promise<DataArchiveRes
   if (sqlite !== undefined) {
     try { sqlite.close(); } catch (error) { cleanupFailures.push(error); }
   }
-  try { await lease.release(); } catch (error) { cleanupFailures.push(error); }
 
   if (operationError !== undefined) {
     if (cleanupFailures.length > 0) {
@@ -173,7 +161,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       process.stderr.write(`${error.message}\n`);
       return 2;
     }
-    if (error instanceof OfflineMaintenanceLeaseError || error instanceof DataArchiveError || error instanceof DataRestoreError) {
+    if (error instanceof DataArchiveError || error instanceof DataRestoreError) {
       process.stderr.write(`${error.message}\n`);
       return 1;
     }

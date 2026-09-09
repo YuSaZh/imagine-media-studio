@@ -67,8 +67,7 @@ bound Assets remain completed: a missing thumbnail/poster becomes repair work,
 while a missing, modified, unsafe, or unreadable primary remains manual work.
 The startup pass never calls the repair worker and never resubmits a Provider
 request. A truncated scan cannot bulk-resolve old queue rows. If the audit or
-queue transaction throws, server creation fails closed and releases the server
-runtime lease after its initialized data users have closed.
+queue transaction throws, server creation fails closed and closes its initialized data users.
 
 The cleanup is deliberately narrow: it does not recursively remove arbitrary
 temporary files, scan unmanaged roots, or repair managed-tree orphans. The

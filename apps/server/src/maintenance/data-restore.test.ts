@@ -35,13 +35,11 @@ import {
   DataRestoreTargetExistsError,
 } from './data-restore.js';
 import type { DataArchiveFsOps } from './data-archive.js';
-import { acquireOfflineMaintenanceLease, type OfflineMaintenanceLease } from './runtime-lock.js';
 
 const migrationsDirectory = fileURLToPath(new URL('../../migrations', import.meta.url));
 const adapterFixtureDirectory = fileURLToPath(new URL('../../../../fixtures/adapters/trusted-fixture-v1', import.meta.url));
 const temporaryDirectories: string[] = [];
 const databases: Database.Database[] = [];
-const leases: OfflineMaintenanceLease[] = [];
 const servers: ImagineServer[] = [];
 const CREATED_AT = new Date('2026-08-29T00:00:00.000Z');
 
@@ -86,12 +84,9 @@ async function sourceFixture(
     await writeFile(join(adapterDirectory, 'manifest.json'), await readFile(join(adapterFixtureDirectory, 'manifest.json')), { mode: 0o600 });
     await writeFile(join(adapterDirectory, 'adapter.mjs'), await readFile(join(adapterFixtureDirectory, 'adapter.mjs')), { mode: 0o600 });
   }
-  const lease = await acquireOfflineMaintenanceLease({ assertServerStopped: () => true, dataRoot: root });
-  leases.push(lease);
   const archive = await new DataArchive({
     clock: { now: () => CREATED_AT },
     id: () => 'restore-source',
-    lease,
     paths,
     sqlite,
   }).create();
@@ -137,9 +132,6 @@ async function expectDirectoryMode(path: string, mode: number): Promise<void> {
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.app.close()));
-  for (const lease of leases.splice(0)) {
-    try { await lease.release(); } catch { /* Fixture cleanup should continue. */ }
-  }
   for (const sqlite of databases.splice(0)) {
     try { sqlite.close(); } catch { /* A failure test may have closed it. */ }
   }

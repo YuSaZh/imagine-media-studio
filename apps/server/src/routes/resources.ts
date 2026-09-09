@@ -5,6 +5,7 @@ import {
   AssetRoleSchema,
   AssetTypeSchema,
   CollectionAssetsPatchSchema,
+  CollectionDeleteQuerySchema,
   CollectionCreateSchema,
   CollectionPatchSchema,
   CursorPageQuerySchema,
@@ -560,7 +561,9 @@ function registerCollectionRoutes(app: FastifyInstance, options: ResourceRoutesO
   });
 
   app.delete<{ Params: { id: string } }>('/internal/collections/:id', async (request, reply) => {
-    const deleted = await publishCommitted(options, () => options.collections.delete(request.params.id));
+    const query = parseOrReply(CollectionDeleteQuerySchema, request.query, reply);
+    if (!query) return;
+    const deleted = await publishCommitted(options, () => options.collections.delete(request.params.id, query.deleteAssets ? id => options.assets.softDelete(id) : undefined));
     if (!deleted) return errorResponse(reply, 404, 'collection_not_found');
     return reply.code(204).send();
   });
@@ -570,6 +573,19 @@ function registerCollectionRoutes(app: FastifyInstance, options: ResourceRoutesO
     if (!input) return;
     try {
       const added = await publishCommitted(options, () => options.collections.addAssets(request.params.id, input.assetIds));
+      const collection = options.collections.get(request.params.id)!;
+      return { collection: toCollectionDto(collection), added };
+    } catch (error) {
+      if (error instanceof CollectionRepositoryError) return errorResponse(reply, 404, error.code, error.message);
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/internal/collections/:id/assets/move', async (request, reply) => {
+    const input = parseOrReply(CollectionAssetsPatchSchema, request.body, reply);
+    if (!input) return;
+    try {
+      const added = await publishCommitted(options, () => options.collections.moveAssets(request.params.id, input.assetIds));
       const collection = options.collections.get(request.params.id)!;
       return { collection: toCollectionDto(collection), added };
     } catch (error) {

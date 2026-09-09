@@ -43,6 +43,11 @@ describe('account boundaries', () => {
     const alice = await login('alice', 'alice-password');
     expect((await server.app.inject({ method: 'PATCH', url: `/internal/collections/${oldCollection.id}`, headers: alice, payload: { isPrivate: true } })).statusCode).toBe(404);
     expect(server.collections.get(oldCollection.id)?.isPrivate).toBe(false);
+    server.collections.addAssets(oldCollection.id, [asset.id]);
+    expect((await server.app.inject({ method: 'DELETE', url: `/internal/collections/${oldCollection.id}?deleteAssets=true`, headers: alice })).statusCode).toBe(404);
+    expect((await server.app.inject({ method: 'POST', url: `/internal/collections/${oldCollection.id}/assets/move`, headers: alice, payload: { assetIds: [asset.id] } })).statusCode).toBe(404);
+    expect(server.assets.get(asset.id)).not.toBeNull();
+
     for (const path of ['assets', 'jobs', 'collections']) {
       const result = await server.app.inject({ url: `/internal/${path}`, headers: alice });
       expect(result.statusCode).toBe(200); expect(result.json().items).toEqual([]);
@@ -58,6 +63,9 @@ describe('account boundaries', () => {
     expect(collectionResponse.statusCode).toBe(201);
     const collectionId = collectionResponse.json().collection.id as string;
     expect((await server.app.inject({ method: 'POST', url: `/internal/collections/${collectionId}/assets`, headers: alice, payload: { assetIds: [asset.id] } })).statusCode).toBe(404);
+    expect((await server.app.inject({ method: 'POST', url: `/internal/collections/${collectionId}/assets/move`, headers: alice, payload: { assetIds: [asset.id] } })).statusCode).toBe(404);
+    expect(server.assets.collectionIdsForAsset(asset.id)).toEqual([oldCollection.id]);
+
     const input = await server.app.inject({ method: 'POST', url: '/internal/jobs', headers: alice, payload: createMockGenerationRequest({ operation: 'image.edit', inputs: [{ assetId: asset.id, role: 'source' }] }) });
     expect(input.statusCode).toBe(400); expect(input.json().error).toBe('asset_input_not_found');
     expect((await server.app.inject({ method: 'POST', url: '/internal/jobs', headers: alice, payload: createMockGenerationRequest({ collectionId: oldCollection.id }) })).statusCode).toBe(400);

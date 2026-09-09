@@ -1150,10 +1150,15 @@ export const internalClient = {
       method: 'PATCH',
       body: jsonBody(typeof change === 'string' ? { name: change } : change),
     }),
-  deleteCollection: async (collectionId: string) =>
-    requestEmpty(`/internal/collections/${encodeURIComponent(collectionId)}`, { method: 'DELETE' }),
+  deleteCollection: async (collectionId: string, deleteAssets = false) =>
+    requestEmpty(`/internal/collections/${encodeURIComponent(collectionId)}${deleteAssets ? "?deleteAssets=true" : ""}`, { method: 'DELETE' }),
   addCollectionAssets: async (collectionId: string, assetIds: readonly string[]) =>
     requestJson(`/internal/collections/${encodeURIComponent(collectionId)}/assets`, CollectionAssetsResponseSchema, {
+      method: 'POST',
+      body: jsonBody({ assetIds }),
+    }),
+  moveCollectionAssets: async (collectionId: string, assetIds: readonly string[]) =>
+    requestJson(`/internal/collections/${encodeURIComponent(collectionId)}/assets/move`, CollectionAssetsResponseSchema, {
       method: 'POST',
       body: jsonBody({ assetIds }),
     }),

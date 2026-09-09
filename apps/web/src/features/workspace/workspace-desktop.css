@@ -23,3 +23,21 @@
 .desktop-video-custom label { display: grid; flex: 1; gap: 8px; min-width: 0; font-size: 12px; }
 .desktop-video-custom input { width: 110px; min-width: 0; height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; }
 .desktop-video-custom p { flex: 0 0 100%; font-size: 12px; color: #a13e3e; }
+
+@media (min-width: 761px) {
+  .side-rail { align-items: flex-start; }
+  .side-rail > .identity, .rail-navigation, .side-rail > .rail-bottom { margin-left: 14.5px; }
+  .side-rail > .identity { flex-shrink: 0; }
+  .rail-navigation { flex: 1; min-height: 0; overflow-y: auto; width: 42px; scrollbar-width: thin; }
+  .side-rail.is-expanded { width: 260px; flex-basis: 260px; }
+  .side-rail.is-expanded .rail-navigation, .side-rail.is-expanded .rail-bottom { width: calc(100% - 29px); }
+  .side-rail.is-expanded .tool { width: 100%; justify-content: flex-start; padding-left: 10.5px; gap: 14px; }
+  .side-rail.is-expanded .rail-bottom { align-items: flex-start; }
+  .side-rail.is-expanded .avatar { margin-left: 6px; }
+  .rail-label, .rail-project-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rail-project-list { display: flex; flex-direction: column; gap: 6px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .rail-project-list > .muted-label { margin: 0 10.5px 8px; }
+  .rail-project-list button { display: flex; align-items: center; gap: 14px; min-height: 42px; flex-shrink: 0; padding: 0 10.5px; border-radius: 8px; text-align: left; }
+  .rail-project-list button:hover, .rail-project-list [aria-current='page'] { background: #edf3ee; color: #386c46; }
+  .has-expanded-rail .creation-area { left: calc(50% + 130px); width: min(780px, calc(100% - 308px)); }
+}

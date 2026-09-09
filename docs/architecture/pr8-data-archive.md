@@ -70,33 +70,11 @@ role: `output` content is under `media/originals`, `mask` content under
 `media/thumbnails`, and posters under `media/posters`. Database or adapter
 paths cannot satisfy those constraints.
 
-## Lease and CLI boundary
+## CLI boundary
 
-Archive creation requires an `OfflineMaintenanceLease`. The lease proof binds
-to the canonical data root, uses the exclusive 0600 `.offline-maintenance.lock`
-gate, and is held for the whole operation. The application server acquires a
-different runtime-lease kind on that same gate before initializing storage or
-opening SQLite. On first boot it may create only the absent root as a canonical
-0700 directory owned by the current user; existing roots are never recreated or
-chmod-ed before the gate is held. Therefore
-an offline CLI and a running server compete atomically: a running server makes
-CLI `create` fail closed, and a held offline lease makes a new server fail
-closed. No process is stopped or killed by either code path.
+Runtime and offline-maintenance file locks have been removed. The application and CLI do not acquire, verify, or release a shared gate. Operators stop the application before creating an offline archive or restoring data; the CLI does not detect or stop a running server. Legacy `.offline-maintenance.lock` files are treated only as excluded archive sidecars and do not prevent application startup.
 
-The server releases its gate only after its JobRunner, adapter workers, backup
-service, and SQLite connection have closed. A process terminated without the
-normal close path can leave an unknown stale gate. Stale or malformed gates are
-intentionally not removed automatically; an operator must establish that the
-original process is gone and perform the separately controlled recovery before
-retrying. This avoids allowing a second process to open the same data root
-after an ambiguous failure.
-
-The production CLI opens the source SQLite database read-only, acquires the
-offline gate, creates the archive, closes SQLite, and then releases the gate.
-It never reads `APP_SECRET` or `APP_PASSWORD`, and its result line contains
-only the archive id and bounded metadata. The standalone `verify --bundle PATH`
-command does not access live storage and may verify an already-published bundle
-while the server is running.
+The production CLI opens the source SQLite database read-only, creates the archive, and closes its database handle. Canonical path checks, file permissions, archive integrity validation and atomic publication remain enforced. The command never reads `APP_SECRET` or `APP_PASSWORD`. Standalone `verify --bundle PATH` does not access live storage.
 
 ## Operator commands
 

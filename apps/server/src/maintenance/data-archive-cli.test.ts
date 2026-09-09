@@ -8,10 +8,6 @@ import { ensureStorage, getStoragePaths } from '../storage/paths.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  OfflineMaintenanceLeaseError,
-  acquireServerRuntimeLease,
-} from './runtime-lock.js';
-import {
   DataArchiveCliUsageError,
   parseDataArchiveCliArgs,
   runDataArchiveCli,
@@ -61,7 +57,7 @@ describe('data archive CLI', () => {
     expect(() => parseDataArchiveCliArgs(['create', '--data-dir', '--bad'])).toThrow(DataArchiveCliUsageError);
   });
 
-  it('creates through the production offline lease wiring and cleans the gate', async () => {
+  it('creates an offline archive without a runtime lock', async () => {
     const root = await fixture('ims-archive-cli-create-');
     const output: string[] = [];
     const code = await runDataArchiveCli(['create', '--data-dir', root], {
@@ -73,17 +69,6 @@ describe('data archive CLI', () => {
     expect(output.join('')).not.toContain(root);
     expect(await readdir(join(root, 'backups'))).toHaveLength(2);
     expect(await readFile(join(root, '.offline-maintenance.lock')).catch(() => null)).toBeNull();
-  });
-
-  it('fails closed when the server owns the shared runtime gate', async () => {
-    const root = await fixture('ims-archive-cli-running-');
-    const serverLease = await acquireServerRuntimeLease(root);
-    try {
-      await expect(runDataArchiveCli(['create', '--data-dir', root])).rejects.toThrow(OfflineMaintenanceLeaseError);
-      expect(await readdir(join(root, 'backups'))).toEqual([]);
-    } finally {
-      await serverLease.release();
-    }
   });
 
   it('runs verify through an injected verifier without printing paths or contents', async () => {

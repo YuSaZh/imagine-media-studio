@@ -1,3 +1,4 @@
+import { usePromptHeight } from './use-prompt-height';
 import { Select, SelectItem } from './select';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_IMAGE_INPUT_POLICY, ModelCapabilitiesSchema, type JsonObject, type MediaOperation } from '@imagine/shared';
@@ -77,6 +78,8 @@ export function Composer(props: ComposerProps) {
   const lastSaved = useRef('');
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [promptFocused, setPromptFocused] = useState(false);
+  usePromptHeight(textareaRef, prompt, props.layout === 'mobile', promptFocused, props.editing?.compact ?? false);
   const composerRef = useRef<HTMLFormElement>(null);
   const dragDepth = useRef(0);
   const policy = model?.capabilities.inputImagePolicy ?? DEFAULT_IMAGE_INPUT_POLICY;
@@ -224,7 +227,7 @@ export function Composer(props: ComposerProps) {
       </div>)}
     </div>}
     {props.editing?.sourceLabel && <p className="composer-source-label">{props.editing.sourceLabel}</p>}
-    <textarea ref={textareaRef} aria-label="创作描述" onFocus={props.editing?.onExpand} placeholder={mode === 'image' ? (hasSource ? '想怎样修改这张图片？' : '描述你想创作的画面…') : (videoMode === 'edit' ? '想怎样修改这段视频？' : videoMode === 'extend' ? '描述接下来发生的内容…' : videoMode === 'text' ? '描述场景、镜头与动作…' : '让这个画面怎样动起来？')}
+    <textarea ref={textareaRef} aria-label="创作描述" onFocus={() => { setPromptFocused(true); props.editing?.onExpand(); }} onBlur={() => setPromptFocused(false)} placeholder={mode === 'image' ? (hasSource ? '想怎样修改这张图片？' : '描述你想创作的画面…') : (videoMode === 'edit' ? '想怎样修改这段视频？' : videoMode === 'extend' ? '描述接下来发生的内容…' : videoMode === 'text' ? '描述场景、镜头与动作…' : '让这个画面怎样动起来？')}
       maxLength={COMPOSER_DRAFT_MAX_PROMPT_LENGTH} value={prompt} rows={2} onChange={event => props.onPrompt(event.target.value)}
       onPaste={event => { const files = filesFromClipboard(event.clipboardData); if (files.files.length) { if (!files.hasText) event.preventDefault(); props.onFiles(files.files, files.rejected); } }}
       onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); } }} />

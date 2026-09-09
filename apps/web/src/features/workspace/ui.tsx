@@ -24,8 +24,8 @@ export function Choice({ active, children, onClick }: { active: boolean; childre
   return <Popover.Close asChild><button className={`choice ${active ? 'is-active' : ''}`} type="button" aria-pressed={active} onClick={onClick}>{children}</button></Popover.Close>;
 }
 
-export function Confirm({ title, description, busy, onConfirm, onClose }: { title: string; description: string; busy: boolean; onConfirm: () => void; onClose: () => void }) {
+export function Confirm({ title, description, children, busy, onConfirm, onClose }: { title: string; description: string; children?: ReactNode; busy: boolean; onConfirm: () => void; onClose: () => void }) {
   return <Panel title={title} open onClose={() => !busy && onClose()} className="compact-panel">
-    <div className="confirmation-body"><p>{description}</p><div><button className="quiet-command" disabled={busy} onClick={onClose}>取消</button><button className="primary-command danger-fill" disabled={busy} onClick={onConfirm}>{busy ? '正在处理' : '确认删除'}</button></div></div>
+    <div className="confirmation-body"><p>{description}</p>{children}<div><button className="quiet-command" disabled={busy} onClick={onClose}>取消</button><button className="primary-command danger-fill" disabled={busy} onClick={onConfirm}>{busy ? '正在处理' : '确认删除'}</button></div></div>
   </Panel>;
 }

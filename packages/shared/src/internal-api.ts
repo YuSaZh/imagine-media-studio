@@ -1188,6 +1188,10 @@ export const CollectionCreateSchema = z.object({
 
 export const CollectionPatchSchema = CollectionCreateSchema.partial().refine(value => Object.keys(value).length > 0, 'At least one project setting is required.');
 
+export const CollectionDeleteQuerySchema = z.object({
+  deleteAssets: z.enum(['true', 'false']).optional().transform(value => value === 'true'),
+}).strict();
+
 export const CollectionAssetsPatchSchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1).max(100),
 }).strict();
