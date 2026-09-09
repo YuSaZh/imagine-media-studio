@@ -8,10 +8,13 @@ export class AccountSettingsRepository extends SettingsRepository {
   public publicBaseUrl(): string { return String(this.global.get('public_base_url')?.value ?? this.initialUrl); }
   public override list(): SettingRecord[] {
     const rows = this.sqlite.prepare('SELECT key,value_json,updated_at FROM account_settings WHERE owner_id=? ORDER BY key').all(requestOwner()) as { key: string; value_json: string; updated_at: number }[];
-    return [...rows.filter(row => row.key !== 'public_base_url').map(row => ({ key: row.key, value: JSON.parse(row.value_json) as unknown, updatedAt: new Date(row.updated_at) })), { key: 'public_base_url', value: this.publicBaseUrl(), updatedAt: new Date() }];
+    return [...rows.filter(row => row.key !== 'public_base_url' && row.key !== 'network.allow_http_content').map(row => ({ key: row.key, value: JSON.parse(row.value_json) as unknown, updatedAt: new Date(row.updated_at) })), { key: 'public_base_url', value: this.publicBaseUrl(), updatedAt: new Date() }, { key: 'network.allow_http_content', value: this.global.get('network.allow_http_content')?.value ?? true, updatedAt: new Date() }];
   }
   public override get(key: string): SettingRecord | null { return this.list().find(row => row.key === key) ?? null; }
   public override upsertMany(values: Readonly<Record<string, unknown>>): readonly SettingRecord[] {
+    if ('network.allow_http_content' in values && accountContext.getStore()?.role !== 'admin') {
+      throw Object.assign(new Error('Administrator required'), { statusCode: 403 });
+    }
     if ('public_base_url' in values) {
       if (accountContext.getStore()?.role !== 'admin') throw Object.assign(new Error('Administrator required'), { statusCode: 403 });
       const value = values.public_base_url;
@@ -23,7 +26,7 @@ export class AccountSettingsRepository extends SettingsRepository {
     }
     this.sqlite.transaction(() => {
       for (const [key, value] of Object.entries(values)) {
-        if (key === 'public_base_url') { this.global.upsertMany({ [key]: value }); continue; }
+        if (key === 'public_base_url' || key === 'network.allow_http_content') { this.global.upsertMany({ [key]: value }); continue; }
         this.sqlite.prepare('INSERT INTO account_settings(owner_id,key,value_json,updated_at) VALUES (?,?,?,?) ON CONFLICT(owner_id,key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at').run(requestOwner(), key, JSON.stringify(value), Date.now());
       }
     })();

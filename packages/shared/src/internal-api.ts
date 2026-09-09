@@ -270,6 +270,9 @@ export const SettingsPatchSchema = z.object({
   ),
 }).strict().superRefine((value, context) => {
   for (const [key, item] of Object.entries(value.values)) {
+    if (key === 'network.allow_http_content' && typeof item !== 'boolean') {
+      context.addIssue({ code: 'custom', message: 'HTTP content setting must be a boolean.', path: ['values', key] });
+    }
     const path = secretLikeKey.test(key) ? [key] : findSecretLikePath(item, [key]);
     if (path) {
       context.addIssue({
@@ -1146,6 +1149,7 @@ export const AssetRoleSchema = z.enum([
 ]);
 
 export const AssetDtoSchema = z.object({
+  series: z.object({ id: z.string().min(1), count: z.number().int().positive() }).strict().optional(),
   id: z.string().min(1),
   jobId: z.string().nullable(),
   parentAssetId: z.string().nullable(),
@@ -1173,6 +1177,12 @@ export const AssetPageSchema = z.object({
   items: z.array(AssetDtoSchema),
   nextCursor: z.string().nullable(),
   jobs: z.array(JobDtoSchema).optional(),
+}).strict();
+
+export const AssetSeriesResponseSchema = z.object({
+  assets: z.array(AssetDtoSchema),
+  jobs: z.array(JobDtoSchema),
+  truncated: z.boolean(),
 }).strict();
 
 export const AssetResponseSchema = z.object({ asset: AssetDtoSchema }).strict();

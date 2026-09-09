@@ -42,7 +42,7 @@ export interface WorkspaceModel extends ReturnType<typeof mapInternalModel> {
   raw: ModelDto;
 }
 export interface ReferenceInput { asset: AssetDto; role: AssetInput['role']; }
-export interface MediaFilter { excludePrivate?: boolean; publicProjectIds?: readonly string[]; kind: 'all' | MediaKind; saved: boolean; projectId: string | null; search: string; }
+export interface MediaFilter { groupBySeries?: boolean; seriesCover?: 'recent' | 'latest' | 'original'; excludePrivate?: boolean; publicProjectIds?: readonly string[]; kind: 'all' | MediaKind; saved: boolean; projectId: string | null; search: string; }
 export interface MediaPage { items: MediaItem[]; nextCursor: string | null; offline: boolean; }
 export const ACTIVE_JOB_STATUSES = new Set(['queued', 'submitting', 'remote_pending', 'remote_running', 'downloading', 'processing']);
 export const JOB_LABELS: Record<string, string> = {
@@ -77,6 +77,7 @@ export async function fetchMediaPage(filter: MediaFilter, cursor?: string): Prom
   try {
     const page = await internalClient.listAssets({
       limit: 60, includeJobs: true,
+      ...(filter.groupBySeries ? { groupBySeries: true, seriesCover: filter.seriesCover ?? 'latest' } : {}),
       ...(filter.excludePrivate ? { excludePrivate: true } : {}),
       ...(cursor ? { cursor } : {}),
       ...(filter.kind !== 'all' ? { type: filter.kind } : {}),

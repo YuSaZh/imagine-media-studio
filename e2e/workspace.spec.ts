@@ -88,7 +88,7 @@ test.beforeEach(async ({ request, page }) => {
   for (const project of (await collections.json()).items) expect((await request.delete(`/internal/collections/${project.id}`)).ok()).toBeTruthy();
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
-  expect((await request.patch('/internal/settings', { data: { values: { 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
 });
 
@@ -1910,7 +1910,7 @@ test('image editor submits overlay masks and clean first-frame videos without na
   try {
     const source = await upload(request); await open(page);
     await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
-    const controls = page.locator('.image-editing-controls'), viewer = page.locator('.image-editing-viewer');
+    const controls = page.locator('.image-editing-controls'), viewer = page.locator('.study-viewer');
     await focusEditingPrompt(page);
   await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
     const stage = page.locator('.mask-stage'); await expect(stage).toBeVisible();
@@ -1931,6 +1931,8 @@ test('image editor submits overlay masks and clean first-frame videos without na
     expect(imageJob.request.maskProcessing).toMatchObject({ mode: 'overlay', sourceAssetId: source.id });
     expect(imageJob.prompt).toBe('Overlay mask edit fixture');
     await expect(controls.getByRole('button', { name: '编辑此生成结果' })).toHaveCount(1, { timeout: 20000 });
+    await controls.getByRole('button', { name: '查看原图', exact: true }).click();
+    await focusEditingPrompt(page);
     await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
     await expect(controls.getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await prompt.fill('Animate the clean sea');
@@ -1941,8 +1943,9 @@ test('image editor submits overlay masks and clean first-frame videos without na
     expect(videoJob.request.operation).toBe('video.image_to_video');
     expect(videoJob.request.inputs).toEqual([{ assetId: source.id, role: 'first_frame' }]);
     expect(videoJob.request.maskProcessing).toBeUndefined();
-    const video = controls.getByLabel('生成的视频', { exact: true }); await expect(video).toBeVisible({ timeout: 25000 });
-    await video.evaluate(element => (element as HTMLVideoElement).play());
+    const video = page.locator('.study-viewer .viewer-source-video'); await expect(video).toBeVisible({ timeout: 25000 });
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
+    await video.evaluate(element => { const video = element as HTMLVideoElement; video.currentTime = 0; return video.play(); });
     await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).currentTime)).toBeGreaterThan(0);
     await page.screenshot({ path: testInfo.outputPath('editor-video-result.png'), animations: 'disabled' });
     await viewer.getByRole('button', { name: '返回作品', exact: true }).click(); await expect(viewer).toHaveCount(0);
@@ -1984,7 +1987,7 @@ test('video workspace defers frame capture until send and removes temporary inpu
   const uploaded = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'two-color.mp4', mimeType: 'video/mp4', buffer: await readFile(path) } } });
   expect(uploaded.status()).toBe(201); const source = (await uploaded.json()).asset;
   await open(page, `/imagine?asset=${source.id}`);
-  const viewer = page.locator('.video-editing-viewer'), controls = viewer.locator('.image-editing-controls'), video = viewer.locator('.viewer-source-video');
+  const viewer = page.locator('.study-viewer'), controls = viewer.locator('.image-editing-controls'), video = viewer.locator('.viewer-source-video');
   let uploads = 0; page.on('request', req => { if (req.url().endsWith('/internal/assets/upload')) uploads++; });
   await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
   await controls.getByLabel('创作描述', { exact: true }).click();
@@ -2006,6 +2009,7 @@ test('video workspace defers frame capture until send and removes temporary inpu
   expect((await (await request.get('/internal/assets?limit=100')).json()).items.some((asset: { id: string }) => asset.id === frame.id)).toBe(false);
   await expect(controls.getByRole('button', { name: '编辑此生成结果' })).toHaveCount(1, { timeout: 20000 });
   await expect.poll(async () => (await request.get(`/internal/assets/${frame.id}`)).status()).toBe(404);
+  await controls.getByRole('button', { name: '查看原图', exact: true }).click();
   await expect(video).toBeVisible(); expect(uploads).toBe(1);
   const detail = (await (await request.get(`/internal/jobs/${job.id}`)).json()); expect(detail.assets[0].parentAssetId).toBe(source.id);
   await page.screenshot({ path: testInfo.outputPath('deferred-video-frame.png'), animations: 'disabled' });
@@ -2022,7 +2026,7 @@ test('video viewer edits and extends in place and reports capture upload failure
     const uploaded = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'video-source.mp4', mimeType: 'video/mp4', buffer: await readFile(path) } } });
     expect(uploaded.status()).toBe(201); const source = (await uploaded.json()).asset;
     await open(page, `/imagine?asset=${source.id}`);
-    const viewer = page.locator('.video-editing-viewer'), controls = viewer.locator('.image-editing-controls');
+    const viewer = page.locator('.study-viewer'), controls = viewer.locator('.image-editing-controls');
     await controls.getByLabel('创作描述', { exact: true }).fill('Change the video lighting');
     await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 400, json: { error: 'captured-no-paid-call' } }) : route.continue());
     for (const operation of ['edit', 'extend']) {
@@ -2049,7 +2053,7 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   const response = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'mask-video.mp4', mimeType: 'video/mp4', buffer: await readFile(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4')) } } });
   expect(response.status()).toBe(201); const source = (await response.json()).asset;
   await open(page, `/imagine?asset=${source.id}`);
-  const viewer = page.locator('.video-editing-viewer'), controls = viewer.locator('.image-editing-controls');
+  const viewer = page.locator('.study-viewer'), controls = viewer.locator('.image-editing-controls');
   await controls.getByLabel('创作描述', { exact: true }).click();
   await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
   await expect(viewer.locator('.viewer-source-video')).toBeVisible();
@@ -2060,8 +2064,8 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   await expect(page.locator('.mask-stage')).toBeVisible();
   await expect.poll(() => page.locator('.mask-source').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBeGreaterThan(0);
   const stage = (await page.locator('.mask-stage').boundingBox())!;
-  await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2); await page.mouse.down();
-  await page.mouse.move(stage.x + stage.width / 2 + 15, stage.y + stage.height / 2, { steps: 3 }); await page.mouse.up();
+  await page.locator('.mask-stage').click({ position: { x: stage.width / 2, y: stage.height / 2 } });
+  await expect(page.getByRole('button', { name: '撤销笔画', exact: true })).toBeEnabled();
   const uploadMask = (await capturePost(page, '/internal/assets/upload')).response;
   await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
   const mask = (await (await uploadMask).json()).asset;
@@ -2076,6 +2080,7 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   expect((await result.json()).job.request.inputs).toEqual([{ assetId: frame.id, role: 'source' }, { assetId: mask.id, role: 'mask' }]);
   await expect(controls.getByRole('button', { name: '编辑此生成结果' })).toHaveCount(1, { timeout: 20000 });
   for (const id of [frame.id, mask.id]) await expect.poll(async () => (await request.get(`/internal/assets/${id}`)).status()).toBe(404);
+  await controls.getByRole('button', { name: '查看原图', exact: true }).click();
   await expect(viewer.locator('.viewer-source-video')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('video-mask-cleanup.png'), animations: 'disabled' });
 });
@@ -2249,4 +2254,487 @@ test('card project moves and optional project file deletion', async ({ page, req
   await page.getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(page).toHaveURL(/\/projects$/);
   expect((await request.get(`/internal/assets/${asset.id}`)).status()).toBe(404);
+});
+
+test('editor keeps a reloadable series across repeated image and video generations', async ({ page, request }, testInfo) => {
+  const original = await upload(request);
+  let hold = true;
+  const heldJobs = new Set<string>();
+  await page.route('**/internal/jobs', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch(), data = await response.json();
+    for (const job of data.jobs ?? [data.job]) heldJobs.add(job.id);
+    await route.fulfill({ response, json: data });
+  });
+  await page.route('**/internal/jobs/*', async route => {
+    const response = await route.fetch(), data = await response.json();
+    if (hold && heldJobs.has(data.job?.id)) { data.assets = []; data.job = { ...data.job, status: 'remote_running', completedAt: null }; }
+    await route.fulfill({ response, json: data });
+  });
+  await page.route('**/internal/assets/*/series', async route => {
+    const response = await route.fetch(), data = await response.json();
+    if (hold) { data.assets = data.assets.filter((asset: { jobId: string }) => !heldJobs.has(asset.jobId)); data.jobs = data.jobs.map((job: { id: string }) => heldJobs.has(job.id) ? { ...job, status: 'remote_running', completedAt: null } : job); }
+    await route.fulfill({ response, json: data });
+  });
+  await open(page, `/imagine?asset=${original.id}`);
+  const viewer = page.locator('.study-viewer'), controls = viewer.locator('.image-editing-controls');
+  const prompt = controls.getByLabel('创作描述', { exact: true });
+  let previous = original.id;
+  for (let round = 1; round <= 2; round++) {
+    hold = true; heldJobs.clear();
+    await prompt.fill(`Series round ${round}`);
+    const response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
+    await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+    const created = await (await response).json();
+    expect(created.job.request.inputs[0].assetId).toBe(previous);
+    await expect(viewer.getByLabel('编辑生成状态')).toContainText(/生成中|排队/);
+    await expect(viewer.getByLabel('编辑生成状态').getByRole('button')).toHaveCount(0);
+    await expect(viewer.getByLabel('编辑生成状态')).not.toContainText(`Series round ${round}`);
+    await expect(viewer.locator('.viewer-stage > img')).toHaveCount(0);
+    await expect(controls.getByRole('button', { name: '开始生成', exact: true })).toBeDisabled();
+    await expect(controls.getByRole('button', { name: '查看原图', exact: true })).toBeVisible();
+    const strip = (await controls.locator('.editing-results').boundingBox())!;
+    expect(strip.y + strip.height).toBeLessThanOrEqual((await controls.locator('.creation-composer').boundingBox())!.y - 8);
+    await page.screenshot({ path: testInfo.outputPath(`series-pending-${round}.png`), animations: 'disabled' });
+    if (round === 1) {
+      await controls.getByRole('button', { name: '查看原图', exact: true }).click();
+      await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', original.contentUrl);
+      await controls.getByRole('button', { name: '查看任务 Series round 1', exact: true }).click();
+      await expect(viewer.getByLabel('编辑生成状态')).toBeVisible();
+    }
+    hold = false;
+    await expect.poll(async () => (await (await request.get(`/internal/jobs/${created.job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+    const detail = await (await request.get(`/internal/jobs/${created.job.id}`)).json();
+    previous = detail.assets[0].id;
+    await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', detail.assets[0].contentUrl, { timeout: 25000 });
+    await expect(controls.locator('.editing-result button:has(img)')).toHaveCount(round + 1);
+  }
+  await page.reload();
+  await expect(controls.locator('.editing-result button:has(img)')).toHaveCount(3);
+  await controls.getByRole('button', { name: '查看原图', exact: true }).click();
+  await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', original.contentUrl);
+  await prompt.fill('Series video');
+  await controls.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await controls.getByRole('button', { name: '开始生成', exact: true }).click();
+  await expect(viewer.locator('video.viewer-source-video')).toBeVisible({ timeout: 25000 });
+  await expect(controls.locator('.editing-result button:has(img)')).toHaveCount(4);
+  await controls.getByRole('button', { name: '查看原图', exact: true }).click();
+  await controls.getByRole('button', { name: '查看生成视频', exact: true }).click();
+  await expect(viewer.locator('video.viewer-source-video')).toBeVisible();
+  await page.unrouteAll({ behavior: 'wait' });
+  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'latest' } } })).ok()).toBe(true);
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  const badge = page.getByLabel('系列共 4 件作品');
+  await expect(badge).toBeVisible();
+  await expect(badge.locator('svg')).toBeVisible();
+  const badgeBox = (await badge.boundingBox())!, durationBox = (await page.locator('.video-tag').boundingBox())!;
+  const cardBox = (await page.locator('.study-open').boundingBox())!;
+  expect(badgeBox.y).toBeGreaterThan(durationBox.y + durationBox.height);
+  expect(cardBox.y + cardBox.height - badgeBox.y - badgeBox.height).toBeCloseTo(8, 0);
+  await page.screenshot({ path: testInfo.outputPath('series-video-badge.png'), animations: 'disabled' });
+});
+
+test('failed gallery generation copies its full prompt', async ({ page, request }) => {
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Original fixture', inputs: [] } });
+  const job = (await response.json()).job;
+  const prompt = '失败提示词完整内容\n第二行也需要保留';
+  await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { document.documentElement.dataset.copiedPrompt = text; } } }));
+  await page.route('**/internal/jobs?**', async route => {
+    const response = await route.fetch(), data = await response.json();
+    data.items = [{ ...job, id: 'failed-copy-fixture', status: 'failed', prompt, request: { ...job.request, prompt }, errorMessage: 'Fixture failure', completedAt: new Date().toISOString() }, ...data.items];
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await page.locator('[data-pending-job="failed-copy-fixture"]').getByRole('button', { name: '复制提示词', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-copied-prompt', prompt);
+  await page.unrouteAll({ behavior: 'wait' });
+});
+
+
+test('series preferences group gallery entries and persist all three cover choices', async ({ page, request }, testInfo) => {
+  const original = await upload(request);
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Series preference result', inputs: [{ assetId: original.id, role: 'source' }] } });
+  expect(response.ok()).toBe(true);
+  const job = (await response.json()).job;
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await open(page, '/settings');
+  await expect(page.getByLabel('系列封面', { exact: true })).toHaveCount(0);
+  await page.getByLabel('按照系列显示', { exact: true }).click();
+  await expect(page.getByLabel('按照系列显示', { exact: true })).toBeChecked();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_by_series']).toBe(true);
+  await expect(page.getByLabel('系列封面', { exact: true })).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath('series-preferences.png'), animations: 'disabled' });
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
+  await expect(page.getByLabel('系列共 2 件作品')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('series-gallery.png'), animations: 'disabled' });
+  await open(page, '/settings');
+  await selectValue(page, '系列封面', 'original');
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_cover']).toBe('original');
+  await expect(page.getByLabel('系列封面', { exact: true })).toBeEnabled();
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', original.id);
+  await page.locator('.study-open').click();
+  await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', original.contentUrl);
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[original.id]).toBeTruthy();
+  await open(page, '/settings');
+  await selectValue(page, '系列封面', 'recent');
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_cover']).toBe('recent');
+  await expect(page.getByLabel('系列封面', { exact: true })).toBeEnabled();
+  await open(page, '/library');
+  await page.reload();
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', original.id);
+  await page.locator('.study-open').click();
+  await page.getByRole('button', { name: '编辑此生成结果', exact: true }).click();
+  await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', result.contentUrl);
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[result.id]).toBeTruthy();
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
+  await open(page, '/settings');
+  await page.getByLabel('按照系列显示', { exact: true }).click();
+  await expect(page.getByLabel('按照系列显示', { exact: true })).not.toBeChecked();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_by_series']).toBe(false);
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveCount(2);
+});
+
+test('editor navigation crosses series on desktop and uses separate mobile swipe axes', async ({ page, request }, testInfo) => {
+  const original = await upload(request), single = await upload(request, 'mountain');
+  const members = [original];
+  for (let index = 0; index < 3; index++) {
+    const video = index === 2;
+    const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: video ? 'mock-video-v1' : 'mock-image-v1', operation: video ? 'video.image_to_video' : 'image.edit', prompt: `Navigation ${index}`, inputs: [{ assetId: members.at(-1)!.id, role: video ? 'first_frame' : 'source' }] } });
+    expect(response.ok()).toBe(true);
+    const { job } = await response.json();
+    await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+    members.push((await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0]);
+  }
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'recent', 'gallery.series_last_viewed': { default: { [original.id]: Date.now() } } } } });
+  await open(page, '/library');
+  await page.locator(`[data-study-id="${original.id}"] .study-open`).click();
+  const viewer = page.locator('.study-viewer');
+  await expect(viewer.locator('.editing-result button:has(img)')).toHaveCount(4);
+  await expect(page.getByRole('tooltip', { name: '返回作品', exact: true })).toHaveCount(0);
+  // Every selection is committed independently, without requiring closing/reloading.
+  for (const index of [1, 2]) {
+    await viewer.locator('.editing-result button:has(img)').nth(index).click();
+    await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', members[index]!.contentUrl);
+    await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[members[index]!.id]).toBeTruthy();
+    const ring = await viewer.locator('.editing-result.is-selected').evaluate(element => ({ outline: getComputedStyle(element).outlineStyle, inset: getComputedStyle(element, '::after').inset, border: getComputedStyle(element, '::after').borderTopWidth }));
+    expect(ring).toEqual({ outline: 'none', inset: '0px', border: '2px' });
+  }
+  await viewer.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator(`[data-study-id="${members[2]!.id}"]`)).toBeVisible();
+  await page.locator(`[data-study-id="${members[2]!.id}"] .study-open`).click();
+  const desktop = page.viewportSize()!.width >= 761;
+  const swipe = async (dx: number, dy: number) => {
+    const box = (await viewer.locator('.viewer-stage').boundingBox())!;
+    const x = box.x + box.width / 2, y = box.y + Math.min(box.height / 2, 250);
+    const session = await page.context().newCDPSession(page);
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx, y: y + dy }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await session.detach();
+  };
+  if (desktop) await viewer.getByRole('button', { name: '下一张作品', exact: true }).click();
+  else await swipe(-100, 0);
+  await expect(viewer.locator('video.viewer-source-video')).toHaveAttribute('src', members[3]!.contentUrl);
+  if (desktop) await viewer.getByRole('button', { name: '下一张作品', exact: true }).click();
+  else {
+    await swipe(-100, 0);
+    await expect(viewer.locator('video.viewer-source-video')).toHaveAttribute('src', members[3]!.contentUrl);
+    await swipe(0, -100);
+  }
+  await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', single.contentUrl);
+  await expect(viewer.locator('.editing-results')).toHaveCount(0);
+  if (desktop) {
+    await viewer.getByRole('button', { name: '上一张作品', exact: true }).click();
+    await expect(viewer.locator('video.viewer-source-video')).toHaveAttribute('src', members[3]!.contentUrl);
+    await page.keyboard.press('ArrowLeft');
+    await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', members[2]!.contentUrl);
+  } else {
+    await swipe(-100, 0);
+    await expect(viewer.locator('.viewer-stage > img')).toHaveAttribute('src', single.contentUrl);
+    await swipe(0, 100);
+    await expect(viewer.locator('video.viewer-source-video')).toHaveAttribute('src', members[3]!.contentUrl);
+  }
+  await page.screenshot({ path: testInfo.outputPath('editor-navigation.png'), animations: 'disabled' });
+});
+
+test('cold gallery filters retain the current gallery while the next type loads', async ({ page, request }) => {
+  await upload(request);
+  await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'clip.mp4', mimeType: 'video/mp4', buffer: await readFile(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4')) } } });
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  for (const kind of ['image', 'video']) {
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const received = new Promise<void>(resolve => { started = resolve; });
+    await page.route('**/internal/assets?**', async route => {
+      if (new URL(route.request().url()).searchParams.get('type') === kind) { started(); await gate; }
+      await route.continue();
+    });
+    try {
+      const before = await page.locator('.study-card').count();
+      await page.getByRole('group', { name: '作品类型', exact: true }).getByRole('button', { name: kind === 'image' ? '图片' : '视频', exact: true }).click();
+      await received;
+      await expect(page.locator('.study-card')).toHaveCount(before);
+      await expect(page.locator('.gallery-scroll > .loading-state')).toHaveCount(0);
+      release();
+      await expect(page.locator('.study-card')).toHaveCount(1);
+      await expect(page.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'false');
+      await expect(page.locator('.study-card .video-tag')).toHaveCount(kind === 'video' ? 1 : 0);
+    } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+  }
+});
+
+test('recent series cover changes before the view save finishes and without a reload', async ({ page, request }) => {
+  const original = await upload(request);
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Immediate cover', inputs: [{ assetId: original.id, role: 'source' }] } });
+  const { job } = await response.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'recent', 'gallery.series_last_viewed': { default: { [original.id]: Date.now() } } } } });
+  await open(page, '/library');
+  await page.locator(`[data-study-id="${original.id}"] .study-open`).click();
+  await expect(page.locator('.editing-result')).toHaveCount(2);
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[original.id]).toBeTruthy();
+  let release!: () => void, started!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const received = new Promise<void>(resolve => { started = resolve; });
+  await page.route('**/internal/settings', async route => {
+    const body = route.request().method() === 'PATCH' ? route.request().postDataJSON() : null;
+    if (body?.values?.['gallery.series_last_viewed']?.default?.[result.id]) { started(); await gate; }
+    await route.continue();
+  });
+  try {
+    await page.getByRole('button', { name: '编辑此生成结果', exact: true }).click();
+    await received;
+    await page.getByRole('button', { name: '返回作品', exact: true }).click();
+    await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
+    release();
+    await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[result.id]).toBeTruthy();
+    await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
+
+test('mobile editor uses small series thumbnails floating tools and focus-only model guidance', async ({ page, request }, testInfo) => {
+  const original = await upload(request);
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Floating toolbar fixture', inputs: [{ assetId: original.id, role: 'source' }] } });
+  const { job } = await response.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  await open(page, `/library?asset=${original.id}`);
+  const mobile = page.viewportSize()!.width < 761, viewer = page.locator('.study-viewer');
+  const strip = viewer.locator('.editing-results');
+  await expect(strip.locator('button:has(img)')).toHaveCount(2);
+  const thumbnail = (await strip.locator('button:has(img)').first().boundingBox())!;
+  expect(thumbnail.width).toBe(mobile ? 59 : 88); expect(thumbnail.height).toBe(mobile ? 53 : 80);
+  await viewer.getByLabel('创作描述', { exact: true }).focus();
+  const mask = (await viewer.getByRole('button', { name: '编辑蒙版', exact: true }).boundingBox())!;
+  if (mobile) {
+    expect(mask.y + mask.height).toBeLessThan((await strip.boundingBox())!.y - 8);
+    const back = (await viewer.getByRole('button', { name: '返回作品', exact: true }).boundingBox())!;
+    const actions = (await viewer.locator('.viewer-heading-actions').boundingBox())!;
+    expect(back.width).toBe(44); expect(back.height).toBe(44);
+    expect(actions.x).toBeGreaterThan(back.x + back.width + 20);
+    expect(actions.y).toBeCloseTo(back.y, 0);
+    expect(await viewer.locator('.viewer-heading').evaluate(element => getComputedStyle(element).position)).toBe('absolute');
+  }
+  await page.screenshot({ path: testInfo.outputPath('floating-editor-tools.png'), animations: 'disabled' });
+  await page.route('**/internal/models?**', async route => {
+    const response = await route.fetch(), data = await response.json();
+    data.items = data.items.filter((model: { capabilities: { operations: string[] } }) => !model.capabilities.operations.some(operation => ['video.edit', 'video.extend'].includes(operation)));
+    await route.fulfill({ response, json: data });
+  });
+  const videoResponse = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'guidance.mp4', mimeType: 'video/mp4', buffer: await readFile(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4')) } } });
+  const video = (await videoResponse.json()).asset;
+  await open(page, `/library?asset=${video.id}`);
+  const guidance = viewer.getByText('没有支持当前创作类型的模型', { exact: true });
+  await expect(viewer.locator('video')).toBeVisible(); await expect(guidance).toHaveCount(0);
+  await viewer.getByLabel('创作描述', { exact: true }).focus(); await expect(guidance).toBeVisible();
+  await viewer.getByLabel('创作描述', { exact: true }).blur(); await expect(guidance).toHaveCount(0);
+  await page.unrouteAll({ behavior: 'wait' });
+});
+
+test('editor slides media on navigation follows touch drags and respects reduced motion', async ({ page, request }, testInfo) => {
+  const original = await upload(request), single = await upload(request, 'mountain');
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Slide fixture', inputs: [{ assetId: original.id, role: 'source' }] } });
+  const { job } = await response.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'ui.reduce_motion': 'system' } } });
+  // Pause actual Web Animations to inspect the outgoing and incoming frames deterministically.
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes, options) {
+      const animation = animate.call(this, keyframes, options);
+      if (this.matches('.viewer-image,.viewer-slide-overlay,.viewer-drag-neighbor,.viewer-drag-neighbor img')) animation.pause();
+      return animation;
+    };
+  });
+  await open(page, `/library?asset=${original.id}`);
+  const viewer = page.locator('.study-viewer'), stage = viewer.locator('.viewer-stage');
+  await expect(viewer.locator('.editing-result')).toHaveCount(2);
+  const finish = async () => { await page.evaluate(() => document.getAnimations().forEach(animation => { if (animation.playState === 'paused') animation.finish(); })); await expect(page.locator('.viewer-slide-overlay')).toHaveCount(0); };
+  const mobile = page.viewportSize()!.width < 761;
+  const swipe = async (dx: number, dy: number) => {
+    const box = (await stage.boundingBox())!, x = box.x + box.width / 2, y = box.y + Math.min(box.height / 2, 240);
+    const session = await page.context().newCDPSession(page);
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx, y: y + dy }] });
+    await expect.poll(() => stage.locator('.viewer-image').evaluate((element, horizontal) => parseFloat(element.style.translate.split(' ')[horizontal ? 0 : 1]!), !!dx)).toBe(dx || dy);
+    await expect(stage.locator('.viewer-drag-neighbor')).toHaveCount(1);
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await session.detach();
+  };
+  if (mobile) await swipe(-90, 0); else await viewer.getByRole('button', { name: '下一张作品', exact: true }).click();
+  await expect(stage.locator('> img')).toHaveAttribute('src', result.contentUrl);
+  await expect(stage).toHaveAttribute('data-slide-axis', 'x');
+  await expect(page.locator('.viewer-slide-overlay')).toBeVisible();
+  const animated = mobile ? stage.locator('.viewer-drag-neighbor') : stage.locator('> img');
+  expect(await animated.evaluate(element => (element.getAnimations()[0]!.effect as KeyframeEffect).getKeyframes()[0]!.translate)).toMatch(/^[1-9][0-9.]*px(?: 0px)?$/);
+  await page.evaluate(() => document.getAnimations().forEach(animation => { if (animation.playState === 'paused') animation.currentTime = 140; }));
+  await page.screenshot({ path: testInfo.outputPath('horizontal-slide.png') });
+  await finish();
+  if (mobile) await swipe(0, -100); else await viewer.getByRole('button', { name: '下一张作品', exact: true }).click();
+  await expect(stage.locator('> img')).toHaveAttribute('src', single.contentUrl);
+  await expect(stage).toHaveAttribute('data-slide-axis', mobile ? 'y' : 'x');
+  await finish();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  if (mobile) {
+    const box = (await stage.boundingBox())!, session = await page.context().newCDPSession(page);
+    const x = box.x + box.width / 2, y = box.y + 200;
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y + 100 }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await session.detach();
+  } else await page.keyboard.press('ArrowLeft');
+  await expect(stage.locator('> img')).toHaveAttribute('src', result.contentUrl);
+  await expect(page.locator('.viewer-slide-overlay')).toHaveCount(0);
+  await expect(stage).not.toHaveAttribute('data-slide-axis');
+});
+
+test('neighbor media follows the finger before release and cancels without saving a view', async ({ page, request }, testInfo) => {
+  const original = await upload(request), single = await upload(request, 'mountain');
+  const created = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Finger-following fixture', inputs: [{ assetId: original.id, role: 'source' }] } });
+  const { job } = await created.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'recent', 'ui.reduce_motion': 'system', 'gallery.series_last_viewed': {} } } });
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (frames, options) {
+      const animation = animate.call(this, frames, options);
+      if (this.matches('.viewer-image,.viewer-slide-overlay,.viewer-drag-neighbor,.viewer-drag-neighbor img')) animation.pause();
+      return animation;
+    };
+  });
+  await open(page, `/library?asset=${result.id}`);
+  const stage = page.locator('.viewer-stage'), mobile = page.viewportSize()!.width < 761;
+  await expect(page.locator('.editing-result')).toHaveCount(2);
+  const finish = async () => { await page.evaluate(() => document.getAnimations().forEach(animation => { if (animation.playState === 'paused') animation.finish(); })); await expect(page.locator('.viewer-slide-overlay,.viewer-drag-neighbor')).toHaveCount(0); };
+  const viewed = async (id: string) => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[id];
+  const drag = async (axis: 'x' | 'y', expectedId: string, cancel: boolean) => {
+    const box = (await stage.boundingBox())!, distance = axis === 'x' ? box.width : box.height;
+    const x = axis === 'x' ? box.x + 20 : box.x + box.width / 2, y = axis === 'x' ? box.y + 220 : box.y + box.height * .8;
+    const session = mobile ? await page.context().newCDPSession(page) : null;
+    if (session) await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    else { await page.mouse.move(x, y); await page.mouse.down(); }
+    const move = async (fraction: number) => {
+      const point = { x: x + (axis === 'x' ? distance * fraction : 0), y: y - (axis === 'y' ? distance * fraction : 0) };
+      if (session) await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point] });
+      else await page.mouse.move(point.x, point.y, { steps: 8 });
+    };
+    if (session && axis === 'y') await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + 8, y: y - 3 }] });
+    await move(.62);
+    const neighbor = stage.locator('.viewer-drag-neighbor');
+    await expect(neighbor).toHaveAttribute('data-asset-id', expectedId);
+    const first = (await neighbor.locator('img').boundingBox())!;
+    const visible = axis === 'x' ? Math.min(first.x + first.width, box.x + box.width) - Math.max(first.x, box.x) : Math.min(first.y + first.height, box.y + box.height) - Math.max(first.y, box.y);
+    expect(visible).toBeGreaterThan(10);
+    if (axis === 'x') expect(visible).toBeLessThan(first.width - 10);
+    expect(await viewed(expectedId)).toBeUndefined();
+    await move(.72);
+    await expect.poll(async () => {
+      const second = (await neighbor.locator('img').boundingBox())!;
+      return axis === 'x' ? second.x - first.x : first.y - second.y;
+    }).toBeCloseTo(distance * .1, 0);
+    await page.screenshot({ path: testInfo.outputPath(`following-${axis}-${cancel ? 'cancel' : 'commit'}.png`) });
+    const beforeRelease = (await neighbor.locator('img').boundingBox())!;
+    if (session) { await session.send('Input.dispatchTouchEvent', { type: cancel ? 'touchCancel' : 'touchEnd', touchPoints: [] }); await session.detach(); }
+    else {
+      if (cancel) await page.mouse.move(x + 12, y);
+      await page.mouse.up();
+    }
+    if (cancel) {
+      await finish(); expect(await viewed(expectedId)).toBeUndefined();
+      await expect(page).toHaveURL(new RegExp(`asset=${result.id}`));
+    } else {
+      await expect(page).toHaveURL(new RegExp(`asset=${expectedId}`));
+      await expect(stage).toHaveAttribute('data-slide-axis', axis);
+      const afterRelease = (await stage.locator('.viewer-drag-neighbor img').boundingBox())!;
+      expect(afterRelease.x).toBeCloseTo(beforeRelease.x, 0); expect(afterRelease.y).toBeCloseTo(beforeRelease.y, 0);
+      await finish(); await expect.poll(() => viewed(expectedId)).toBeTruthy();
+    }
+  };
+  await drag('x', original.id, true);
+  await drag('x', original.id, false);
+  if (mobile) await drag('y', single.id, false);
+});
+
+test('opening an uncached gallery item never displays the previously closed item', async ({ page, request }) => {
+  const previous = await upload(request, 'coast');
+  await upload(request, 'mountain');
+  const target = await upload(request, 'architecture');
+  await open(page, '/library');
+  await page.locator(`[data-study-id="${previous.id}"] .study-open`).click();
+  await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', previous.contentUrl);
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/internal/assets/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === `/internal/assets/${target.id}` || path === `/internal/assets/${target.id}/series`) await gate;
+    await route.continue();
+  });
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => {
+      const src = document.querySelector('.viewer-stage > img')?.getAttribute('src');
+      if (src && seen.at(-1) !== src) seen.push(src);
+      document.documentElement.dataset.openedMediaSources = JSON.stringify(seen);
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+  });
+  try {
+    await page.locator(`[data-study-id="${target.id}"] .study-open`).click();
+    await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', target.contentUrl);
+    await expect(page.locator('.viewer-heading h2')).toHaveText('architecture.webp');
+    await expect(page.locator('html')).toHaveAttribute('data-opened-media-sources', JSON.stringify([target.contentUrl]));
+    await expect(page.locator('.viewer-slide-overlay,.viewer-drag-neighbor')).toHaveCount(0);
+    release();
+    await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', target.contentUrl);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
+
+test('HTTP content preference saves and survives reload', async ({ page, request }, testInfo) => {
+  await request.patch('/internal/settings', { data: { values: { 'network.allow_http_content': true } } });
+  await open(page, '/settings');
+  const toggle = page.getByRole('checkbox', { name: '是否允许 HTTP 内容', exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['network.allow_http_content']).toBe(false);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeEnabled();
+  await toggle.focus();
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['network.allow_http_content']).toBe(true);
+  await expect(toggle).toBeEnabled();
+  await expect(page.getByText('同时允许 HTTP 提供商连接和媒体下载；HTTP 不加密传输。')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('http-content-preference.png') });
 });

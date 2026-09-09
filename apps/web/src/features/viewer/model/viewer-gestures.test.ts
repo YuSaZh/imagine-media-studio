@@ -233,6 +233,17 @@ describe('viewer gesture state machine', () => {
     }).effect).toBe('none');
   });
 
+  it('uses vertical swipes for entries only when enabled and never while zoomed', () => {
+    const down = (scale = 1) => transition(createViewerGestureState(scale), { type: 'pointerdown', pointerId: 1, point: { x: 400, y: 300 }, layout });
+    const up = { type: 'pointerup' as const, pointerId: 1, point: { x: 410, y: 170 }, layout, allowVerticalSwipe: true };
+    expect(transitionViewerGesture(down(), up).effect).toBe('next-entry');
+    expect(transitionViewerGesture(down(), { ...up, point: { x: 390, y: 430 } }).effect).toBe('previous-entry');
+    expect(transitionViewerGesture(down(), { ...up, allowVerticalSwipe: false }).effect).toBe('none');
+    expect(transitionViewerGesture(down(2), up).effect).toBe('none');
+    expect(transitionViewerGesture(down(), { ...up, point: { x: 290, y: 310 } }).effect).toBe('next');
+    expect(transitionViewerGesture(down(), { ...up, point: { x: 410, y: 280 } }).effect).toBe('none');
+  });
+
   it('returns tap and double-tap reset/toggle effects', () => {
     let state = createViewerGestureState();
     state = transition(state, {

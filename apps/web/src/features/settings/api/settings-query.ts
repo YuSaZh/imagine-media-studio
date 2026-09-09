@@ -17,6 +17,8 @@ export const PWA_SETTING_DEFAULTS = {
 
 
 export interface GeneralSettingsValues {
+  groupBySeries: boolean;
+  seriesCover: 'recent' | 'latest' | 'original';
   autoplayPreviews: boolean;
   clearPromptAfterSubmit: boolean;
   defaultMode: 'image' | 'video';
@@ -35,6 +37,8 @@ function oneOf<T extends string>(value: JsonValue | undefined, allowed: readonly
 
 export function readGeneralSettings(settings: JsonObject | undefined): GeneralSettingsValues {
   return {
+    groupBySeries: settings?.['gallery.group_by_series'] === true,
+    seriesCover: oneOf(settings?.['gallery.series_cover'], ['recent', 'latest', 'original'], 'latest'),
     autoplayPreviews:
       typeof settings?.['gallery.autoplay_previews'] === 'boolean'
         ? settings['gallery.autoplay_previews']

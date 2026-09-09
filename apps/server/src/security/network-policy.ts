@@ -35,7 +35,7 @@ export class UnsafeRemoteUrlError extends Error {
 }
 
 export interface NetworkPolicyOptions {
-  allowInsecureHttp?: boolean;
+  allowInsecureHttp?: boolean | (() => boolean);
   allowLoopback?: boolean;
   allowPrivateNetwork?: boolean;
   allowedHosts?: readonly string[];
@@ -230,7 +230,7 @@ function classifyAddress(address: string): AddressClassification {
 }
 
 export class NetworkPolicy {
-  private readonly allowInsecureHttp: boolean;
+  private readonly allowInsecureHttp: boolean | (() => boolean);
   private readonly allowLoopback: boolean;
   private readonly allowPrivateNetwork: boolean;
   private readonly allowedHosts: ReadonlySet<string> | null;
@@ -277,7 +277,8 @@ export class NetworkPolicy {
         throw new UnsafeRemoteUrlError('Remote media URL contains credential-like query data.');
       }
     }
-    if (url.protocol !== 'https:' && !(this.allowInsecureHttp && url.protocol === 'http:')) {
+    const allowHttp = typeof this.allowInsecureHttp === 'function' ? this.allowInsecureHttp() : this.allowInsecureHttp;
+    if (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:')) {
       throw new UnsafeRemoteUrlError('Remote media URL must use HTTPS.');
     }
     const port = effectivePort(url);

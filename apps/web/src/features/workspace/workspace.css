@@ -743,3 +743,47 @@ svg { flex-shrink: 0; }
 .delete-project-files { min-height: 40px; display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 13px; }
 
 .delete-project-files input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+.editing-result.is-selected { position: relative; outline: none; border-color: var(--accent); }
+.editing-result.is-selected::after { content: ""; position: absolute; inset: 0; z-index: 1; border: 2px solid var(--accent); border-radius: inherit; box-shadow: inset 0 0 0 2px #fff; pointer-events: none; }
+.editing-result button:focus-visible { outline-offset: -4px; }
+.editing-result button { position: relative; }
+.editing-result .series-job { width: 88px; height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 11px; }
+.series-video-mark { position: absolute; right: 5px; bottom: 5px; color: white; filter: drop-shadow(0 1px 2px #0008); }
+.editing-generation-stage { position: relative; width: min(100%, 760px); height: min(100%, 760px); min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; border-radius: 16px; padding: 24px; overflow: auto; }
+.editing-generation-stage > p { max-width: 540px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; text-align: center; }
+.editing-generation-stage > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.editing-generation-stage .quiet-command { background: #ffffffe0; }
+
+.editing-generation-stage > :not(.pending-study-art) { position: relative; z-index: 1; }
+.editing-generation-stage > .pending-study-art { display: block; }
+.study-viewer:has(.editing-results) .viewer-stage { padding-bottom: calc(var(--composer-size, 56px) + 132px); }
+
+.pending-study .card-copy-prompt { z-index: 2; }
+.pending-study-copy { padding-right: 30px; }
+
+.series-count { position: absolute; bottom: 8px; left: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid rgb(255 255 255 / 18%); border-radius: 7px; color: rgb(255 255 255 / 95%); background: rgb(15 23 20 / 62%); box-shadow: 0 1px 3px #0002; font-size: 11px; font-variant-numeric: tabular-nums; line-height: 16px; pointer-events: none; }
+.study-card:has(.series-count) .study-caption { padding-bottom: 44px; }
+.setting-suboption { padding-left: 20px; }
+
+.viewer-slide-overlay { position: fixed; overflow: hidden; pointer-events: none; z-index: 46; }
+@media (max-width: 760px) {
+  .study-viewer .viewer-heading { position: absolute; inset: max(12px, env(safe-area-inset-top)) 12px auto; z-index: 4; height: 44px; padding: 0; background: none; border: 0; pointer-events: none; }
+  .study-viewer .viewer-heading-main { flex: 0 0 auto; }
+  .study-viewer .viewer-heading h2 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .study-viewer .viewer-heading-main > .tool, .study-viewer .viewer-heading-actions { pointer-events: auto; border: 1px solid #dce3dde0; background: #fafbf9f2; box-shadow: 0 3px 14px #24352712; }
+  .study-viewer .viewer-heading-main > .tool { width: 44px; height: 44px; flex-basis: 44px; border-radius: 50%; }
+  .study-viewer .viewer-heading-actions { border-radius: 24px; gap: 0; padding: 0 3px; }
+  .study-viewer .viewer-heading-actions .tool { width: 42px; height: 42px; flex-basis: 42px; }
+  .study-viewer .viewer-stage { padding-top: calc(76px + env(safe-area-inset-top)); }
+  .study-viewer.has-info .viewer-info { padding-top: calc(72px + env(safe-area-inset-top)); }
+  .editing-results { right: 0; max-height: 60px; gap: 6px; scrollbar-width: none; }
+  .editing-result { border-radius: 9px; }
+  .editing-result button:has(img), .editing-result .series-job { width: 59px; height: 53px; }
+  .editing-result .series-job { gap: 2px; font-size: 9px; }
+  .editing-result .series-video-mark { width: 12px; height: 12px; }
+  .image-editing-controls:has(.editing-results) .editing-mask-entry { top: auto; bottom: calc(100% + 79px); }
+  .study-viewer:has(.editing-results) .viewer-stage { padding-bottom: calc(var(--composer-size, 56px) + 104px); }
+}
+
+.preferences .setting-description { display: block; margin-top: 6px; color: #66745e; font-size: 11px; line-height: 1.5; }

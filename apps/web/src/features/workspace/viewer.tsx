@@ -4,10 +4,16 @@ import { ArrowLeft, Bookmark, Check, ChevronLeft, ChevronRight, Copy, Download, 
 import { createViewerGestureState, setViewerGestureTransform, transitionViewerGesture, type ViewerGestureLayout } from '../viewer/model/viewer-gestures';
 import { JOB_LABELS, mediaExtension, type MediaItem, type Project } from './data';
 import { Choice, Options, Tool } from './ui';
+import type { ViewerMotion } from './viewer-motion';
 import { copyPrompt } from './copy-prompt';
 
 export interface ViewerProps {
+  motion?: ViewerMotion;
   editingControls?: ReactNode;
+  canPrevious?: boolean;
+  canNext?: boolean;
+  onMoveEntry?: (delta: number) => void;
+  stageContent?: ReactNode;
   videoRef?: RefObject<HTMLVideoElement | null>;
   initialVideoTime?: number;
   onVideoTime?: (time: number) => void;
@@ -30,14 +36,14 @@ export interface ViewerProps {
 
 export function Viewer(props: ViewerProps) {
   const { item } = props;
-  const image = item.kind === 'image' || props.previewSrc !== undefined;
+  const image = !props.stageContent && (item.kind === 'image' || props.previewSrc !== undefined);
   const [info, setInfo] = useState(false);
   const [mediaError, setMediaError] = useState(false);
   const [gesture, setGesture] = useState(createViewerGestureState);
   const gestureRef = useRef(gesture);
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageNode, setStageNode] = useState<HTMLDivElement | null>(null);
-  const mountStage = useCallback((node: HTMLDivElement | null) => { stageRef.current = node; setStageNode(node); }, []);
+  const mountStage = useCallback((node: HTMLDivElement | null) => { stageRef.current = node; setStageNode(node); props.motion?.attach(node); }, [props.motion]);
   const focusRef = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
   const lastTap = useRef(0);
 
@@ -55,8 +61,13 @@ export function Viewer(props: ViewerProps) {
   };
   const apply = (transition: ReturnType<typeof transitionViewerGesture>) => {
     gestureRef.current = transition.state; setGesture(transition.state);
+    const { mode, startPoint, lastPoint } = transition.state;
+    if (mode === 'swipe' && startPoint && lastPoint) props.motion?.drag(lastPoint.x - startPoint.x, lastPoint.y - startPoint.y, matchMedia('(max-width: 760px)').matches);
+    else if (['none', 'tap', 'double-tap'].includes(transition.effect)) props.motion?.settle();
     if (transition.effect === 'next') props.onMove(1);
     if (transition.effect === 'previous') props.onMove(-1);
+    if (transition.effect === 'next-entry') props.onMoveEntry?.(1);
+    if (transition.effect === 'previous-entry') props.onMoveEntry?.(-1);
   };
   useEffect(() => {
     const stage = stageNode;
@@ -75,7 +86,7 @@ export function Viewer(props: ViewerProps) {
     return () => stage.removeEventListener('wheel', wheel);
   }, [item.id, image, stageNode]);
   const copy = () => copyPrompt(item.prompt, props.onNotice);
-  const writeDisabled = !props.online || props.busy;
+  const writeDisabled = !props.online || props.busy || !!props.stageContent;
   return <Dialog.Root open onOpenChange={open => !open && props.onClose()}><Dialog.Portal>
     <Dialog.Overlay className="viewer-backdrop" />
     <Dialog.Content className={`study-viewer ${item.kind === 'image' ? 'image-editing-viewer' : 'video-editing-viewer'} ${info ? 'has-info' : ''}`} aria-describedby={undefined}
@@ -84,22 +95,27 @@ export function Viewer(props: ViewerProps) {
         if ((event.target as HTMLElement).closest('input,textarea,select,video')) return;
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); props.onMove(event.key === 'ArrowLeft' ? -1 : 1); }
       }}>
-      <header className="viewer-heading"><div><Dialog.Close asChild><Tool label="返回作品"><ArrowLeft size={20} /></Tool></Dialog.Close><Dialog.Title>{item.title}</Dialog.Title><span className="viewer-index">{props.index + 1} / {props.total}</span></div><div>
+      <header className="viewer-heading"><div className="viewer-heading-main"><Dialog.Close asChild><button type="button" className="tool" aria-label="返回作品"><ArrowLeft size={20} /></button></Dialog.Close><Dialog.Title>{item.title}</Dialog.Title><span className="viewer-index">{props.index + 1} / {props.total}</span></div><div className="viewer-heading-actions">
         <Tool label={item.saved ? '取消收藏' : '收藏作品'} disabled={writeDisabled} className={item.saved ? 'is-saved' : ''} onClick={props.onSave}><Bookmark size={18} fill={item.saved ? 'currentColor' : 'none'} /></Tool>
-        <a className="tool" aria-label="下载原文件" title="下载原文件" aria-disabled={!props.online} href={props.online ? item.src : undefined} download={`${item.title.slice(0, 60)}.${mediaExtension(item)}`}><Download size={19} /></a>
-        <Tool label="作品信息" aria-pressed={info} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
+        <a className="tool" aria-label="下载原文件" title="下载原文件" aria-disabled={writeDisabled} href={!writeDisabled ? item.src : undefined} download={`${item.title.slice(0, 60)}.${mediaExtension(item)}`}><Download size={19} /></a>
+        <Tool label="作品信息" disabled={!!props.stageContent} aria-pressed={info} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
       </div></header>
       <div className="viewer-workspace">
         <div className="viewer-stage" ref={mountStage} data-viewer-scale={gesture.scale} onClick={event => { if (!(event.target as HTMLElement).closest('button,a,video')) props.onStageClick?.(); }}
           onDoubleClick={event => { if (image && !(event.target as HTMLElement).closest('button,a,video') && Date.now() - lastTap.current > 400) apply(transitionViewerGesture(gestureRef.current, { type: 'doubletap', layout: layout() })); }}
           onPointerDown={event => {
-            if ((event.target as HTMLElement).closest('button,a,video')) return;
+            if ((event.target as HTMLElement).closest('button,a')) return;
+            if ((event.target as HTMLElement).closest('video')) {
+              const box = (event.target as HTMLElement).getBoundingClientRect();
+              if (event.pointerType !== 'touch' || matchMedia('(min-width: 761px)').matches || event.clientY > box.bottom - 52) return;
+            }
+            if (event.pointerType === 'mouse') event.preventDefault();
             apply(transitionViewerGesture(gestureRef.current, { type: 'pointerdown', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout() }));
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerMove={event => { if (gestureRef.current.pointers.has(event.pointerId)) apply(transitionViewerGesture(gestureRef.current, { type: 'pointermove', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout() })); }}
           onPointerUp={event => {
-            const transition = transitionViewerGesture(gestureRef.current, { type: 'pointerup', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout() });
+            const transition = transitionViewerGesture(gestureRef.current, { type: 'pointerup', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout(), allowVerticalSwipe: event.pointerType === 'touch' && matchMedia('(max-width: 760px)').matches });
             apply(transition);
             if (image && event.pointerType === 'touch' && transition.effect === 'tap') {
               const now = Date.now();
@@ -108,16 +124,16 @@ export function Viewer(props: ViewerProps) {
             }
           }}
           onPointerCancel={event => apply(transitionViewerGesture(gestureRef.current, { type: 'pointercancel', pointerId: event.pointerId }))}>
-          {mediaError ? <p className="media-error" role="alert">原文件暂时无法加载<button className="quiet-command" onClick={() => setMediaError(false)}>重试</button></p> : <>
+          {props.stageContent ?? (mediaError ? <p className="media-error" role="alert">原文件暂时无法加载<button className="quiet-command" onClick={() => setMediaError(false)}>重试</button></p> : <>
             {image && <img className="viewer-image" src={props.previewSrc ?? (props.online ? item.src : item.thumbnail)} alt={item.title} draggable={false} onError={() => setMediaError(true)} style={{ transform: `translate(${gesture.position.x}px, ${gesture.position.y}px) scale(${gesture.scale})` }} />}
             {item.kind === 'video' && (props.online ? <video key={item.id} ref={props.videoRef} src={item.src} poster={item.poster ?? undefined} controls playsInline preload="auto" className="viewer-image viewer-source-video" aria-label="原视频" aria-hidden={image} style={image ? { display: 'none' } : undefined} onLoadedMetadata={event => { const video = event.currentTarget, time = props.initialVideoTime ?? 0; if (time > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration); }} onTimeUpdate={event => props.onVideoTime?.(event.currentTarget.currentTime)} onSeeked={event => props.onVideoTime?.(event.currentTarget.currentTime)} onError={() => { if (!image) setMediaError(true); }} /> : !image && <img className="viewer-image" src={item.poster ?? item.thumbnail} alt={item.title} />)}
-          </>}
+          </>)}
 
-          <Tool label="上一张作品" className="viewer-arrow previous" disabled={props.total < 2} onClick={() => props.onMove(-1)}><ChevronLeft size={23} /></Tool>
-          <Tool label="下一张作品" className="viewer-arrow next" disabled={props.total < 2} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
+          <Tool label="上一张作品" className="viewer-arrow previous" disabled={!(props.canPrevious ?? props.total > 1)} onClick={() => props.onMove(-1)}><ChevronLeft size={23} /></Tool>
+          <Tool label="下一张作品" className="viewer-arrow next" disabled={!(props.canNext ?? props.total > 1)} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
 
         </div>
-        {info && <aside className="viewer-info"><header><h3>作品信息</h3><Tool label="关闭作品信息" onClick={() => setInfo(false)}><X size={17} /></Tool></header>
+        {info && !props.stageContent && <aside className="viewer-info"><header><h3>作品信息</h3><Tool label="关闭作品信息" onClick={() => setInfo(false)}><X size={17} /></Tool></header>
           <span className="muted-label">提示词</span><p>{item.prompt || '本地上传素材'}</p>{item.prompt && <button className="text-command" onClick={() => void copy()}><Copy size={15} />复制提示词</button>}
           <dl><div><dt>服务</dt><dd>{props.providerName}</dd></div><div><dt>模型</dt><dd>{item.model}</dd></div><div><dt>尺寸</dt><dd>{item.width} × {item.height}</dd></div><div><dt>类型</dt><dd>{item.mimeType || (image ? '图片' : '视频')}</dd></div>{item.durationSeconds !== null && <div><dt>时长</dt><dd>{item.durationSeconds.toFixed(1)} 秒</dd></div>}<div><dt>创建时间</dt><dd>{new Date(item.createdAt).toLocaleString()}</dd></div>{item.job && <div><dt>状态</dt><dd>{JOB_LABELS[item.job.status]}</dd></div>}</dl>
           {props.online && <Options label="加入项目" trigger={<><FolderPlus size={16} />加入项目</>}><div className="option-heading">项目</div>{props.projects.length ? props.projects.map(project => <Choice key={project.id} active={item.collectionIds.includes(project.id)} onClick={() => props.onProject(project.id, !item.collectionIds.includes(project.id))}><span>{project.name}</span>{item.collectionIds.includes(project.id) && <Check size={15} />}</Choice>) : <p className="menu-empty">还没有项目</p>}</Options>}

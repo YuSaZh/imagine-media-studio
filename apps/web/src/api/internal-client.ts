@@ -25,6 +25,7 @@ import {
   CustomAdapterValidateRequestSchema,
   CustomAdapterValidationResponseSchema,
   AssetPageSchema,
+  AssetSeriesResponseSchema,
   AssetResponseSchema,
   AuthLoginSchema,
   AuthStatusSchema,
@@ -1111,7 +1112,7 @@ export const internalClient = {
     }),
   deleteJob: async (jobId: string) =>
     requestEmpty(`/internal/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
-  listAssets: async (options: { excludePrivate?: boolean; collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
+  listAssets: async (options: { groupBySeries?: boolean; seriesCover?: 'recent' | 'latest' | 'original'; excludePrivate?: boolean; collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
     requestJson(`/internal/assets${queryString(options)}`, AssetPageSchema),
   getAsset: async (assetId: string) =>
     requestJson(`/internal/assets/${encodeURIComponent(assetId)}`, AssetResponseSchema),
@@ -1136,6 +1137,7 @@ export const internalClient = {
       method: 'PATCH',
       body: jsonBody({ favorite }),
     }),
+  getAssetSeries: async (assetId: string) => requestJson(`/internal/assets/${encodeURIComponent(assetId)}/series`, AssetSeriesResponseSchema),
   deleteAsset: async (assetId: string) =>
     requestEmpty(`/internal/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' }),
   listCollections: async (options: { cursor?: string; limit?: number } = {}) =>

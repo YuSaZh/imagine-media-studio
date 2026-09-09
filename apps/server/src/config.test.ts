@@ -3,12 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 
 describe('server configuration', () => {
-  it('applies bounded media and network-safe defaults outside production', () => {
+  it('allows HTTP content by default while keeping private networks disabled', () => {
     const config = loadConfig({ DATA_DIR: '/tmp/imagine-config-test' });
 
     expect(config).toMatchObject({
-      allowHttpMediaDownloads: false,
-      allowInsecureProviderHttp: false,
+      allowHttpMediaDownloads: true,
+      allowInsecureProviderHttp: true,
       allowPrivateNetworkAccess: false,
       appPassword: null,
       maxImageUploadBytes: 32 * 1024 * 1024,

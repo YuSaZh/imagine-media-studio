@@ -93,15 +93,19 @@ export function Settings({ online }: { online: boolean }) {
 }
 
 function Preferences({ online }: { online: boolean }) {
+  const account = useAccount();
   const query = useSettingsQuery();
   const patch = usePatchSettings();
   const values = readGeneralSettings(query.data?.settings);
   const disabled = !online || query.isPending || patch.isPending;
   return <div className="preferences">
     {(query.isError || patch.isError) && <p className="error-state" role="alert">设置保存或读取失败，请重试。</p>}
+    {account.data?.user?.role === 'admin' && <label className="setting-line"><span>是否允许 HTTP 内容<small className="setting-description">同时允许 HTTP 提供商连接和媒体下载；HTTP 不加密传输。</small></span><input type="checkbox" aria-label="是否允许 HTTP 内容" checked={query.data?.settings['network.allow_http_content'] === true} disabled={disabled || query.isError} onChange={event => patch.mutate({ 'network.allow_http_content': event.target.checked })} /></label>}
     <label className="setting-line"><span>默认创作类型</span><Select aria-label="默认创作类型" disabled={disabled} value={values.defaultMode} onChange={event => patch.mutate({ 'composer.default_mode': event.target.value })}><SelectItem value="image">图片</SelectItem><SelectItem value="video">视频</SelectItem></Select></label>
     <label className="setting-line"><span>提交后清空提示词</span><input type="checkbox" aria-label="提交后清空提示词" checked={values.clearPromptAfterSubmit} disabled={disabled} onChange={event => patch.mutate({ 'composer.clear_prompt_after_submit': event.target.checked })} /></label>
     <label className="setting-line"><span>初始作品类型</span><Select aria-label="初始作品类型" value={values.initialFilter} disabled={disabled} onChange={event => patch.mutate({ 'gallery.initial_filter': event.target.value })}><SelectItem value="all">全部作品</SelectItem><SelectItem value="image">图片</SelectItem><SelectItem value="video">视频</SelectItem></Select></label>
+    <label className="setting-line"><span>按照系列显示</span><input type="checkbox" aria-label="按照系列显示" checked={values.groupBySeries} disabled={disabled} onChange={event => patch.mutate({ 'gallery.group_by_series': event.target.checked })} /></label>
+    {values.groupBySeries && <label className="setting-line setting-suboption"><span>系列封面</span><Select aria-label="系列封面" value={values.seriesCover} disabled={disabled} onChange={event => patch.mutate({ 'gallery.series_cover': event.target.value })}><SelectItem value="recent">最近查看的作品</SelectItem><SelectItem value="latest">最新生成的作品</SelectItem><SelectItem value="original">最开始的原图</SelectItem></Select></label>}
     <label className="setting-line"><span>减少动效</span><Select aria-label="减少动效" value={values.reduceMotion} disabled={disabled} onChange={event => patch.mutate({ 'ui.reduce_motion': event.target.value })}><SelectItem value="system">跟随系统</SelectItem><SelectItem value="always">开启</SelectItem><SelectItem value="never">关闭</SelectItem></Select></label>
     <div className="settings-session"><button className="quiet-command" disabled={!online} onClick={() => void internalClient.logout()}><LogOut size={16} />退出登录</button></div>
   </div>;

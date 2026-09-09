@@ -52,7 +52,7 @@ describe('account boundaries', () => {
       const result = await server.app.inject({ url: `/internal/${path}`, headers: alice });
       expect(result.statusCode).toBe(200); expect(result.json().items).toEqual([]);
     }
-    for (const path of [`assets/${asset.id}`, `assets/${asset.id}/content`, `assets/${asset.id}/thumbnail`, `jobs/${oldJob.id}`, `collections/${oldCollection.id}`]) {
+    for (const path of [`assets/${asset.id}`, `assets/${asset.id}/content`, `assets/${asset.id}/thumbnail`, `assets/${asset.id}/series`, `jobs/${oldJob.id}`, `collections/${oldCollection.id}`]) {
       expect((await server.app.inject({ url: `/internal/${path}`, headers: alice })).statusCode).toBe(404);
       expect((await server.app.inject({ method: 'DELETE', url: `/internal/${path}`, headers: alice })).statusCode).toBe(404);
     }

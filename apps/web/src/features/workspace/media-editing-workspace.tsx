@@ -1,8 +1,11 @@
+import { copyPrompt } from './copy-prompt';
+import { useViewerMotion, type ViewerMotion } from './viewer-motion';
+import { useAssetSeries } from './series-query';
 import { GenerationStatus } from './generation-status';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_IMAGE_INPUT_POLICY, MASK_OVERLAY_COLOR, ModelCapabilitiesSchema, type AssetDto, type MaskDocument, type MediaOperation } from '@imagine/shared';
-import { Brush, LoaderCircle } from 'lucide-react';
+import { Brush, Copy, Play, Sparkles, LoaderCircle } from 'lucide-react';
 import { internalClient } from '../../api/internal-client';
 import { internalQueryKeys } from '../../api/query-keys';
 import { createBrowserId } from '../../browser-id';
@@ -54,10 +57,12 @@ function useMaskPreview(source: string, document: MaskDocument | undefined) {
   return preview?.source === source && preview.document === document ? preview.url : undefined;
 }
 
-export function MediaEditingWorkspace(props: ViewerProps & { models: WorkspaceModel[]; projectId: string | null; layout: WorkspaceLayout; drafts: MediaEditingDrafts; onSelectResult: (item: MediaItem) => void }) {
-  return <EditingSession key={`${props.projectId ?? 'default'}:${props.item.id}`} {...props} />;
+export function MediaEditingWorkspace(props: ViewerProps & { models: WorkspaceModel[]; projectId: string | null; layout: WorkspaceLayout; drafts: MediaEditingDrafts; onSelectResult: (item: MediaItem) => void; onBrowseEntry: (delta: number, memberIds: string[], boundary?: boolean) => Promise<boolean>; onResolveEntry: (delta: number, memberIds: string[], boundary?: boolean) => Promise<MediaItem | null> }) {
+  const motion = useViewerMotion(props.item.id);
+  return <EditingSession key={`${props.projectId ?? 'default'}:${props.item.id}`} {...props} motion={motion} />;
 }
-function EditingSession(props: ViewerProps & { models: WorkspaceModel[]; projectId: string | null; layout: WorkspaceLayout; drafts: MediaEditingDrafts; onSelectResult: (item: MediaItem) => void }) {
+function EditingSession(props: ViewerProps & { motion: ViewerMotion; models: WorkspaceModel[]; projectId: string | null; layout: WorkspaceLayout; drafts: MediaEditingDrafts; onSelectResult: (item: MediaItem) => void; onBrowseEntry: (delta: number, memberIds: string[], boundary?: boolean) => Promise<boolean>; onResolveEntry: (delta: number, memberIds: string[], boundary?: boolean) => Promise<MediaItem | null> }) {
+  const queryClient = useQueryClient();
   const scope = `edit.${props.projectId ?? 'default'}.${props.item.id}`;
   const sourceIsVideo = props.item.kind === 'video';
   const [draft, setDraft] = useState(() => props.drafts.get(scope) ?? emptyDraft(props.item.kind));
@@ -70,12 +75,14 @@ function EditingSession(props: ViewerProps & { models: WorkspaceModel[]; project
   const update = (patch: Partial<MediaEditingDraft>) => setDraft(current => ({ ...current, ...patch }));
   useEffect(() => { props.drafts.set(scope, { ...draft, ...(sourceIsVideo ? { videoTime: videoTime.current } : {}) }); while (props.drafts.size > 8) { const oldest = props.drafts.keys().next().value; if (oldest === undefined) break; props.drafts.delete(oldest); } }, [draft, scope, props.drafts, sourceIsVideo]);
   const [expanded, setExpanded] = useState(false), [maskOpen, setMaskOpen] = useState(false), [pickerOpen, setPickerOpen] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false), [error, setError] = useState('');
   const actionLocks = useRef(new Set<string>());
   const [actionJobs, setActionJobs] = useState<string[]>([]);
   const lock = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; captureAbort.current?.abort(); props.drafts.set(scope, { ...draftRef.current, ...(sourceIsVideo ? { videoTime: videoTime.current } : {}) }); }; }, []);
   const sourceQuery = useQuery({ queryKey: [...internalQueryKeys.assets, 'editing-source', props.item.id], queryFn: () => internalClient.getAsset(props.item.id), enabled: props.online });
+  const series = useAssetSeries(props.item.id, props.online);
   const original = sourceQuery.data?.asset ?? props.item.asset;
   const source = sourceIsVideo && draft.mode === 'image' ? draft.frame?.asset ?? null : original;
   const settings = useSettingsQuery(), patchSettings = usePatchSettings(), refresh = useRefreshWorkspace();
@@ -131,13 +138,16 @@ function EditingSession(props: ViewerProps & { models: WorkspaceModel[]; project
     }
   }, [sourceIsVideo, draft.frame, jobs]);
   const submit = async (creation: Creation) => {
+    if (activeJobId) { setError('请先选择系列中的图片或视频作为编辑原图'); return; }
     if (!original || sourceQuery.isError) { setError('原素材暂时无法读取，请重试'); return; }
     if (lock.current) return; lock.current = true; setSubmitting(true); setError('');
     try {
       const frame = sourceIsVideo && draft.mode === 'image' ? await captureFrame() : undefined;
       const prepared = frame ? { ...creation, inputs: [{ asset: frame, role: sourceRole } as ReferenceInput, ...creation.inputs.filter(input => input.asset.id !== source?.id && (input.role !== 'mask' || input.asset.parentAssetId === frame.id))] } : creation;
       const result = await internalClient.createJob({ ...generationRequest(prepared), ...(props.projectId ? { collectionId: props.projectId } : {}) }, createBrowserId());
+      for (const job of result.jobs ?? [result.job]) queryClient.setQueryData([...internalQueryKeys.jobs, 'image-editor', job.id], { job, assets: [], inputs: job.request.inputs.map((input, sortOrder) => ({ ...input, sortOrder })) });
       const ids = (result.jobs ?? [result.job]).map(job => job.id);
+      if (mounted.current) { setActiveJobId(ids[0] ?? null); setExpanded(false); (document.activeElement as HTMLElement | null)?.blur(); }
       if (mounted.current) setDraft(current => ({ ...current, jobs: [...current.jobs, ...ids] }));
       else props.drafts.set(scope, { ...draftRef.current, jobs: [...draftRef.current.jobs, ...ids] });
       void refresh();
@@ -150,28 +160,72 @@ function EditingSession(props: ViewerProps & { models: WorkspaceModel[]; project
     actionLocks.current.add(id); setActionJobs([...actionLocks.current]);
     try {
       const result = retry ? await internalClient.retryJob(id) : await internalClient.cancelJob(id);
-      if (retry) { const next = { ...draftRef.current, jobs: draftRef.current.jobs.map(value => value === id ? result.job.id : value) }; props.drafts.set(scope, next); if (mounted.current) setDraft(next); }
+      if (retry) { const next = { ...draftRef.current, jobs: draftRef.current.jobs.map(value => value === id ? result.job.id : value) }; props.drafts.set(scope, next); if (mounted.current) { setDraft(next); setActiveJobId(result.job.id); } }
       void refresh();
     } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : '任务操作失败'); }
     finally { actionLocks.current.delete(id); if (mounted.current) setActionJobs([...actionLocks.current]); }
   };
+  const seriesJobs = [...new Map([...(series.data?.jobs ?? []), ...jobs.flatMap(query => query.data ? [query.data.job] : [])].map(job => [job.id, job])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const seriesAssets = [...new Map([...(series.data?.assets ?? []), ...(original ? [original] : []), ...jobs.flatMap(query => query.data?.assets ?? [])].map(asset => [asset.id, asset])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const seriesItems = seriesAssets.map(asset => mapMedia(asset, seriesJobs.find(job => job.id === asset.jobId) ?? (asset.id === props.item.id ? props.item.job : null)));
+  const unresolvedJobs = seriesJobs.filter(job => job.status !== 'completed' && !seriesAssets.some(asset => asset.jobId === job.id));
+  const seriesIndex = Math.max(0, seriesItems.findIndex(item => item.id === props.item.id));
+  useEffect(() => {
+    if (!series.data) return;
+    props.motion.prepare(async (axis, direction) => {
+      if (axis === 'x') {
+        const adjacent = seriesItems[seriesIndex + direction];
+        if (adjacent) return adjacent;
+        if (props.layout === 'mobile') return null;
+      } else if (props.layout !== 'mobile') return null;
+      return props.onResolveEntry(direction, seriesAssets.map(asset => asset.id), axis === 'x');
+    }, props.onSelectResult, `${props.projectId ?? 'default'}:${props.layout}:${seriesAssets.map(asset => asset.id).join(',')}`);
+  });
+  const activeQuery = jobs[draft.jobs.indexOf(activeJobId ?? '')];
+  const activeJob = seriesJobs.find(job => job.id === activeJobId);
+  const activeResult = seriesAssets.find(asset => asset.jobId === activeJobId);
+  useEffect(() => {
+    if (activeJobId && activeResult) { setActiveJobId(null); props.onSelectResult(mapMedia(activeResult, activeJob)); }
+  }, [activeJobId, activeResult, activeJob, props.onSelectResult]);
+  const selectItem = (item: MediaItem) => {
+    setActiveJobId(null);
+    if (item.id !== props.item.id) props.motion.navigate('x', seriesItems.findIndex(member => member.id === item.id) > seriesIndex ? 1 : -1, () => props.onSelectResult(item));
+  };
+  const selectJob = (id: string) => { setActiveJobId(id); setExpanded(false); };
+  const stageContent = activeJobId || submitting && !sourceIsVideo ? <div className={`editing-generation-stage pending-study ${activeJob && ['failed', 'rejected', 'expired', 'cancelled'].includes(activeJob.status) ? 'is-failed' : ''}`} role="status" aria-label="编辑生成状态">
+    <div className="pending-study-art" aria-hidden="true" /><Sparkles size={56} strokeWidth={1} />
+    {activeJob ? <GenerationStatus status={activeJob.status} createdAt={activeJob.createdAt} completedAt={activeJob.completedAt} /> : <span>{activeQuery?.isError ? '任务读取失败' : submitting ? '正在提交' : '正在读取任务'}</span>}
+    {activeJob?.errorMessage && <p>{activeJob.errorMessage}</p>}
+    <div>{activeQuery?.isError && <button type="button" className="quiet-command" onClick={() => void activeQuery.refetch()}>重试读取</button>}
+    {activeJob && ['failed', 'expired', 'cancelled'].includes(activeJob.status) && <button type="button" className="quiet-command" disabled={!props.online || actionJobs.includes(activeJob.id)} onClick={() => void jobAction(activeJob.id, true)}>重试生成</button>}
+    {activeJob && !ACTIVE_JOB_STATUSES.has(activeJob.status) && <button type="button" className="quiet-command" onClick={() => void copyPrompt(activeJob.prompt, props.onNotice)}><Copy size={16} />复制提示词</button>}</div>
+  </div> : undefined;
   const frameSource = sourceIsVideo ? draft.frame?.asset.contentUrl ?? '' : props.online ? props.item.src : props.item.thumbnail;
   const preview = useMaskPreview(frameSource, draft.mask ? draft.document : undefined);
   const visiblePreview = draft.mode === 'image' ? preview : undefined;
   const controls = <>
     <div className={`image-editing-controls ${expanded ? 'is-expanded' : ''}`}>
-      {draft.jobs.length > 0 && <div className="editing-results" aria-label="本次编辑结果">{jobs.map((query, index) => {
-        const result = query.data, job = result?.job;
-        return <div className="editing-result" key={draft.jobs[index]}>{result?.assets.length ? result.assets.map(asset => asset.type === 'image' ? <button type="button" key={asset.id} aria-label="编辑此生成结果" onClick={() => props.onSelectResult(mapMedia(asset, job))}><img src={asset.thumbnailUrl ?? asset.contentUrl} alt="生成结果" /></button> : <video key={asset.id} controls playsInline src={asset.contentUrl} poster={asset.posterUrl ?? undefined} aria-label="生成的视频" />) : <div className="editing-job">{query.isError ? <span>任务读取失败</span> : job ? <GenerationStatus status={job.status} createdAt={job.createdAt} completedAt={job.completedAt} /> : <span>正在读取任务</span>}{job?.errorMessage && <small className="editing-job-error" title={job.errorMessage}>{job.errorMessage}</small>}{job?.progress !== null && job?.progress !== undefined && <span>{job.progress}%</span>}{query.isError && <button type="button" onClick={() => void query.refetch()}>重试读取</button>}{job && ACTIVE_JOB_STATUSES.has(job.status) && <button type="button" disabled={!props.online || actionJobs.includes(job.id)} onClick={() => void jobAction(job.id, false)}>取消</button>}{job && ['failed', 'cancelled', 'expired'].includes(job.status) && <button type="button" disabled={!props.online || actionJobs.includes(job.id)} onClick={() => void jobAction(job.id, true)}>重试</button>}</div>}</div>;
-      })}</div>}
+      {(seriesItems.length > 1 || unresolvedJobs.length > 0 || submitting || series.isError) && <div className="editing-results" aria-label="编辑系列">{seriesItems.map((item, index) => <div className={`editing-result ${!activeJobId && item.id === props.item.id ? 'is-selected' : ''}`} key={item.id}><button type="button" aria-label={index === 0 ? '查看原图' : item.kind === 'video' ? '查看生成视频' : '编辑此生成结果'} aria-pressed={!activeJobId && item.id === props.item.id} title={item.title} onClick={() => selectItem(item)}><img src={item.thumbnail} alt={index === 0 ? '原图' : '生成结果'} />{item.kind === 'video' && <Play className="series-video-mark" size={16} fill="currentColor" />}</button></div>)}
+      {unresolvedJobs.map(job => <div className={`editing-result ${activeJobId === job.id ? 'is-selected' : ''}`} key={job.id}><button type="button" className="series-job" aria-label={`查看任务 ${job.prompt}`} aria-pressed={activeJobId === job.id} onClick={() => selectJob(job.id)}><Sparkles size={18} /><GenerationStatus status={job.status} createdAt={job.createdAt} completedAt={job.completedAt} /></button></div>)}
+      {series.isError && <button type="button" onClick={() => void series.refetch()}>重试加载系列</button>}{series.data?.truncated && <span>系列内容较多，当前仅显示部分作品</span>}
+      </div>}
       {capturing && <p className="composer-notice editing-error" role="status">正在截取并上传当前视频帧…</p>}
       {sourceQuery.isError && <p className="composer-notice editing-error" role="alert">原素材暂时无法读取<button type="button" onClick={() => void sourceQuery.refetch()}>重试</button></p>}
       {error && <p className="composer-notice editing-error" role="alert">{error}<button type="button" onClick={() => setError('')}>关闭</button></p>}
-      {draft.mode === 'image' && <Tool label="编辑蒙版" className={`editing-mask-entry ${draft.mask ? 'is-active' : ''}`} aria-pressed={!!draft.mask} disabled={!props.online || !original || !candidates.length || submitting || capturing} onPointerDown={event => event.preventDefault()} onClick={() => void openMask()}><Brush size={18} /></Tool>}
-      <Composer key={`${draft.mode}:${videoMode}:${model?.key ?? ''}`} editing={{ compact: !expanded, onExpand: () => setExpanded(true), sourceId: source?.id ?? props.item.id, ...(sourceIsVideo ? { videoModes: continuationModes, busy: capturing, ...(draft.mode === 'image' && draft.mask && draft.frame ? { sourceLabel: `参考帧 ${videoFrameLabel(draft.frame.timeSeconds)}` } : {}) } : {}) }} operationOverride={operation} layout={props.layout} projectId={scope} prompt={draft.prompt} onPrompt={prompt => update({ prompt })} mode={draft.mode} onMode={mode => void changeMode(mode)} videoMode={videoMode} onVideoMode={mode => { if (mode === 'edit' || mode === 'extend') update({ videoMode: mode }); }} models={models} model={model} onModel={key => patchSettings.mutate(updateGenerationMemory(settings.data?.settings, scope, draft.mode, { selected: key }))} references={inputs} uploads={uploads} onFiles={(files, rejected) => uploads.addFiles(files, { existingCount: draft.references.length + 1, maxItems: maximum, ...(rejected ? { preliminaryRejections: rejected } : {}) })} onRemove={id => { if (id !== source?.id) update({ references: draft.references.filter(asset => asset.id !== id), ...(draft.mask?.id === id ? { mask: null } : {}) }); }} onCreate={creation => void submit(creation)} onLibrary={() => setPickerOpen(true)} onConnections={() => props.onNotice('请先在模型与服务中添加支持当前操作的模型')} online={props.online} submitting={submitting} loading={capturing || !original || sourceQuery.isError} focusToken={0} />
+      {draft.mode === 'image' && <Tool label="编辑蒙版" className={`editing-mask-entry ${draft.mask ? 'is-active' : ''}`} aria-pressed={!!draft.mask} disabled={!props.online || !original || !candidates.length || submitting || capturing || !!activeJobId} onPointerDown={event => event.preventDefault()} onClick={() => void openMask()}><Brush size={18} /></Tool>}
+      <Composer key={`${draft.mode}:${videoMode}:${model?.key ?? ''}`} editing={{ compact: !expanded, onExpand: () => setExpanded(true), sourceId: source?.id ?? props.item.id, ...(sourceIsVideo ? { videoModes: continuationModes, busy: capturing, ...(draft.mode === 'image' && draft.mask && draft.frame ? { sourceLabel: `参考帧 ${videoFrameLabel(draft.frame.timeSeconds)}` } : {}) } : {}) }} operationOverride={operation} layout={props.layout} projectId={scope} prompt={draft.prompt} onPrompt={prompt => update({ prompt })} mode={draft.mode} onMode={mode => void changeMode(mode)} videoMode={videoMode} onVideoMode={mode => { if (mode === 'edit' || mode === 'extend') update({ videoMode: mode }); }} models={models} model={model} onModel={key => patchSettings.mutate(updateGenerationMemory(settings.data?.settings, scope, draft.mode, { selected: key }))} references={inputs} uploads={uploads} onFiles={(files, rejected) => uploads.addFiles(files, { existingCount: draft.references.length + 1, maxItems: maximum, ...(rejected ? { preliminaryRejections: rejected } : {}) })} onRemove={id => { if (id !== source?.id) update({ references: draft.references.filter(asset => asset.id !== id), ...(draft.mask?.id === id ? { mask: null } : {}) }); }} onCreate={creation => void submit(creation)} onLibrary={() => setPickerOpen(true)} onConnections={() => props.onNotice('请先在模型与服务中添加支持当前操作的模型')} online={props.online} submitting={submitting} loading={capturing || !original || sourceQuery.isError || !!activeJobId} focusToken={0} />
     </div>
     {pickerOpen && <ReferencePicker projectId={props.projectId} selectedIds={inputs.map(input => input.asset.id)} maximum={Math.max(0, maximum - 1 - draft.references.length)} onClose={() => setPickerOpen(false)} onPick={assets => { update({ references: [...draft.references, ...assets] }); setPickerOpen(false); }} />}
     {maskOpen && source?.type === 'image' && <Suspense fallback={<Panel open title="局部编辑" onClose={() => setMaskOpen(false)}><LoaderCircle className="spin" /></Panel>}><Editor assetId={source!.id} {...(draft.document ? { initialDocument: draft.document } : {})} onClose={() => setMaskOpen(false)} onApply={(_source, mask, document) => { update({ mask, document }); setMaskOpen(false); void refresh(); }} /></Suspense>}
   </>;
-  return <Viewer {...props} videoRef={videoRef} initialVideoTime={initialVideoTime.current} onVideoTime={time => { videoTime.current = time; }} {...(visiblePreview ? { previewSrc: visiblePreview } : {})} onStageClick={() => { setExpanded(false); (window.document.activeElement as HTMLElement | null)?.blur(); }} editingControls={controls} />;
+  const move = (delta: number) => {
+    const next = seriesItems[seriesIndex + delta];
+    if (next) selectItem(next);
+    else if (props.layout === 'desktop') props.motion.navigate('x', delta, () => props.onBrowseEntry(delta, seriesAssets.map(asset => asset.id), true));
+    else props.motion.settle();
+  };
+  return <Viewer {...props} stageContent={stageContent} index={seriesIndex} total={seriesItems.length}
+    canPrevious={seriesIndex > 0 || props.layout === 'desktop' && props.total > 1}
+    canNext={seriesIndex < seriesItems.length - 1 || props.layout === 'desktop' && props.total > 1}
+    onMove={move} onMoveEntry={delta => props.motion.navigate('y', delta, () => props.onBrowseEntry(delta, seriesAssets.map(asset => asset.id)))} videoRef={videoRef} initialVideoTime={initialVideoTime.current} onVideoTime={time => { videoTime.current = time; }} {...(visiblePreview ? { previewSrc: visiblePreview } : {})} onStageClick={() => { setExpanded(false); (window.document.activeElement as HTMLElement | null)?.blur(); }} editingControls={controls} />;
 }

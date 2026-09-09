@@ -91,6 +91,10 @@
 ### 工作区与作品管理
 
 - 图片与视频统一进入虚拟瀑布流，支持搜索、类型筛选、收藏和批量操作。
+- 编辑器以系列展示原图与衍生图片、视频，生成中状态在主区域显示，缩略图位于输入框上方；失败任务支持复制提示词。
+- 偏好支持按系列合并作品并显示数量角标，封面可选最近查看、最新生成或最初原图；编辑器生成中仅显示状态与计时。
+- 编辑器支持桌面跨作品连续浏览、手机横滑系列内/竖滑入口间切换；最近查看逐次保存并即时更新封面，单张作品不显示系列缩略条。
+- 手机编辑器采用悬浮返回键与工具条、更小的系列缩略图；左右及上下浏览时当前作品和相邻作品同步跟手滑动，未聚焦时隐藏缺少模型提示。
 - 使用项目组织作品，在项目中生成的新作品自动归入当前项目。作品菜单支持移动到指定项目；删除项目默认保留作品，可勾选同时删除项目内文件。
 - 按账号、项目、图片/视频模式和模型记住生成配置。
 - 桌面端与移动端分别维护布局：桌面端固定顶部工具区、独立滚动画廊；移动端保留紧凑输入区与触屏交互。
@@ -149,9 +153,9 @@ services:
       MOCK_PROVIDER_ENABLED: "false"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
       TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-0}"
-      ALLOW_INSECURE_PROVIDER_HTTP: "${ALLOW_INSECURE_PROVIDER_HTTP:-false}"
+      ALLOW_INSECURE_PROVIDER_HTTP: "${ALLOW_INSECURE_PROVIDER_HTTP:-true}"
       ALLOW_PRIVATE_NETWORK_ACCESS: "${ALLOW_PRIVATE_NETWORK_ACCESS:-false}"
-      ALLOW_HTTP_MEDIA_DOWNLOADS: "${ALLOW_HTTP_MEDIA_DOWNLOADS:-false}"
+      ALLOW_HTTP_MEDIA_DOWNLOADS: "${ALLOW_HTTP_MEDIA_DOWNLOADS:-true}"
 ```
 
 **3. 启动并登录**
@@ -230,9 +234,11 @@ OpenAI 兼容连接的 Base URL 通常包含 `/v1`，例如 `https://api.example
 | `PUBLIC_BASE_URL` | 公网应用地址，供签名参考图链接使用；可在界面中覆盖 |
 | `TRUST_PROXY_HOPS` | 默认 `0`；仅在受信任的反向代理后设为 `1` |
 | `MOCK_PROVIDER_ENABLED` | 测试 Provider 开关，默认 `false`；只有显式设为 `true` 才启用。关闭后隐藏历史 Mock 连接和模型，已有素材、任务记录保留 |
-| `ALLOW_INSECURE_PROVIDER_HTTP` | 允许使用 HTTP Provider，默认关闭 |
+| `ALLOW_INSECURE_PROVIDER_HTTP` | HTTP 内容开关的首次初始化值之一，默认开启 |
 | `ALLOW_PRIVATE_NETWORK_ACCESS` | 允许访问内网 Provider 或媒体地址，默认关闭 |
-| `ALLOW_HTTP_MEDIA_DOWNLOADS` | 允许下载 HTTP 返回媒体，默认关闭 |
+| `ALLOW_HTTP_MEDIA_DOWNLOADS` | HTTP 内容开关的首次初始化值之一，默认开启 |
+
+管理员可在「设置 → 偏好」中切换「是否允许 HTTP 内容」，同时控制提供商请求和返回媒体下载，保存后立即生效并跨重启保留。首次初始化默认允许；兼容旧配置时，上述两个 HTTP 环境变量任一为 `false` 则初始化为关闭，之后以数据库保存的开关为准。HTTP 不加密传输；私网与云元数据地址保护仍独立生效。
 
 其他上传大小、超时和日志参数见 [.env.example](./.env.example)。使用其他参数时，也要将其传入 Compose 服务的 `environment`。
 

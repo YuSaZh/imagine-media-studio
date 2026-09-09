@@ -231,7 +231,7 @@ export function Composer(props: ComposerProps) {
       maxLength={COMPOSER_DRAFT_MAX_PROMPT_LENGTH} value={prompt} rows={2} onChange={event => props.onPrompt(event.target.value)}
       onPaste={event => { const files = filesFromClipboard(event.clipboardData); if (files.files.length) { if (!files.hasText) event.preventDefault(); props.onFiles(files.files, files.rejected); } }}
       onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); } }} />
-    {!props.online ? <p className="composer-notice" role="status">当前离线，草稿已保留</p> : !model && !props.loading ? <div className="composer-notice" role="status"><span>没有支持当前创作类型的模型</span><button type="button" onClick={props.onConnections}>配置连接</button></div> : null}
+    {!props.online ? <p className="composer-notice" role="status">当前离线，草稿已保留</p> : !model && !props.loading && (!props.editing || promptFocused) ? <div className="composer-notice" role="status"><span>没有支持当前创作类型的模型</span><button type="button" onClick={props.onConnections}>配置连接</button></div> : null}
     {uploads.state.rejections.length > 0 && <div className="composer-notice" role="alert"><span>{uploads.state.rejections.map(item => `${item.name}：${item.reason}`).join('；')}</span><button type="button" onClick={uploads.clearRejections}>关闭</button></div>}
     {invalidReferences && references.length > 0 && <p className="composer-notice" role="alert">{videoSourceMode ? '源视频的格式、时长或大小与当前模型不兼容，请更换素材。' : '参考图的角色、数量或大小与当前模型不兼容，请移除或切换模型。'}</p>}
     {props.layout === 'desktop' && videoInputChoices && <div className="desktop-video-mode-row">{videoInputChoices}</div>}

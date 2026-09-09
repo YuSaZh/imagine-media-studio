@@ -91,6 +91,10 @@ The project menu can mark a project private: its content is excluded from the ho
 ### Workspace and Media Library
 
 - A virtualized masonry gallery for images and videos, with search, type filters, favorites, and batch actions.
+- The editor groups originals and derived images/videos into a series, with generation progress in the main stage and thumbnails above the prompt. Failed tasks support prompt copying.
+- Preferences can group editing series into one gallery entry with a count badge and a recently viewed, newest, or original cover; active editor generation shows only status and elapsed time.
+- The editor supports continuous desktop browsing and mobile horizontal swipes within a series/vertical swipes between entries; each view saves immediately and updates its cover, while single works omit the series strip.
+- The mobile editor uses floating return/actions and smaller series thumbnails; current and adjacent media move together throughout horizontal and vertical drags, and missing-model guidance stays hidden until the prompt is focused.
 - Organize media into projects; new output generated inside a project is added to that project. Move media to another project from its menu. Deleting a project preserves media by default, with an option to delete its files too.
 - Generation preferences are remembered per account, project, image/video mode, and model.
 - Desktop and mobile layouts are maintained separately: desktop has fixed header controls and a scrolling gallery, while mobile retains compact controls and touch interactions.
@@ -149,9 +153,9 @@ services:
       MOCK_PROVIDER_ENABLED: "false"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
       TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-0}"
-      ALLOW_INSECURE_PROVIDER_HTTP: "${ALLOW_INSECURE_PROVIDER_HTTP:-false}"
+      ALLOW_INSECURE_PROVIDER_HTTP: "${ALLOW_INSECURE_PROVIDER_HTTP:-true}"
       ALLOW_PRIVATE_NETWORK_ACCESS: "${ALLOW_PRIVATE_NETWORK_ACCESS:-false}"
-      ALLOW_HTTP_MEDIA_DOWNLOADS: "${ALLOW_HTTP_MEDIA_DOWNLOADS:-false}"
+      ALLOW_HTTP_MEDIA_DOWNLOADS: "${ALLOW_HTTP_MEDIA_DOWNLOADS:-true}"
 ```
 
 **3. Start and sign in**
@@ -230,9 +234,11 @@ Manage custom adapters from their connection's adapter page. See [examples/custo
 | `PUBLIC_BASE_URL` | Public application URL for signed reference links; can be overridden in settings |
 | `TRUST_PROXY_HOPS` | Defaults to `0`; use `1` only behind a trusted reverse proxy |
 | `MOCK_PROVIDER_ENABLED` | Test Provider switch, defaults to `false`; requires explicit `true`. When disabled, existing Mock connections and models are hidden while media and job history remain intact |
-| `ALLOW_INSECURE_PROVIDER_HTTP` | Allow HTTP Providers; disabled by default |
+| `ALLOW_INSECURE_PROVIDER_HTTP` | Initial HTTP content setting input; enabled by default |
 | `ALLOW_PRIVATE_NETWORK_ACCESS` | Allow private-network Provider or media addresses; disabled by default |
-| `ALLOW_HTTP_MEDIA_DOWNLOADS` | Allow downloading returned media over HTTP; disabled by default |
+| `ALLOW_HTTP_MEDIA_DOWNLOADS` | Initial HTTP content setting input; enabled by default |
+
+Administrators can toggle “Allow HTTP content” in Settings → Preferences to control both Provider requests and returned media downloads. Changes apply immediately and persist across restarts. The initial default is enabled; for legacy configuration, either HTTP environment variable set to `false` initializes the setting as disabled. The stored setting takes precedence afterward. HTTP traffic is unencrypted; private-network and cloud-metadata protections remain independent.
 
 See [.env.example](./.env.example) for additional upload limits, timeouts, and logging settings. Pass additional settings through the Compose service's `environment` as well.
 

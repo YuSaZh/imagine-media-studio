@@ -83,8 +83,7 @@ Connection/catalog success does not establish that generation will succeed.
 All Provider requests and remote media downloads use the guarded transport with
 bounded requests, network policy, DNS pinning, and redirect revalidation. Credentials
 are encrypted using `APP_SECRET` and never returned through DTOs, previews, logs,
-PWA storage, or exported configuration. Private-network/HTTP access uses explicit
-operator settings; cloud metadata endpoints stay forbidden.
+PWA storage, or exported configuration. HTTP access for both Provider calls (including scoped custom adapters) and media downloads uses the global persisted `network.allow_http_content` setting, enabled by default and writable only by administrators. Policies evaluate it on each URL validation so changes apply without restart. On first initialization, either legacy HTTP environment variable set to false initializes it as disabled; subsequent restarts preserve the stored value. Private-network access remains a separate opt-in; cloud metadata endpoints stay forbidden.
 
 The JobRunner commits state and outbox events before live notification, bounds each
 stage, retains retry budgets, and resumes known remote jobs after restart. Uncertain

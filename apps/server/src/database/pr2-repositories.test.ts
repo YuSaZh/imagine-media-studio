@@ -51,6 +51,38 @@ function assetInput(path: string) {
 }
 
 describe('PR 2 database repositories', () => {
+  it('paginates series before selecting covers and keeps filters, deleted lineage and owners isolated', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm, () => 'admin');
+    const jobs = new JobRepository(database.orm);
+    const original = assets.create(assetInput('original.png'));
+    const extra = assets.create(assetInput('extra.png'));
+    const first = jobs.create(createMockGenerationRequest({ inputs: [{ assetId: original.id, role: 'reference' }, { assetId: extra.id, role: 'reference' }] }));
+    const middle = assets.create({ ...assetInput('middle.png'), role: 'output', jobId: first.id, favorite: true });
+    const second = jobs.create(createMockGenerationRequest({ inputs: [{ assetId: middle.id, role: 'reference' }] }));
+    const newest = assets.create({ ...assetInput('newest.png'), role: 'output', jobId: second.id });
+    [original, extra, middle, newest].forEach((asset, index) => database.sqlite.prepare('UPDATE assets SET created_at=? WHERE id=?').run(1000 + index, asset.id));
+    const firstPage = assets.page({ groupBySeries: true, limit: 1 });
+    expect(firstPage.items[0]).toMatchObject({ id: newest.id, series: { count: 3 } });
+    const nextPage = assets.page({ groupBySeries: true, limit: 1, cursor: firstPage.nextCursor! });
+    expect(nextPage.items.map(asset => asset.id)).toEqual([extra.id]);
+    expect(nextPage.nextCursor).toBeNull();
+    const oldCover = assets.page({ groupBySeries: true, seriesCover: 'original', limit: 1 });
+    expect(oldCover.items[0]?.id).toBe(original.id);
+    expect(oldCover.nextCursor).toBe(firstPage.nextCursor);
+    expect(assets.page({ groupBySeries: true, seriesCover: 'recent', lastViewed: { [middle.id]: 100 }, limit: 1 }).items[0]?.id).toBe(middle.id);
+    expect(assets.page({ groupBySeries: true, favorite: true }).items[0]).toMatchObject({ id: middle.id, series: { count: 1 } });
+    expect(assets.page({ groupBySeries: true, search: 'newest', seriesCover: 'original' }).items[0]?.id).toBe(newest.id);
+    const collections = new CollectionRepository(database.orm, () => 'admin');
+    const project = collections.create('private', true);
+    collections.addAssets(project.id, [original.id]);
+    expect(assets.page({ groupBySeries: true, excludePrivate: true, seriesCover: 'original' }).items.find(asset => asset.series?.count === 2)?.id).toBe(middle.id);
+    expect(assets.page({ groupBySeries: true, collectionId: project.id }).items.map(asset => asset.id)).toEqual([original.id]);
+    expect(new AssetRepository(database.orm, () => 'other-account').page({ groupBySeries: true }).items).toEqual([]);
+    assets.softDelete(middle.id);
+    expect(assets.page({ groupBySeries: true, limit: 1 }).items[0]).toMatchObject({ id: newest.id, series: { count: 2 } });
+  });
+
   it('inherits parent project privacy for captured references and rejects foreign parents', async () => {
     const database = await createTestDatabase();
     const assets = new AssetRepository(database.orm, () => 'admin');

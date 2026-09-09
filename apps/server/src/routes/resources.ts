@@ -59,6 +59,8 @@ const JobPageQuerySchema = CursorPageQuerySchema.extend({
 }).strict();
 
 const AssetPageQuerySchema = CursorPageQuerySchema.extend({
+  groupBySeries: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  seriesCover: z.enum(['recent', 'latest', 'original']).optional(),
   excludePrivate: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   type: AssetTypeSchema.optional(),
   role: AssetRoleSchema.optional(),
@@ -471,7 +473,11 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
   app.get('/internal/assets', async (request, reply) => {
     const query = parseOrReply(AssetPageQuerySchema, request.query, reply);
     if (!query) return;
+    const viewed = query.groupBySeries && query.seriesCover === 'recent' ? options.settings.get('gallery.series_last_viewed')?.value : undefined;
+    const context = query.collectionId ?? 'default';
+    const history = z.record(z.string(), z.record(z.string(), z.number().finite().nonnegative())).safeParse(viewed);
     const page = options.assets.page({
+      ...(query.groupBySeries ? { groupBySeries: true, seriesCover: query.seriesCover ?? 'latest', lastViewed: history.success ? history.data[context] ?? {} : {} } : {}),
       ...(query.excludePrivate ? { excludePrivate: true } : {}),
       limit: query.limit,
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
@@ -483,7 +489,7 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
       ...(query.search === undefined ? {} : { search: query.search }),
     });
     return {
-      items: page.items.map((asset) => toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id))),
+      items: page.items.map((asset) => ({ ...toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id)), ...(asset.series ? { series: asset.series } : {}) })),
       nextCursor: page.nextCursor,
       ...(query.includeJobs ? {
         jobs: [...new Set(page.items.flatMap((asset) => asset.jobId ? [asset.jobId] : []))]
@@ -498,6 +504,16 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
   app.get<{ Params: { id: string } }>('/internal/assets/:id', async (request, reply) => {
     const asset = assetDto(options, request.params.id);
     return asset ? { asset } : errorResponse(reply, 404, 'asset_not_found');
+  });
+
+  app.get<{ Params: { id: string } }>('/internal/assets/:id/series', async (request, reply) => {
+    const series = options.assets.series(request.params.id);
+    if (!series) return errorResponse(reply, 404, 'asset_not_found');
+    return {
+      assets: series.assets.map(asset => toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id))),
+      jobs: series.jobIds.flatMap(id => { const job = options.jobs.get(id); return job ? [toJobDto(job, options.assets.countForJob(id))] : []; }),
+      truncated: series.truncated,
+    };
   });
 
   app.patch<{ Params: { id: string } }>('/internal/assets/:id', async (request, reply) => {

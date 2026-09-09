@@ -145,6 +145,7 @@ function scopedProviderHttpFactory(
   config: AppConfig,
   fallback: ProviderHttpClient,
   executor: ProviderHttpExecutor | undefined,
+  allowHttpContent: () => boolean,
 ): ProviderHttpClientFactory {
   return (provider) => {
     if (provider.type !== 'custom-http-v1') return fallback;
@@ -158,7 +159,7 @@ function scopedProviderHttpFactory(
       throw new Error('Custom HTTP provider Base URL is invalid.');
     }
     const policy = new NetworkPolicy({
-      allowInsecureHttp: config.allowInsecureProviderHttp,
+      allowInsecureHttp: allowHttpContent,
       allowPrivateNetwork: config.allowPrivateNetworkAccess,
       allowedHosts: [baseUrl.hostname],
       allowedPorts: [effectivePort(baseUrl)],
@@ -298,6 +299,10 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const jobs = new JobRepository(database.orm);
   const assets = new AssetRepository(database.orm);
   const settings = new SettingsRepository(database.orm);
+  if (settings.get('network.allow_http_content') === null) {
+    settings.upsertMany({ 'network.allow_http_content': options.config.allowHttpMediaDownloads && options.config.allowInsecureProviderHttp });
+  }
+  const allowHttpContent = () => settings.get('network.allow_http_content')?.value === true;
   const providerRepository = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
   const accounts = options.config.adminUsername === undefined ? undefined : new AccountAuth(database.sqlite, options.config.appSecret, options.config.adminUsername, options.config.adminPassword ?? 'admin');
@@ -323,17 +328,16 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     password: options.config.appPassword,
   });
   const networkPolicy = new NetworkPolicy({
-    allowInsecureHttp: options.config.allowHttpMediaDownloads,
+    allowInsecureHttp: allowHttpContent,
     allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
   });
   const providerNetworkPolicy = new NetworkPolicy({
-    allowInsecureHttp: options.config.allowInsecureProviderHttp,
+    allowInsecureHttp: allowHttpContent,
     allowPrivateNetwork: options.config.allowPrivateNetworkAccess,
   });
   const providerHttp = createProviderHttpClient({
-    // Provider credentials must never be sent over the media-download HTTP
-    // exception. Provider HTTP is independently opt-in and still uses the
-    // private-network switch as a separate guard.
+    // Provider requests and media downloads share the persisted HTTP setting;
+    // private-network access remains a separate guard.
     policy: providerNetworkPolicy,
     ...(options.providerHttpExecutor === undefined ? {} : { executor: options.providerHttpExecutor }),
   });
@@ -376,6 +380,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       options.config,
       providerHttp,
       options.providerHttpExecutor,
+      allowHttpContent,
     ),
   });
   const providerService = new ProviderService(

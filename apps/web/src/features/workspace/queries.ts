@@ -10,6 +10,13 @@ export function useMedia(filter: MediaFilter) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: page => page.nextCursor ?? undefined,
     retry: false,
+    placeholderData: (previous, query) => {
+      const before = query?.queryKey.at(-1) as MediaFilter | undefined;
+      if (!before) return undefined;
+      const { kind: _beforeKind, ...beforeScope } = before;
+      const { kind: _kind, ...scope } = filter;
+      return JSON.stringify(beforeScope) === JSON.stringify(scope) ? previous : undefined;
+    },
   });
 }
 

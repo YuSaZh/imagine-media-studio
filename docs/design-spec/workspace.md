@@ -285,7 +285,7 @@ Opening an image or video shows its original content and a compact floating Comp
 
 The editor binds the current source implicitly. Image mode prefers `image.edit`, or an explicitly declared reference-image generation operation. Video mode uses the clean original as a single first frame, temporarily hiding the mask. Task creation remains in the viewer, with progress, explicit retry/cancel actions and output thumbnails above the Composer. Clicking an image result starts a new source draft; videos play inline. Closing the viewer never cancels submitted jobs. Drafts are isolated by account/workspace mount, project and source, with eight recent in-memory source sessions retained. Model settings use a separate editing memory scope, retaining the same per-mode/per-model structure without overwriting the main Composer draft.
 
-The mask button is hidden while the prompt is unfocused, including when the viewer is idle or settings are open. Focusing the prompt reveals it; activating it preserves focus long enough for mouse/touch clicks, and keyboard focus on the entry remains supported. The mask button sits 12px above the Composer, horizontally centered on its send button, matching the return-to-top circle size (40px desktop, 44px mobile). Applying a mask returns to the same image, displaying its tinted coverage. Reopening preserves the applied document, including undo history; clearing and applying removes coverage. Dirty-state confirmation compares coverage with the last applied document. Brush, eraser, diameter, undo/redo, clear and visibility controls sit below the canvas, respecting bottom safe areas.
+The mask button is hidden while the prompt is unfocused, including when the viewer is idle or settings are open. Focusing the prompt reveals it; activating it preserves focus long enough for mouse/touch clicks, and keyboard focus on the entry remains supported. On desktop and mobile single works, the mask button sits 12px above the Composer; mobile series place it 12px above the thumbnail strip. It remains horizontally centered on the send button, matching the return-to-top circle size (40px desktop, 44px mobile). Applying a mask returns to the same image, displaying its tinted coverage. Reopening preserves the applied document, including undo history; clearing and applying removes coverage. Dirty-state confirmation compares coverage with the last applied document. Brush, eraser, diameter, undo/redo, clear and visibility controls sit below the canvas, respecting bottom safe areas.
 
 Mobile generation settings value fields use the same 12px font as row labels, overriding only the Composer settings panel's enlarged controls. Desktop typography and option-card styling are unchanged.
 
@@ -306,3 +306,100 @@ Clicking the desktop rail logo expands the existing rail from 72px to 260px in t
 Image and video card menus use a 190px minimum width and offer “移动到项目”. The project picker lists the account's projects, marks existing membership, and disables the sole current destination. A move replaces all previous memberships atomically; unlike batch “加入项目”, it does not leave the media in the source project. Project counts and privacy filtering refresh from authoritative data. Offline writes are unavailable.
 
 Deleting a project presents an unchecked “同时删除项目内文件” checkbox. The default removes only the project and preserves media. Opting in soft-deletes all current member assets, including their memberships elsewhere, through the existing asset deletion path; managed file cleanup continues to respect reference retention. Membership deletion, asset changes and outbox events commit atomically. Both operations enforce account ownership; failed validation leaves memberships and assets unchanged.
+
+### Editing series
+
+Submitting from an editor selects a large animated generation state in the main stage, with elapsed time. Active generation omits prompt text, cancellation and copy controls from the stage; task management retains cancellation. Failed states retain failure feedback, retry and prompt copying. The source becomes the first thumbnail above the Composer, followed by derived images/videos and pending or failed jobs. Successful output is selected automatically unless the user has switched to another item. Pending/failed job views require selecting an existing image or video before another edit submission. Clicking any thumbnail switches the stage and editing source; image/video playback and per-source drafts remain isolated. Desktop arrows and Left/Right keys traverse the series, then continue into the adjacent gallery entry at a series boundary; single works also support adjacent navigation. Mobile horizontal swipes/arrows stay within the series, while vertical single-finger swipes at 1x switch gallery entries. Zoom/pinch and native video controls retain their behavior.
+
+Series are reconstructed server-side from the primary source/first-frame/first-reference input and job outputs, with account isolation. Additional references and masks do not merge series. Temporary video-frame records bridge to their parent video even after soft deletion but never appear as thumbnails. Reloading any member recovers the series; traversal is bounded to 1000 nodes with an explicit partial-series notice for larger graphs. Deleted content is omitted. Failed gallery cards also expose a prompt-copy button.
+
+### Series display preferences
+
+Preferences offer an account-persisted “按照系列显示” switch, off by default.
+When enabled, recent creations, All Works, favorites and project galleries merge
+each editing series into one entry with a bottom-left member-count badge and stacked-image icon, leaving the top-left video duration unobstructed. Hover captions reserve room above the badge. Grouping
+runs on the server before cursor pagination. The latest matching member anchors
+series ordering and cursors, independently of the selected cover. Search, media
+type, favorite, project and privacy filters apply to covers and counts; hidden
+members never become covers. Selection mode expands individual works, so bulk
+operations retain their existing per-asset meaning. Card actions affect the cover
+asset; opening it restores the existing editor series strip.
+
+The nested cover preference offers latest generated work (default), most recently
+viewed work, or original work. Deleted/filtered originals fall back to the oldest
+visible member; absent recent history falls back to the newest visible member.
+Recent views are persisted per account and project, retaining 500 asset timestamps
+per context. Viewing a member in the editor updates its timestamp; changing the
+cover preference does not erase history. Temporary captured frames bridge lineage
+but are never gallery entries. Offline mode retains the available cached previews
+without attempting new grouping or writes.
+
+### Editor navigation and immediate recent covers
+
+Only multiple visible members or unresolved editing jobs show the thumbnail strip;
+a single completed generation is not presented as a series. Selected thumbnails
+use an inset overlay ring contained within the scrolling strip. The return button
+retains its accessible name and keyboard focus but has no tooltip on entry.
+
+Each selected member immediately updates the account/project-scoped recent-view
+record and compatible cached gallery covers; every switch saves independently.
+Only after saving succeeds does the gallery refetch the authoritative cover.
+Filtering, private project visibility and per-entry counts remain respected.
+Series responses seed member caches so moving among already loaded members keeps
+the editing layout populated. When moving beyond loaded gallery entries, fetch the
+next page before navigating. Gallery ends stop navigation rather than wrapping to
+an unrelated loaded subset. Mobile vertical entry navigation opens the chosen cover;
+desktop boundary navigation opens its first/last member according to direction.
+
+On a cold media-type filter switch, retain the current gallery while the next
+filtered response loads, indicating busy state without a blank loading replacement.
+This placeholder reuse applies only within the same query scope; project, privacy,
+search, favorites and grouping changes must not carry stale content across scopes.
+
+### Floating mobile editor and media transitions
+
+On mobile, the editor has no full-width heading bar: a 44px circular return button
+floats at the upper left and a rounded three-action toolbar floats at the upper
+right, respecting the top safe area. The filename remains the accessible dialog
+title but is visually hidden on mobile. Desktop heading layout is unchanged.
+Mobile series thumbnails are 59x53px (roughly two thirds of desktop's 88x80px),
+with touch targets above 44px. When a series strip exists, the focused mask button
+floats 12px above the strip, aligned with Send; without a series it stays above
+the Composer. Desktop thumbnail size and mask-button placement are unchanged.
+
+Unzoomed drags move the media with the pointer. Horizontal member navigation and
+desktop arrows/keys slide the old media out and the next media in; mobile vertical
+entry navigation uses the same effect on the vertical axis. Snap-back handles
+cancelled or unavailable movement. A temporary visual copy contains only the
+outgoing media (a captured canvas for decoded video), while controls stay stable
+and interactive above it. Loading retains the old visual until the next image or
+poster decodes. The copy and animations are cleaned up after completion,
+interruption, failure or closing. Reduced-motion preferences skip these effects.
+Each actual selection still saves recent-view history immediately, independently
+of animation completion.
+
+The editor's missing-model guidance appears only while the prompt is focused and
+hides on blur, including in compact mode. Main-page model guidance, offline status,
+and real save/upload/capture/submission errors retain their existing behavior.
+
+### Adjacent media during a held drag
+
+The current media and its adjacent media move together while the pointer remains
+down. The editor prepares at most four neighboring thumbnails/posters (previous
+and next on the supported axes), without selecting them or loading full videos.
+Dragging reveals the adjacent visual continuously; reversing direction replaces
+the revealed neighbor. On release, the displayed pair completes only its remaining
+distance. The incoming visual is retained through the source-session remount and
+aligned with the final media layout before being replaced by the decoded original.
+A cancelled drag returns both visuals to their starting positions and does not
+write a recent-view record. Only committed selection updates history. Existing
+mobile horizontal-series/vertical-entry boundaries and desktop navigation remain.
+
+Opening a gallery entry uses that exact entry's metadata for the editor's first
+frame while detail requests run. Detail and job data must match the selected IDs;
+a previously closed viewer item is never reused as an unrelated entry's loading
+placeholder. Neighbor previews remain confined to intentional drag navigation.
+
+### HTTP content preference
+
+Administrators see “是否允许 HTTP 内容” in Settings → Preferences. The single instance-wide checkbox controls both Provider HTTP requests and HTTP media downloads, defaults to enabled, saves immediately, and persists across reloads and server restarts. Helper text explains that HTTP is unencrypted. Loading, offline and pending states disable the control; read/write failures remain visible. Non-admin users cannot edit this setting. Existing explicit false HTTP environment flags initialize it as disabled; the stored preference takes precedence afterward.

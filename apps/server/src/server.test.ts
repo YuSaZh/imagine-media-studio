@@ -226,6 +226,39 @@ async function reopenTestServer(dataDir: string, appPassword: string | null = nu
 }
 
 describe('Imagine server PR 0 skeleton', () => {
+  it('reconstructs editing series across generations and temporary video frames without extra references', async () => {
+    const server = await createTestServer(false);
+    const makeAsset = (jobId?: string, type: 'image' | 'video' = 'image', extra = {}) => server.assets.create({ type, role: jobId ? 'output' : 'upload', filePath: `media/${Math.random()}`, mimeType: type === 'image' ? 'image/png' : 'video/mp4', fileSize: 20, sha256: 'a'.repeat(64), ...(jobId ? { jobId } : {}), ...extra });
+    const original = makeAsset(), unrelated = makeAsset();
+    const first = server.jobs.create(createMockGenerationRequest({ operation: 'image.edit', inputs: [{ assetId: original.id, role: 'source' }, { assetId: unrelated.id, role: 'reference' }] }));
+    const second = makeAsset(first.id);
+    const next = server.jobs.create(createMockGenerationRequest({ operation: 'video.image_to_video', inputs: [{ assetId: second.id, role: 'first_frame' }] }));
+    const video = makeAsset(next.id, 'video');
+    const frame = makeAsset(undefined, 'image', { role: 'reference', parentAssetId: video.id, metadata: { temporaryVideoFrame: true } });
+    const third = server.jobs.create(createMockGenerationRequest({ operation: 'image.edit', inputs: [{ assetId: frame.id, role: 'source' }] }));
+    const last = makeAsset(third.id);
+    server.assets.softDelete(frame.id);
+    const pending = server.jobs.create(createMockGenerationRequest({ operation: 'image.edit', inputs: [{ assetId: last.id, role: 'source' }] }));
+    for (const asset of [original, second, video, last]) {
+      const response = await server.app.inject({ url: `/internal/assets/${asset.id}/series` });
+      expect(response.statusCode).toBe(200);
+      const series = response.json();
+      expect(series.assets.map((item: { id: string }) => item.id).sort()).toEqual([original.id, second.id, video.id, last.id].sort());
+      expect(series.jobs.map((item: { id: string }) => item.id).sort()).toEqual([first.id, next.id, third.id, pending.id].sort());
+      expect(series.truncated).toBe(false);
+    }
+    expect(server.assets.series(unrelated.id)?.assets.map(asset => asset.id)).toEqual([unrelated.id]);
+    server.settings.upsertMany({ 'gallery.series_last_viewed': { default: { [second.id]: Date.now() } } });
+    const grouped = await server.app.inject({ url: '/internal/assets?groupBySeries=true&seriesCover=recent&includeJobs=true' });
+    expect(grouped.statusCode).toBe(200);
+    expect(grouped.json().items).toHaveLength(2);
+    expect(grouped.json().items.find((item: { series: { count: number } }) => item.series.count === 4)?.id).toBe(second.id);
+    const images = await server.app.inject({ url: '/internal/assets?groupBySeries=true&type=image' });
+    expect(images.json().items.find((item: { series: { count: number } }) => item.series.count === 3)).toBeDefined();
+
+    expect((await server.app.inject({ url: '/internal/assets/missing/series' })).statusCode).toBe(404);
+  });
+
   it('moves project membership atomically and optionally deletes project assets', async () => {
     const server = await createTestServer(false);
     const source = server.collections.create('Move source');
@@ -747,7 +780,7 @@ describe('Imagine server PR 0 skeleton', () => {
     });
     expect(settings.statusCode).toBe(200);
     expect(settings.json()).toEqual({
-      settings: { 'composer.clear_prompt': true, 'gallery.initial_filter': 'image' },
+      settings: { 'composer.clear_prompt': true, 'gallery.initial_filter': 'image', 'network.allow_http_content': false },
     });
     server.settings.upsertMany({
       'legacy.preferences': {

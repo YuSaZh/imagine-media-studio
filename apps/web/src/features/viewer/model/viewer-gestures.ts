@@ -45,6 +45,7 @@ export interface ViewerGestureState {
 }
 
 export interface ViewerPointerGestureEvent {
+  readonly allowVerticalSwipe?: boolean;
   readonly layout: ViewerGestureLayout;
   readonly point: ViewerPoint;
   readonly pointerId: number;
@@ -62,7 +63,7 @@ export type ViewerGestureEvent =
       readonly type: 'doubletap';
     };
 
-export type ViewerGestureEffect = 'double-tap' | 'next' | 'none' | 'previous' | 'tap';
+export type ViewerGestureEffect = 'double-tap' | 'next' | 'none' | 'previous' | 'tap' | 'next-entry' | 'previous-entry';
 
 export interface ViewerGestureTransition {
   readonly effect: ViewerGestureEffect;
@@ -371,7 +372,8 @@ function transitionPointerUp(
   const deltaY = start.y - event.point.y;
   const isSwipe = Math.abs(deltaX) >= VIEWER_SWIPE_THRESHOLD &&
     Math.abs(deltaY) <= VIEWER_SWIPE_VERTICAL_TOLERANCE;
-  const effect: ViewerGestureEffect = isSwipe
+  const isVerticalSwipe = event.allowVerticalSwipe && Math.abs(deltaY) >= VIEWER_SWIPE_THRESHOLD && Math.abs(deltaY) > Math.abs(deltaX) * 1.25;
+  const effect: ViewerGestureEffect = isVerticalSwipe ? deltaY > 0 ? 'next-entry' : 'previous-entry' : isSwipe
     ? deltaX > 0 ? 'next' : 'previous'
     : !moved ? 'tap' : 'none';
   return { effect, state: resetInteraction(state, pointers) };

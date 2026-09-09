@@ -42,3 +42,6 @@ progress.md
 .DS_Store
 .idea/
 .vscode/
+
+# Local UI preview assets
+/preview-assets/
