@@ -2340,11 +2340,9 @@ test('failed gallery generation copies its full prompt', async ({ page, request 
   const job = (await response.json()).job;
   const prompt = '失败提示词完整内容\n第二行也需要保留';
   await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { document.documentElement.dataset.copiedPrompt = text; } } }));
-  await page.route('**/internal/jobs?**', async route => {
-    const response = await route.fetch(), data = await response.json();
-    data.items = [{ ...job, id: 'failed-copy-fixture', status: 'failed', prompt, request: { ...job.request, prompt }, errorMessage: 'Fixture failure', completedAt: new Date().toISOString() }, ...data.items];
-    await route.fulfill({ response, json: data });
-  });
+  const data = await (await request.get('/internal/jobs?limit=50')).json();
+  data.items = [{ ...job, id: 'failed-copy-fixture', status: 'failed', prompt, request: { ...job.request, prompt }, errorMessage: 'Fixture failure', completedAt: new Date().toISOString() }, ...data.items];
+  await page.route('**/internal/jobs?**', route => route.fulfill({ json: data }));
   await open(page);
   await page.locator('[data-pending-job="failed-copy-fixture"]').getByRole('button', { name: '复制提示词', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-copied-prompt', prompt);
