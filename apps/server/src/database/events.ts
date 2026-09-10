@@ -1,4 +1,6 @@
-import type { InternalEvent } from '@imagine/shared';
+import { SettingKeySchema, type InternalEvent } from '@imagine/shared';
+import type { StoredChangeEvent } from '../events/event-broker.js';
+import { isSecretLikeKey } from '../security/config-sanitizer.js';
 import { and, asc, desc, eq, gt, max } from 'drizzle-orm';
 
 import type { AppDatabase } from './client.js';
@@ -49,6 +51,7 @@ export function mapChangeEventRow(row: typeof changeEvents.$inferSelect): Change
 }
 
 function internalEventType(record: ChangeEventRecord): InternalEvent['type'] {
+  if (record.eventType === 'settings.updated') return 'settings.updated';
   if (record.eventType === 'job.created') return 'job.created';
   if (record.eventType === 'job.deleted') return 'job.deleted';
   if (record.aggregateType === 'job') return 'job.updated';
@@ -63,13 +66,17 @@ function internalEventType(record: ChangeEventRecord): InternalEvent['type'] {
   return 'reset';
 }
 
-function toInternalEvent(record: ChangeEventRecord): InternalEvent {
+function toInternalEvent(record: ChangeEventRecord): StoredChangeEvent {
   const revision = record.payload.revision;
+  const safeKeys = (value: unknown): string[] => Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string' && SettingKeySchema.safeParse(key).success && !isSecretLikeKey(key)) : [];
+  const keys = safeKeys(record.payload.keys), globalKeys = safeKeys(record.payload.globalKeys);
+  const type = record.eventType === 'settings.updated' && !keys.length && !globalKeys.length ? 'reset' : internalEventType(record);
   return {
     version: 1,
     id: record.id,
-    type: internalEventType(record),
-    entityId: internalEventType(record) === 'reset' ? 'all' : record.aggregateId,
+    type,
+    entityId: type === 'reset' ? 'all' : record.aggregateId,
+    ...(type === 'settings.updated' ? { keys, ...(globalKeys.length ? { globalSettingKeys: globalKeys } : {}) } : {}),
     revision:
       typeof revision === 'number' && Number.isSafeInteger(revision) && revision >= 0
         ? revision
@@ -113,7 +120,7 @@ export class ChangeEventRepository {
     return this.database.select({ value: max(changeEvents.id) }).from(changeEvents).get()?.value ?? 0;
   }
 
-  public listAfter(id: number, limit: number): readonly InternalEvent[] {
+  public listAfter(id: number, limit: number): readonly StoredChangeEvent[] {
     return this.replay(id, limit).map(toInternalEvent);
   }
 

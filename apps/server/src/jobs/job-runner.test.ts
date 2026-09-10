@@ -104,7 +104,7 @@ afterEach(async () => {
 });
 
 describe('JobRunner scheduling', () => {
-  it('never exceeds the configured concurrency while draining queued jobs', async () => {
+  it('starts all queued legacy submissions without waiting for a previous wave', async () => {
     const dataDir = await mkdtemp(resolve(tmpdir(), 'imagine-runner-test-'));
     temporaryDirectories.push(dataDir);
     const storage = getStoragePaths(dataDir);
@@ -113,7 +113,7 @@ describe('JobRunner scheduling', () => {
     const jobs = new JobRepository(database.orm);
     const assets = new AssetRepository(database.orm);
     const provider = new ControlledMockProvider();
-    const runner = new JobRunner(jobs, assets, provider, storage, 2);
+    const runner = new JobRunner(jobs, assets, provider, storage);
     await runner.start();
 
     const records = [0, 1, 2].map((index) =>
@@ -123,13 +123,9 @@ describe('JobRunner scheduling', () => {
       await runner.enqueue(record.id);
     }
 
-    await waitForPhase(provider.twoActive.promise, 'first submit wave');
-    expect(provider.activeCount).toBe(2);
-    expect(provider.maxActiveCount).toBe(2);
-    provider.releaseActive();
-
-    await waitForPhase(provider.thirdEntered.promise, 'second submit wave');
-    expect(provider.maxActiveCount).toBe(2);
+    await waitForPhase(provider.thirdEntered.promise, 'all submissions active');
+    expect(provider.activeCount).toBe(3);
+    expect(provider.maxActiveCount).toBe(3);
     provider.releaseActive();
 
     await waitForPhase(runner.waitForIdle(), 'runner idle');
@@ -654,7 +650,7 @@ function createMemoryRunner(
         finalizedJobIds.push(job.id);
       },
     },
-    concurrency: { imageSubmit: 1, videoSubmit: 1, poll: 4, download: 3, process: 2 },
+    concurrency: { download: 3, process: 2 },
     defaultPollAfterMs: 0,
     defaultRetryAfterMs: 0,
     ...(mediaOverrides.defaultRemoteDeadlineMs === undefined
@@ -672,6 +668,50 @@ function createMemoryRunner(
 }
 
 describe('JobRunner asynchronous state machine', () => {
+  it('submits and polls all image/video jobs across providers concurrently without duplicate submissions', async () => {
+    const releaseSubmits = createDeferred(), releasePolls = createDeferred();
+    const submitted: string[] = [], polled: string[] = [];
+    const initial = Array.from({ length: 8 }, (_, index) => createRunnerJob(`parallel-${index}`, {
+      request: createMockGenerationRequest({
+        providerId: index % 4 < 2 ? 'provider-a' : 'provider-b',
+        operation: index % 2 ? 'video.generate' : 'image.generate',
+        modelId: index % 2 ? 'mock-video-v1' : 'mock-image-v1',
+        prompt: `parallel-${index}`,
+      }),
+    }));
+    class BlockingProvider extends CompletedTestProvider {
+      public override async submit(request: GenerationRequest): Promise<SubmitResult> {
+        submitted.push(request.prompt);
+        await releaseSubmits.promise;
+        return { state: 'pending', remoteJobId: request.prompt, pollAfterMs: 0 };
+      }
+      public override async poll(remoteJobId: string): Promise<PollResult> {
+        polled.push(remoteJobId);
+        await releasePolls.promise;
+        const video = initial.find(job => job.request.prompt === remoteJobId)!.request.operation.startsWith('video.');
+        return { state: 'completed', assets: [{ source: 'base64', base64: 'aW1hZ2U=', type: video ? 'video' : 'image', mimeType: video ? 'video/mp4' : 'image/png' }] };
+      }
+    }
+    const providers = new Map(['provider-a', 'provider-b'].map(id => [id, new BlockingProvider([])]));
+    const { runner, jobs } = createMemoryRunner(initial, id => ({ adapter: providers.get(id)!, submitReplaySafe: true }));
+    try {
+      await runner.start();
+      await Promise.all(initial.flatMap(job => [runner.enqueue(job.id), runner.enqueue(job.id)]));
+      await expect.poll(() => submitted.length).toBe(8);
+      expect(new Set(submitted).size).toBe(8);
+      expect(polled).toEqual([]);
+      releaseSubmits.resolve();
+      await expect.poll(() => polled.length).toBe(8);
+      expect(new Set(polled).size).toBe(8);
+      releasePolls.resolve();
+      await waitForPhase(runner.waitForIdle(), 'parallel jobs complete');
+      expect([...jobs.records.values()].every(job => job.status === 'completed')).toBe(true);
+    } finally {
+      releaseSubmits.resolve(); releasePolls.resolve();
+      await runner.stop();
+    }
+  });
+
   it('loads verified input bytes exactly once and forwards the complete context to submit', async () => {
     class ContextProvider extends CompletedTestProvider {
       public submitContext: ProviderContext | undefined;

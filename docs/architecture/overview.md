@@ -66,8 +66,12 @@ excluding it from the Provider request. Frontend and server use shared validator
 known model names only supply default metadata, never override explicit policy.
 Generation count is an application fan-out count (1-32), excluded from model
 parameter policy even when legacy model records contain count rules. The job
-route creates that many durable jobs with one requested output each; queue
-limits govern execution concurrency independently of upstream batch capabilities.
+route creates that many durable jobs with one requested output each. Image/video
+submissions and due polls have no application concurrency cap across accounts or
+Providers; upstream APIs govern their own concurrency and rate limits. Download
+and local processing queues remain bounded (3 and 2 respectively). Per-job
+deduplication, polling intervals, timeouts, cancellation and retry budgets remain
+in force.
 Adapters map vendor payloads and normalize URLs, Base64, MIME, states, and errors.
 Operation-specific policies and video input constraints are shared with the UI
 and snapshotted by the server. Editing/extension inputs use stored assets and
@@ -85,8 +89,8 @@ bounded requests, network policy, DNS pinning, and redirect revalidation. Creden
 are encrypted using `APP_SECRET` and never returned through DTOs, previews, logs,
 PWA storage, or exported configuration. HTTP access for both Provider calls (including scoped custom adapters) and media downloads uses the global persisted `network.allow_http_content` setting, enabled by default and writable only by administrators. Policies evaluate it on each URL validation so changes apply without restart. On first initialization, either legacy HTTP environment variable set to false initializes it as disabled; subsequent restarts preserve the stored value. Private-network access remains a separate opt-in; cloud metadata endpoints stay forbidden.
 
-The JobRunner commits state and outbox events before live notification, bounds each
-stage, retains retry budgets, and resumes known remote jobs after restart. Uncertain
+The JobRunner commits state and outbox events before live notification, bounds local
+media work, retains retry budgets, and resumes known remote jobs after restart. Uncertain
 submissions must not be blindly repeated without an idempotency guarantee. Protocol
 fallback handles classified incompatibility, not every failed request.
 
@@ -123,3 +127,13 @@ New masked jobs snapshot `maskProcessing` in request JSON: version, native/overl
 The existing input loader uses bounded Sharp processing for overlay snapshots (up to 16,777,216 decoded pixels, also subject to existing editor/upload/model limits), preserves dimensions and checks encoded size against model/application limits. It replaces the source bytes in memory, strips its original public URL, and removes the independent mask from provider inputs. Native snapshots retain source and mask separately. `providerGenerationRequest` strips processing metadata and appends fixed overlay guidance only to the outbound prompt; the user's stored prompt and original media remain unchanged. Submit-time validation and the durable runner use the same preparation path, including retries and recovery. Model edits cannot change a queued job's snapshot. Non-native overlay guidance is not a guarantee of exact regional editing.
 
 Job detail responses map input records to the shared DTO (`assetId`, `role`, `sortOrder`), excluding repository-only `jobId`, so editors can validate and observe jobs that contain image inputs.
+
+## Account settings and authentication
+
+Settings keys accept up to 128 characters, including the existing `generation.edit.<projectId>.<assetId>` format. Workspace and editor scopes share one constructor; existing keys and values remain readable without migration. Account single-key reads query that key directly.
+
+Password login and HTTP Basic share an in-memory per-source-IP attempt window (10 attempts in 60 seconds, checked before password work and cleared on success). Password creation, validation and updates use asynchronous scrypt with the existing salt/hash format. Each request caches its Basic authentication work; later authorization and SSE delivery revalidate account enabled state and session version without repeating the KDF. Cookie expiry remains enforced, including on long-lived streams. Account changes during asynchronous verification invalidate its result; concurrent credential updates use revision checks. Cookie-only requests do not consume password attempts.
+
+Each settings PATCH commits one outbox row with key names and no values in the same transaction. `settings.updated` events contain `keys`; account changes use the account ID and global changes use `global` as the entity ID. For mixed writes, server-only routing metadata permits recipient-specific projection: the owner sees all changed keys, other accounts see only global keys. The same projection applies to replay and live delivery; routing metadata never reaches the SSE wire. Legacy reset events remain valid. Browser clients refresh settings, and additionally refresh workspace assets when recent-series history changes. Notifications received during local optimistic settings writes are coalesced until those writes settle.
+
+Series queries load one account's primary-parent graph and resolve roots with an iterative memoized traversal, rather than expanding every asset's ancestry in SQL. Missing parents end a chain; cycles use the smallest cycle node ID as their canonical root. Temporary/deleted nodes preserve lineage, while visible assets remain subject to the existing filters. Root mappings enter SQLite through a JSON relation; grouping, cover ranking and stable cursor pagination stay in SQL. Series detail uses the same graph and retains its 1000-node visible traversal bound. No persistent graph cache or database migration is introduced.

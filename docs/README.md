@@ -39,3 +39,7 @@ When documentation disagrees with the requested behavior or implementation,
 identify the conflict and update the current specification as part of the change.
 Do not treat a historical document or a passing test as permission to bypass a
 current product or security requirement.
+
+## Dated Reviews
+
+- [2026-09-10 whole-project structure and code review](./reviews/2026-09-10-project-review.md): architecture map, reproduced findings, and staged optimization suggestions. The report distinguishes the original findings from the recorded implementation results and remaining structural suggestions.

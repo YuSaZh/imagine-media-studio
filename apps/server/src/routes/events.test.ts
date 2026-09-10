@@ -2,6 +2,7 @@ import type { InternalEvent } from '@imagine/shared';
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
+import { settingsEventForAccount } from '../events/settings-events.js';
 import { EventBroker, type ChangeEventStore } from '../events/event-broker.js';
 import { OutboxPublisher } from '../events/outbox-publisher.js';
 import { formatSseEvent, parseLastEventId, registerEventRoutes } from './events.js';
@@ -96,4 +97,32 @@ describe('SSE wire helpers', () => {
 
     await app.close();
   });
+});
+
+
+it('applies the same account projection to settings replay and live events', async () => {
+  const app = Fastify(), store = new MutableEventStore(), broker = new EventBroker();
+  const event = (id: number, entityId: string): InternalEvent => ({ version: 1, id, type: 'settings.updated', entityId, revision: 0, occurredAt: '2026-09-10T00:00:00.000Z', keys: [entityId === 'global' ? 'network.allow_http_content' : `generation.${entityId}`] });
+  store.events.push(event(1, 'alice'), event(2, 'bob'), event(3, 'global'));
+  await registerEventRoutes(app, store, broker, (_request, change) => settingsEventForAccount(change, 'alice'));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Settings SSE timeout')), 2000);
+      app.inject({ url: '/internal/events', payloadAsStream: true }, (error, response) => {
+        if (error || !response) { clearTimeout(timeout); reject(error); return; }
+        let payload = '', sent = false;
+        response.stream().on('data', (chunk: Buffer) => {
+          payload += chunk.toString();
+          if (!sent && payload.includes('id: 3')) { sent = true; broker.publish(event(4, 'alice')); broker.publish(event(5, 'bob')); broker.publish(event(6, 'global')); }
+          if (!payload.includes('id: 6')) return;
+          clearTimeout(timeout); response.raw.res.end();
+          try {
+            const events = payload.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+            expect(events.map(change => change.id)).toEqual([1, 3, 4, 6]);
+            expect(payload).not.toContain('bob'); resolve();
+          } catch (failure) { reject(failure); }
+        });
+      });
+    });
+  } finally { await app.close(); }
 });

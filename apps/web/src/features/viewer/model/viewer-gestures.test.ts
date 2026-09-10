@@ -25,6 +25,30 @@ function transition(
 }
 
 describe('viewer gesture state machine', () => {
+  it('closes only a committed rightward edge gesture and keeps ordinary swipes', () => {
+    const down = (allowEdgeBack = true, scale = 1) => transition(createViewerGestureState(scale), {
+      type: 'pointerdown', pointerId: 1, point: { x: 8, y: 200 }, layout, allowEdgeBack,
+    });
+    const up = (x: number, y = 200) => ({ type: 'pointerup' as const, pointerId: 1, point: { x, y }, layout, allowVerticalSwipe: true });
+    expect(down().mode).toBe('edge-back');
+    expect(transitionViewerGesture(down(), up(80)).effect).toBe('close');
+    for (const point of [[79, 200], [120, 300], [-80, 200], [8, 340]]) {
+      expect(transitionViewerGesture(down(), up(point[0]!, point[1]!)).effect).toBe('none');
+    }
+    expect(transitionViewerGesture(down(false), up(120)).effect).toBe('previous');
+    expect(transitionViewerGesture(down(true, 2), up(120)).effect).toBe('none');
+    for (const type of ['pointercancel', 'lostcapture'] as const) {
+      const cancelled = transitionViewerGesture(down(), { type, pointerId: 1 });
+      expect(cancelled.effect).toBe('none');
+      expect(cancelled.state.mode).toBe('idle');
+      expect(transitionViewerGesture(cancelled.state, up(120)).effect).toBe('none');
+    }
+    let pinch = transition(down(), { type: 'pointerdown', pointerId: 2, point: { x: 100, y: 200 }, layout });
+    expect(pinch.mode).toBe('pinch');
+    pinch = transition(pinch, { type: 'pointerup', pointerId: 2, point: { x: 100, y: 200 }, layout });
+    expect(transitionViewerGesture(pinch, up(120)).effect).toBe('none');
+  });
+
   it('clamps zoom and pan to the media bounds', () => {
     expect(clampViewerPosition({ x: 999, y: -999 }, 2, layout)).toEqual({ x: 800, y: -600 });
     expect(clampViewerPosition({ x: 999, y: -999 }, 1, layout)).toEqual({ x: 0, y: 0 });

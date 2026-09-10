@@ -2636,7 +2636,7 @@ test('neighbor media follows the finger before release and cancels without savin
   const viewed = async (id: string) => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[id];
   const drag = async (axis: 'x' | 'y', expectedId: string, cancel: boolean) => {
     const box = (await stage.boundingBox())!, distance = axis === 'x' ? box.width : box.height;
-    const x = axis === 'x' ? box.x + 20 : box.x + box.width / 2, y = axis === 'x' ? box.y + 220 : box.y + box.height * .8;
+    const x = axis === 'x' ? box.x + 48 : box.x + box.width / 2, y = axis === 'x' ? box.y + 220 : box.y + box.height * .8;
     const session = mobile ? await page.context().newCDPSession(page) : null;
     if (session) await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
     else { await page.mouse.move(x, y); await page.mouse.down(); }
@@ -2735,4 +2735,124 @@ test('HTTP content preference saves and survives reload', async ({ page, request
   await expect(toggle).toBeEnabled();
   await expect(page.getByText('同时允许 HTTP 提供商连接和媒体下载；HTTP 不加密传输。')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('http-content-preference.png') });
+});
+
+
+test('mobile editor closes on a committed left edge swipe without losing its draft', async ({ page, request }, testInfo) => {
+  const original = await upload(request);
+  await open(page, `/library?asset=${original.id}`);
+  const viewer = page.locator('.study-viewer');
+  const stage = viewer.locator('.viewer-stage');
+  await expect(stage.locator('img.viewer-image')).toBeVisible();
+  const swipe = async (x: number, dx: number, dy = 0, cancel = false, hold = false) => {
+    const box = (await stage.boundingBox())!, y = box.y + 220;
+    const session = await page.context().newCDPSession(page);
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx, y: y + dy }] });
+    if (hold) {
+      await expect(viewer.locator('.viewer-edge-back')).toBeVisible();
+      await expect(viewer.locator('.viewer-drag-neighbor')).toHaveCount(0);
+      await page.screenshot({ path: testInfo.outputPath('edge-back.png') });
+    }
+    await session.send('Input.dispatchTouchEvent', { type: cancel ? 'touchCancel' : 'touchEnd', touchPoints: [] });
+    await session.detach();
+  };
+  if (page.viewportSize()!.width >= 761) {
+    await swipe(8, 120);
+    await expect(viewer).toBeVisible();
+    await expect(viewer.locator('.viewer-edge-back')).toHaveCount(0);
+    return;
+  }
+  for (const [x, dx, dy, cancel] of [[8, 40, 0, false], [8, 10, 110, false], [8, 120, 0, true], [48, 120, 0, false]] as const) {
+    await swipe(x, dx, dy, cancel);
+    await expect(viewer).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(original.id));
+  }
+  const prompt = viewer.getByRole('textbox', { name: '创作描述', exact: true });
+  await prompt.fill('保留这次编辑草稿');
+  await stage.click({ position: { x: 170, y: 180 } });
+  await swipe(8, 120, 0, false, true);
+  await expect(viewer).toHaveCount(0);
+  await expect(page).not.toHaveURL(/asset=/);
+  await page.locator(`[data-study-id="${original.id}"] .study-open`).click();
+  await expect(viewer.getByRole('textbox', { name: '创作描述', exact: true })).toHaveValue('保留这次编辑草稿');
+  await viewer.getByRole('button', { name: '返回作品', exact: true }).click();
+
+  const created = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-video-v1', operation: 'video.generate', prompt: 'Edge back video', inputs: [] } });
+  const id = (await created.json()).job.id;
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const video = (await (await request.get(`/internal/jobs/${id}`)).json()).assets[0];
+  await open(page, `/library?asset=${video.id}`);
+  await expect(viewer.getByLabel('原视频')).toBeVisible();
+  await swipe(8, 120);
+  await expect(viewer).toHaveCount(0);
+});
+
+test('UUID project editor remembers per-model settings across reloads', async ({ page, request }) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Editor memory ${randomUUID()}`, type: 'openai', enabled: true } })).json();
+  const { collection } = await (await request.post('/internal/collections', { data: { name: 'Editor memory project' } })).json();
+  const original = await upload(request);
+  await request.post(`/internal/collections/${collection.id}/assets`, { data: { assetIds: [original.id] } });
+  const scope = `generation.edit.${collection.id}.${original.id}`;
+  try {
+    const modelKeys = new Map<string, string>();
+    for (const modelId of ['editor-memory-a', 'editor-memory-b']) {
+      const response = await request.post('/internal/models', { data: { providerId: provider.id, modelId, displayName: modelId, enabled: true, capabilities: { operations: ['image.edit'], maxReferenceImages: 2, aspectRatios: ['1:1', '16:9'], resolutions: ['1024x1024'] } } });
+      expect(response.status()).toBe(201); modelKeys.set(modelId, (await response.json()).model.id);
+    }
+    await open(page, `/projects/${collection.id}?asset=${original.id}`);
+    const choose = async (id: string) => {
+      await page.locator('.study-viewer').getByLabel('创作描述', { exact: true }).fill('Remember editor parameters');
+      if (page.viewportSize()!.width < 600) {
+        await page.getByRole('button', { name: '生成设置', exact: true }).click();
+        await selectValue(page, '模型与服务', { label: `${provider.name} · ${id}` });
+        await expect(page.locator('.study-viewer .model-trigger')).toContainText(id);
+        if (await page.getByRole('dialog', { name: '生成设置', exact: true }).count()) await page.keyboard.press('Escape');
+      } else {
+        await page.getByRole('button', { name: '选择生成模型', exact: true }).click();
+        await page.locator('.choice').filter({ has: page.getByText(id, { exact: true }) }).click();
+      }
+    };
+    const count = async (value?: string) => {
+      await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      if (value) await chooseCount(page, value);
+      const result = await page.getByRole('button', { name: '生成数量', exact: true }).innerText();
+      await page.keyboard.press('Escape'); return result.replace('×', '');
+    };
+    await choose('editor-memory-a'); await count('3');
+    await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings[scope]?.image?.models?.[modelKeys.get('editor-memory-a')!]?.count).toBe(3);
+    await choose('editor-memory-b'); expect(await count()).toBe('1'); await count('2');
+    await choose('editor-memory-a'); expect(await count()).toBe('3');
+    await page.reload();
+    await expect(page.locator('.study-viewer .model-trigger')).toContainText('editor-memory-a');
+    await page.locator('.study-viewer').getByLabel('创作描述', { exact: true }).fill('Restored');
+    expect(await count()).toBe('3');
+    await page.goto(`/library?asset=${original.id}`); await choose('editor-memory-a'); expect(await count()).toBe('1');
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('settings events synchronize open pages without crossing account boundaries', async ({ page, context, request, browser, baseURL }) => {
+  await open(page, '/settings');
+  const peer = await context.newPage();
+  const otherContext = await browser.newContext({ baseURL, serviceWorkers: 'block', storageState: { cookies: [], origins: [] } });
+  try {
+    const username = `sync-${randomUUID().slice(0, 8)}`;
+    await request.post('/internal/accounts', { data: { username, password: 'fixture-password' } });
+    const login = await otherContext.request.post('/internal/auth/login', { headers: { Origin: baseURL! }, data: { username, password: 'fixture-password' } }); expect(login.ok()).toBeTruthy();
+    const other = await otherContext.newPage();
+    await open(other, '/settings'); await open(peer, '/settings');
+    await expect(peer.getByRole('combobox', { name: '默认创作类型', exact: true })).toHaveText('图片');
+    await page.bringToFront();
+    await selectValue(page, '默认创作类型', 'video');
+    await expect(peer.getByRole('combobox', { name: '默认创作类型', exact: true })).toHaveText('视频');
+    await expect(other.getByRole('combobox', { name: '默认创作类型', exact: true })).toHaveText('图片');
+    const allowed = peer.getByRole('checkbox', { name: '是否允许 HTTP 内容', exact: true });
+    await page.getByRole('checkbox', { name: '是否允许 HTTP 内容', exact: true }).click();
+    await expect(allowed).not.toBeChecked();
+    expect((await (await otherContext.request.get('/internal/settings')).json()).settings['network.allow_http_content']).toBe(false);
+    await request.patch('/internal/settings', { data: { values: { 'network.allow_http_content': true } } });
+  } finally {
+    await request.patch('/internal/settings', { data: { values: { 'network.allow_http_content': true } } });
+    await peer.close(); await otherContext.close();
+  }
 });

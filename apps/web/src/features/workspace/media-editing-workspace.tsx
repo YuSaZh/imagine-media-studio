@@ -11,7 +11,7 @@ import { internalQueryKeys } from '../../api/query-keys';
 import { createBrowserId } from '../../browser-id';
 import { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
 import { usePatchSettings, useSettingsQuery } from '../settings/api/settings-query';
-import { readGenerationMemory, updateGenerationMemory } from './generation-memory';
+import { generationMemoryScope, readGenerationMemory, updateGenerationMemory } from './generation-memory';
 import { ACTIVE_JOB_STATUSES, generationRequest, mapMedia, modelForOperation, type Creation, type MediaKind, type MediaItem, type ReferenceInput, type WorkspaceModel } from './data';
 import { Composer } from './composer';
 import { Viewer, type ViewerProps } from './viewer';
@@ -63,7 +63,7 @@ export function MediaEditingWorkspace(props: ViewerProps & { models: WorkspaceMo
 }
 function EditingSession(props: ViewerProps & { motion: ViewerMotion; models: WorkspaceModel[]; projectId: string | null; layout: WorkspaceLayout; drafts: MediaEditingDrafts; onSelectResult: (item: MediaItem) => void; onBrowseEntry: (delta: number, memberIds: string[], boundary?: boolean) => Promise<boolean>; onResolveEntry: (delta: number, memberIds: string[], boundary?: boolean) => Promise<MediaItem | null> }) {
   const queryClient = useQueryClient();
-  const scope = `edit.${props.projectId ?? 'default'}.${props.item.id}`;
+  const scope = generationMemoryScope(props.projectId, props.item.id);
   const sourceIsVideo = props.item.kind === 'video';
   const [draft, setDraft] = useState(() => props.drafts.get(scope) ?? emptyDraft(props.item.kind));
   const videoRef = useRef<HTMLVideoElement | null>(null);

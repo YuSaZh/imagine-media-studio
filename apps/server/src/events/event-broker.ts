@@ -1,6 +1,7 @@
 import type { InternalEvent } from '@imagine/shared';
 
-export type StoredChangeEvent = InternalEvent;
+/** Routing metadata is server-only and is never serialized to SSE clients. */
+export type StoredChangeEvent = InternalEvent & { globalSettingKeys?: readonly string[] };
 
 export interface ChangeEventStore {
   latestId(): number;

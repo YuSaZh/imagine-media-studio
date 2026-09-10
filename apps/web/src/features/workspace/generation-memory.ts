@@ -1,7 +1,12 @@
 import type { JsonObject, JsonValue } from '@imagine/shared';
 
+export function generationMemoryScope(projectId: string | null, assetId?: string): string {
+  const project = projectId ?? 'default';
+  return assetId === undefined ? project : `edit.${project}.${assetId}`;
+}
+
 export function generationMemoryKey(projectId: string | null): string {
-  return `generation.${projectId ?? 'default'}`;
+  return `generation.${generationMemoryScope(projectId)}`;
 }
 
 export function memoryObject(value: JsonValue | undefined): JsonObject {

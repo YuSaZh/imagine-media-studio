@@ -263,9 +263,11 @@ export const CursorPageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict();
 
+export const SettingKeySchema = z.string().regex(/^[a-z][a-z0-9_.-]{0,127}$/);
+
 export const SettingsPatchSchema = z.object({
   values: z.record(
-    z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/),
+    SettingKeySchema,
     JsonValueSchema,
   ),
 }).strict().superRefine((value, context) => {
@@ -1239,6 +1241,7 @@ export const InternalEventTypeSchema = z.enum([
   'collection.updated',
   'provider.updated',
   'model.updated',
+  'settings.updated',
   'reset',
 ]);
 
@@ -1249,7 +1252,12 @@ export const InternalEventSchema = z.object({
   entityId: z.string().min(1),
   revision: z.number().int().nonnegative(),
   occurredAt: IsoTimestampSchema,
-}).strict();
+  keys: z.array(SettingKeySchema).min(1).optional(),
+}).strict().superRefine((event, context) => {
+  if (event.type === 'settings.updated' && !event.keys || event.type !== 'settings.updated' && event.keys) {
+    context.addIssue({ code: 'custom', path: ['keys'], message: 'Only settings events must carry changed keys.' });
+  }
+});
 
 export type InternalEvent = z.infer<typeof InternalEventSchema>;
 

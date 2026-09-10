@@ -120,7 +120,7 @@ function createRunner(
     maxAttempts: 2,
     defaultPollAfterMs: 0,
     defaultRetryAfterMs: 1,
-    concurrency: { imageSubmit: 1, videoSubmit: 1, poll: 1, download: 1, process: 1 },
+    concurrency: { download: 1, process: 1 },
   });
 }
 

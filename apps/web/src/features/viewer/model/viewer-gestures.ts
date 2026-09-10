@@ -1,6 +1,8 @@
 export const MIN_VIEWER_SCALE = 1;
 export const MAX_VIEWER_SCALE = 4;
 export const VIEWER_SWIPE_THRESHOLD = 48;
+export const VIEWER_EDGE_BACK_WIDTH = 24;
+export const VIEWER_EDGE_BACK_THRESHOLD = 72;
 export const VIEWER_SWIPE_VERTICAL_TOLERANCE = 60;
 
 const VIEWER_MOVE_TOLERANCE = 6;
@@ -22,7 +24,7 @@ export interface ViewerGestureLayout {
   };
 }
 
-export type ViewerGestureMode = 'idle' | 'pan' | 'pinch' | 'swipe';
+export type ViewerGestureMode = 'idle' | 'pan' | 'pinch' | 'swipe' | 'edge-back';
 
 export interface ViewerPinchStart {
   readonly center: ViewerPoint;
@@ -46,6 +48,7 @@ export interface ViewerGestureState {
 
 export interface ViewerPointerGestureEvent {
   readonly allowVerticalSwipe?: boolean;
+  readonly allowEdgeBack?: boolean;
   readonly layout: ViewerGestureLayout;
   readonly point: ViewerPoint;
   readonly pointerId: number;
@@ -63,7 +66,7 @@ export type ViewerGestureEvent =
       readonly type: 'doubletap';
     };
 
-export type ViewerGestureEffect = 'double-tap' | 'next' | 'none' | 'previous' | 'tap' | 'next-entry' | 'previous-entry';
+export type ViewerGestureEffect = 'double-tap' | 'next' | 'none' | 'previous' | 'tap' | 'next-entry' | 'previous-entry' | 'close';
 
 export interface ViewerGestureTransition {
   readonly effect: ViewerGestureEffect;
@@ -299,7 +302,7 @@ function transitionPointerDown(
     effect: 'none',
     state: withPointers(state, pointers, {
       lastPoint: event.point,
-      mode: state.scale > MIN_VIEWER_SCALE ? 'pan' : 'swipe',
+      mode: state.scale > MIN_VIEWER_SCALE ? 'pan' : event.allowEdgeBack ? 'edge-back' : 'swipe',
       moved: false,
       pinchStart: null,
       primaryPointerId: event.pointerId,
@@ -370,6 +373,11 @@ function transitionPointerUp(
   const moved = state.moved || distance(start, event.point) > VIEWER_MOVE_TOLERANCE;
   const deltaX = start.x - event.point.x;
   const deltaY = start.y - event.point.y;
+  if (state.mode === 'edge-back') {
+    const rightward = -deltaX;
+    const close = rightward >= VIEWER_EDGE_BACK_THRESHOLD && rightward > Math.abs(deltaY) * 1.5;
+    return { effect: close ? 'close' : !moved ? 'tap' : 'none', state: resetInteraction(state, pointers) };
+  }
   const isSwipe = Math.abs(deltaX) >= VIEWER_SWIPE_THRESHOLD &&
     Math.abs(deltaY) <= VIEWER_SWIPE_VERTICAL_TOLERANCE;
   const isVerticalSwipe = event.allowVerticalSwipe && Math.abs(deltaY) >= VIEWER_SWIPE_THRESHOLD && Math.abs(deltaY) > Math.abs(deltaX) * 1.25;

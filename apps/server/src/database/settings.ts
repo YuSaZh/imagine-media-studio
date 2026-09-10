@@ -30,7 +30,7 @@ export class SettingsRepository {
     return row ? mapSetting(row) : null;
   }
 
-  public upsertMany(values: Readonly<Record<string, unknown>>): readonly SettingRecord[] {
+  public upsertMany(values: Readonly<Record<string, unknown>>, emitEvent = true): readonly SettingRecord[] {
     const entries = Object.entries(values);
     for (const [key, value] of entries) {
       if (key.length === 0 || value === undefined) {
@@ -50,19 +50,11 @@ export class SettingsRepository {
             set: { valueJson, updatedAt },
           })
           .run();
-        transaction
-          .insert(changeEvents)
-          .values(
-            toChangeEventValues({
-              aggregateType: 'setting',
-              aggregateId: key,
-              eventType: 'setting.updated',
-              payload: { key },
-              createdAt: updatedAt,
-            }),
-          )
-          .run();
       }
+      if (emitEvent && entries.length) transaction.insert(changeEvents).values(toChangeEventValues({
+        aggregateType: 'setting', aggregateId: 'global', eventType: 'settings.updated',
+        payload: { keys: entries.map(([key]) => key) }, createdAt: updatedAt,
+      })).run();
     });
 
     return this.list();

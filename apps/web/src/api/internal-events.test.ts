@@ -31,6 +31,20 @@ function installBrowserTargets(): void {
 }
 
 describe('subscribeToInternalEvents', () => {
+  it('refreshes settings and only refreshes gallery data for recent-cover history', () => {
+    installBrowserTargets();
+    const client = new QueryClient(), source = new FakeEventSource();
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
+    const unsubscribe = subscribeToInternalEvents(client, () => source);
+    const event = { version: 1, id: 1, type: 'settings.updated', entityId: 'admin', revision: 0, occurredAt: '2026-09-10T00:00:00.000Z', keys: ['composer.default_mode'] };
+    source.emit(event);
+    expect(invalidate.mock.calls.map(([options]) => options?.queryKey)).toEqual([['internal', 'settings']]);
+    invalidate.mockClear();
+    source.emit({ ...event, id: 2, keys: ['gallery.series_last_viewed'] });
+    expect(invalidate.mock.calls.map(([options]) => options?.queryKey)).toEqual([['internal', 'settings'], ['internal', 'assets', 'workspace']]);
+    unsubscribe();
+  });
+
   it('invalidates only the authoritative query families affected by an event', async () => {
     installBrowserTargets();
     const queryClient = new QueryClient();
@@ -71,4 +85,21 @@ describe('subscribeToInternalEvents', () => {
 
     unsubscribe();
   });
+});
+
+it('defers settings events until local optimistic writes finish', async () => {
+  installBrowserTargets();
+  const client = new QueryClient(), source = new FakeEventSource();
+  const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
+  const unsubscribe = subscribeToInternalEvents(client, () => source);
+  let finish!: () => void;
+  const mutation = client.getMutationCache().build(client, { mutationKey: ['internal', 'settings', 'live'], mutationFn: () => new Promise<void>(resolve => { finish = resolve; }) });
+  const pending = mutation.execute(undefined);
+  await expect.poll(() => typeof finish).toBe('function');
+  const event = { version: 1, id: 1, type: 'settings.updated', entityId: 'admin', revision: 0, occurredAt: '2026-09-10T00:00:00.000Z', keys: ['gallery.series_last_viewed'] };
+  source.emit(event); source.emit({ ...event, id: 2 });
+  expect(invalidate).not.toHaveBeenCalled();
+  finish(); await pending;
+  expect(invalidate.mock.calls.map(([options]) => options?.queryKey)).toEqual([['internal', 'settings'], ['internal', 'assets', 'workspace']]);
+  unsubscribe();
 });

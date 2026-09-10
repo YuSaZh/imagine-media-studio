@@ -398,7 +398,6 @@ export function createLegacyRunnerOptions(
   assetsRepository: LegacyAssetRepository,
   provider: ProviderAdapter,
   storage: LegacyStoragePaths,
-  maxConcurrency = 2,
 ): JobRunnerOptions {
   const jobs = new LegacyJobPort(jobsRepository);
   return {
@@ -414,10 +413,6 @@ export function createLegacyRunnerOptions(
           assets.map((asset, index) => materializeLegacyAsset(storage, job.id, index, asset)),
         ),
       process: async (_job, assets) => assets,
-    },
-    concurrency: {
-      imageSubmit: maxConcurrency,
-      videoSubmit: maxConcurrency,
     },
   };
 }

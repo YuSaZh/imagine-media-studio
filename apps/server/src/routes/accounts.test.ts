@@ -20,6 +20,37 @@ describe('account boundaries', () => {
     expect(result.statusCode).toBe(200);
     return { cookie: String(result.headers['set-cookie']).split(';')[0]!, origin: 'http://localhost:80' };
   }
+  it('persists UUID editor settings across server restart and isolates accounts', async () => {
+    await setup();
+    const admin = await login('admin');
+    const collection = (await server.app.inject({ method: 'POST', url: '/internal/collections', headers: admin, payload: { name: 'Editor settings project' } })).json().collection;
+    const key = `generation.edit.${collection.id}.22222222-2222-4222-8222-222222222222`;
+    const memory = { image: { selected: 'model-a', models: { 'model-a': { ratio: '1:1' }, 'model-b': { ratio: '3:4' } } }, video: { selected: 'video-model' } };
+    expect((await server.app.inject({ method: 'PATCH', url: '/internal/settings', headers: admin, payload: { values: { [key]: memory } } })).statusCode).toBe(200);
+    await server.app.inject({ method: 'POST', url: '/internal/accounts', headers: admin, payload: { username: 'settings-user', password: 'fixture-password' } });
+    const other = await login('settings-user', 'fixture-password');
+    expect((await server.app.inject({ url: '/internal/settings', headers: other })).json().settings[key]).toBeUndefined();
+    await server.app.close();
+    server = await createServer({ config: loadConfig({ DATA_DIR: root, NODE_ENV: 'test', MOCK_PROVIDER_ENABLED: 'true' }), startRunner: false, logger: false });
+    expect((await server.app.inject({ url: '/internal/settings', headers: admin })).json().settings[key]).toEqual(memory);
+  });
+
+  it('shares the failed login budget between Basic and password login', async () => {
+    await setup();
+    for (let index = 0; index < 10; index++) {
+      const result = index % 2 === 0
+        ? await server.app.inject({ url: '/internal/account', headers: { authorization: `Basic ${Buffer.from('nobody:incorrect').toString('base64')}` } })
+        : await server.app.inject({ method: 'POST', url: '/internal/auth/login', payload: { username: 'nobody', password: 'incorrect' } });
+      expect(result.statusCode).toBe(401);
+    }
+    for (const url of ['/internal/account', '/internal/auth/status']) {
+      const rejected = await server.app.inject({ url, headers: { authorization: `Basic ${Buffer.from('nobody:incorrect').toString('base64')}` } });
+      expect(rejected.statusCode).toBe(429);
+      expect(Number(rejected.headers['retry-after'])).toBeGreaterThan(0);
+    }
+    expect((await server.app.inject({ method: 'POST', url: '/internal/auth/login', payload: { username: 'nobody', password: 'incorrect' } })).statusCode).toBe(429);
+  });
+
   it('fans out the requested task count despite absent, disabled or locked model batch rules', async () => {
     await setup();
     const admin = await login('admin');

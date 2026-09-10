@@ -228,14 +228,12 @@ export class JobRunner {
     assets: LegacyAssetRepository,
     provider: ProviderAdapter,
     storage: LegacyStoragePaths,
-    maxConcurrency?: number,
   );
   public constructor(
     optionsOrJobs: JobRunnerOptions | LegacyJobRepository,
     assets?: LegacyAssetRepository,
     provider?: ProviderAdapter,
     storage?: LegacyStoragePaths,
-    maxConcurrency = 2,
   ) {
     if (isOptions(optionsOrJobs)) {
       this.options = optionsOrJobs;
@@ -248,7 +246,6 @@ export class JobRunner {
         assets,
         provider,
         storage,
-        maxConcurrency,
       );
     }
 
@@ -269,9 +266,11 @@ export class JobRunner {
       throw new RangeError('defaultRemoteDeadlineMs must be a positive safe integer.');
     }
     const concurrency = this.options.concurrency ?? {};
-    this.imageSubmitQueue = new PQueue({ concurrency: concurrency.imageSubmit ?? 2 });
-    this.videoSubmitQueue = new PQueue({ concurrency: concurrency.videoSubmit ?? 2 });
-    this.pollQueue = new PQueue({ concurrency: concurrency.poll ?? 4 });
+    // Upstream providers own request concurrency and rate limits. These queues
+    // retain lifecycle tracking and cancellation without throttling requests.
+    this.imageSubmitQueue = new PQueue();
+    this.videoSubmitQueue = new PQueue();
+    this.pollQueue = new PQueue();
     this.downloadQueue = new PQueue({ concurrency: concurrency.download ?? 3 });
     this.processQueue = new PQueue({ concurrency: concurrency.process ?? 2 });
   }

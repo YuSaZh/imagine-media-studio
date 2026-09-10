@@ -29,8 +29,11 @@ Read the [root guide](../../AGENTS.md) and
 
 - SQLite is authoritative. Commit job transitions and outbox events before
   notifying clients; retain revision checks and durable retry budgets.
-- Keep submit, poll, download, and processing work bounded. Resume known remote
-  jobs after restart; do not blindly resubmit uncertain work without idempotency.
+- Let upstream Providers control submit/poll concurrency and rate limits; do not
+  add application-wide or per-account request concurrency caps. Keep individual
+  request timeouts, poll intervals, retry budgets, and local download/processing
+  concurrency bounded. Resume known remote jobs after restart; do not blindly
+  resubmit uncertain work without idempotency.
 - Add migrations instead of editing shipped SQL. Update `migrations/manifest.json`
   for new entries; preserve existing checksums and test upgrade from old data.
 - Persist relative media paths. Keep traversal/symlink checks, bounded streaming,

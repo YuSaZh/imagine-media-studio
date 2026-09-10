@@ -364,9 +364,7 @@ svg { flex-shrink: 0; }
   .viewer-heading h2 { max-width: 135px; font-size: 12px; }
   .viewer-index { display: none; }
   .viewer-stage { padding: 15px 12px 66px; }
-  .viewer-arrow { width: 30px; height: 30px; opacity: .8; }
-  .viewer-arrow.previous { left: 9px; }
-  .viewer-arrow.next { right: 9px; }
+  .viewer-arrow { display: none; }
   .zoom-tools { bottom: 14px; }
   .viewer-footer { padding: 12px 12px max(16px, env(safe-area-inset-bottom)); }
   .continue-actions { gap: 6px; }
@@ -787,3 +785,7 @@ svg { flex-shrink: 0; }
 }
 
 .preferences .setting-description { display: block; margin-top: 6px; color: #66745e; font-size: 11px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .viewer-edge-back { position: absolute; left: 12px; top: 50%; z-index: 3; display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #dce3dde0; border-radius: 50%; background: #fafbf9f2; color: var(--ink); box-shadow: 0 3px 14px #24352712; pointer-events: none; }
+}

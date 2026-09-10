@@ -14,6 +14,9 @@ type EventSourceFactory = (url: string) => EventSourceLike;
 const defaultEventSourceFactory: EventSourceFactory = (url) => new EventSource(url);
 
 function queryKeysForEvent(event: InternalEvent): readonly QueryKey[] {
+  if (event.type === 'settings.updated') {
+    return [internalQueryKeys.settings, ...(event.keys?.includes('gallery.series_last_viewed') ? [[...internalQueryKeys.assets, 'workspace']] : [])];
+  }
   if (event.type.startsWith('job.')) {
     return [internalQueryKeys.jobs, internalQueryKeys.assets, internalQueryKeys.gallery];
   }
@@ -45,6 +48,12 @@ export function subscribeToInternalEvents(
   const invalidate = (queryKey: QueryKey) => {
     void queryClient.invalidateQueries({ queryKey });
   };
+  const deferredKeys = new Map<string, QueryKey>();
+  const unsubscribeMutations = queryClient.getMutationCache().subscribe(() => {
+    if (queryClient.isMutating({ mutationKey: internalQueryKeys.settings }) > 0) return;
+    const keys = [...deferredKeys.values()]; deferredKeys.clear();
+    for (const key of keys) invalidate(key);
+  });
   const handleMessage = (message: MessageEvent<string>) => {
     let payload: unknown;
     try {
@@ -54,7 +63,11 @@ export function subscribeToInternalEvents(
     }
     const parsed = InternalEventSchema.safeParse(payload);
     if (!parsed.success) return;
-    for (const queryKey of queryKeysForEvent(parsed.data)) invalidate(queryKey);
+    for (const queryKey of queryKeysForEvent(parsed.data)) {
+      if (parsed.data.type === 'settings.updated' && queryClient.isMutating({ mutationKey: internalQueryKeys.settings }) > 0) {
+        deferredKeys.set(JSON.stringify(queryKey), queryKey);
+      } else invalidate(queryKey);
+    }
   };
   source.onmessage = handleMessage;
   source.addEventListener('change', handleMessage);
@@ -68,6 +81,7 @@ export function subscribeToInternalEvents(
 
   return () => {
     source.close();
+    unsubscribeMutations(); deferredKeys.clear();
     window.removeEventListener('online', refreshAll);
     document.removeEventListener('visibilitychange', handleVisibility);
   };

@@ -195,10 +195,8 @@ export interface JobRunnerOptions {
   inputLoader?: ProviderInputLoaderPort;
   media: MediaMaterializerPort;
   clock?: RunnerClock;
+  /** Bounds local media work only; upstream requests have no application concurrency cap. */
   concurrency?: {
-    imageSubmit?: number;
-    videoSubmit?: number;
-    poll?: number;
     download?: number;
     process?: number;
   };

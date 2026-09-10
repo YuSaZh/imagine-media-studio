@@ -51,6 +51,27 @@ function assetInput(path: string) {
 }
 
 describe('PR 2 database repositories', () => {
+  it('gives every branch into a malformed ancestry cycle the same canonical series', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm, () => 'admin');
+    const jobs = new JobRepository(database.orm);
+    for (const id of ['cycle-a', 'cycle-b']) {
+      const frame = assets.create({ ...assetInput(`${id}.png`), role: 'reference', metadata: { temporaryVideoFrame: true } });
+      database.sqlite.prepare('UPDATE assets SET id=? WHERE id=?').run(id, frame.id);
+    }
+    database.sqlite.prepare('UPDATE assets SET parent_asset_id=? WHERE id=?').run('cycle-b', 'cycle-a');
+    database.sqlite.prepare('UPDATE assets SET parent_asset_id=? WHERE id=?').run('cycle-a', 'cycle-b');
+    for (const [id, source] of [['000-output', 'cycle-a'], ['zzz-output', 'cycle-b']]) {
+      const job = jobs.create(createMockGenerationRequest({ inputs: [{ assetId: source!, role: 'source' }] }));
+      const asset = assets.create({ ...assetInput(`${id}.png`), role: 'output', jobId: job.id });
+      database.sqlite.prepare('UPDATE assets SET id=? WHERE id=?').run(id, asset.id);
+    }
+    const page = assets.page({ groupBySeries: true });
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.series).toEqual({ id: 'a:cycle-a', count: 2 });
+    expect(assets.series('000-output')?.assets.map(asset => asset.id).sort()).toEqual(['000-output', 'zzz-output']);
+  });
+
   it('paginates series before selecting covers and keeps filters, deleted lineage and owners isolated', async () => {
     const database = await createTestDatabase();
     const assets = new AssetRepository(database.orm, () => 'admin');
@@ -181,16 +202,16 @@ describe('PR 2 database repositories', () => {
     const replay = events.replay(0);
     expect(replay.map((event) => event.id)).toEqual([...replay.map((event) => event.id)].sort((a, b) => a - b));
     expect(replay.map((event) => event.eventType)).toEqual([
-      'setting.updated',
-      'setting.updated',
-      'setting.updated',
+      'settings.updated',
+      'settings.updated',
     ]);
-    expect(events.replay(replay[0]?.id ?? 0)).toHaveLength(2);
+    expect(events.replay(replay[0]?.id ?? 0)).toHaveLength(1);
     expect(events.latestId()).toBe(replay.at(-1)?.id);
-    expect(events.listAfter(0, 10)).toHaveLength(3);
-    expect(events.latestForAggregate('setting', 'defaultMode')).toMatchObject({
-      aggregateId: 'defaultMode',
-      eventType: 'setting.updated',
+    expect(events.listAfter(0, 10)).toHaveLength(2);
+    expect(events.latestForAggregate('setting', 'global')).toMatchObject({
+      aggregateId: 'global',
+      eventType: 'settings.updated',
+      payload: { keys: ['defaultMode'] },
     });
   });
 

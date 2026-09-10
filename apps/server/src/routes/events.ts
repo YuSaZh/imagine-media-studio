@@ -1,13 +1,14 @@
 import type { InternalEvent } from '@imagine/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import type { ChangeEventStore, EventBroker } from '../events/event-broker.js';
+import type { ChangeEventStore, EventBroker, StoredChangeEvent } from '../events/event-broker.js';
 
 const MAX_REPLAY_EVENTS = 500;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 
 export function formatSseEvent(event: InternalEvent): string {
-  return `id: ${event.id}\nevent: change\ndata: ${JSON.stringify(event)}\n\n`;
+  const { version, id, type, entityId, revision, occurredAt, keys } = event;
+  return `id: ${id}\nevent: change\ndata: ${JSON.stringify({ version, id, type, entityId, revision, occurredAt, ...(keys ? { keys } : {}) })}\n\n`;
 }
 
 export function parseLastEventId(value: string | undefined): number | null {
@@ -21,7 +22,7 @@ export async function registerEventRoutes(
   app: FastifyInstance,
   store: ChangeEventStore,
   broker: EventBroker,
-  visible?: (request: FastifyRequest, event: InternalEvent) => boolean,
+  visible?: (request: FastifyRequest, event: StoredChangeEvent) => boolean | InternalEvent,
 ): Promise<void> {
   app.get('/internal/events', (request, reply) => {
     const rawLastEventId = request.headers['last-event-id'];
@@ -48,7 +49,7 @@ export async function registerEventRoutes(
     let closed = false;
     let replaying = true;
     let highestWrittenId = lastEventId;
-    const pendingLiveEvents: InternalEvent[] = [];
+    const pendingLiveEvents: StoredChangeEvent[] = [];
 
     const cleanup = () => {
       if (closed) return;
@@ -56,11 +57,12 @@ export async function registerEventRoutes(
       clearInterval(heartbeat);
       unsubscribe();
     };
-    const writeEvent = (event: InternalEvent) => {
+    const writeEvent = (event: StoredChangeEvent) => {
       if (closed || event.id <= highestWrittenId) return;
       highestWrittenId = event.id;
-      if (visible && !visible(request, event)) return;
-      if (!response.write(formatSseEvent(event))) {
+      const projected = visible ? visible(request, event) : true;
+      if (!projected) return;
+      if (!response.write(formatSseEvent(projected === true ? event : projected))) {
         cleanup();
         response.end();
       }

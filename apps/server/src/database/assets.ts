@@ -1,3 +1,4 @@
+import { loadAssetSeriesGraph } from './asset-series.js';
 import { randomUUID } from 'node:crypto';
 import { assetOutsidePrivateProjects } from './recent-visibility.js';
 import type { ProviderVideoSource } from '@imagine/provider-contract';
@@ -193,44 +194,21 @@ export class AssetRepository {
   private seriesPage(request: AssetPageRequest, filter: SQL): CursorPage<AssetRecord> {
     const page = normalizePageRequest(request);
     const owner = this.owner?.() ?? 'admin';
-    // Follow one primary parent per node. UNION also terminates malformed cycles.
-    // Filter before ranking covers/counts, but preserve deleted nodes for ancestry.
+    const roots = loadAssetSeriesGraph(this.database, owner).assetRoots();
     const rows = this.database.all<{ id: string; seriesId: string; count: number; anchorId: string; anchorTime: number }>(sql`
-      WITH RECURSIVE
-      owned_assets AS (SELECT * FROM assets WHERE owner_id = ${owner}),
-      owned_jobs AS (SELECT * FROM jobs WHERE owner_id = ${owner}),
-      ranked_inputs AS (
-        SELECT i.job_id, i.asset_id, row_number() OVER (
-          PARTITION BY i.job_id ORDER BY CASE i.role WHEN 'source' THEN 0 WHEN 'first_frame' THEN 1 ELSE 2 END, i.sort_order, i.asset_id
-        ) AS rank FROM job_inputs i JOIN owned_jobs j ON j.id = i.job_id JOIN owned_assets a ON a.id = i.asset_id
-        WHERE i.role IN ('source', 'first_frame', 'reference')
-      ),
-      parents(child, parent) AS (
-        SELECT 'a:' || a.id, 'j:' || j.id FROM owned_assets a JOIN owned_jobs j ON j.id = a.job_id WHERE a.role = 'output'
-        UNION SELECT 'j:' || job_id, 'a:' || asset_id FROM ranked_inputs WHERE rank = 1
-        UNION SELECT 'a:' || a.id, 'a:' || p.id FROM owned_assets a JOIN owned_assets p ON p.id = a.parent_asset_id
-          WHERE a.role != 'output' AND coalesce(json_extract(a.metadata_json, '$.temporaryVideoFrame'), 0) = 1
-      ),
-      eligible AS (SELECT assets.id, assets.created_at FROM assets WHERE ${filter}),
-      ancestry(id, node) AS (
-        SELECT id, 'a:' || id FROM eligible
-        UNION SELECT a.id, p.parent FROM ancestry a JOIN parents p ON p.child = a.node
-      ),
-      roots AS (
-        SELECT a.id, coalesce(min(CASE WHEN p.child IS NULL THEN a.node END), min(a.node)) AS series_id
-        FROM ancestry a LEFT JOIN parents p ON p.child = a.node GROUP BY a.id
-      ),
-      ranked AS (
-        SELECT e.id, r.series_id,
+      WITH roots AS (
+        SELECT json_extract(value, '$[0]') AS id, json_extract(value, '$[1]') AS series_id FROM json_each(${JSON.stringify(roots)})
+      ), ranked AS (
+        SELECT assets.id, r.series_id,
           count(*) OVER (PARTITION BY r.series_id) AS count,
-          first_value(e.id) OVER (PARTITION BY r.series_id ORDER BY e.created_at DESC, e.id DESC) AS anchor_id,
-          max(e.created_at) OVER (PARTITION BY r.series_id) AS anchor_time,
+          first_value(assets.id) OVER (PARTITION BY r.series_id ORDER BY assets.created_at DESC, assets.id DESC) AS anchor_id,
+          max(assets.created_at) OVER (PARTITION BY r.series_id) AS anchor_time,
           row_number() OVER (PARTITION BY r.series_id ORDER BY
-            CASE WHEN ${Number(request.seriesCover === 'recent')} THEN coalesce((SELECT value FROM json_each(${JSON.stringify(request.lastViewed ?? {})}) WHERE key = e.id), 0) ELSE 0 END DESC,
-            CASE WHEN ${Number(request.seriesCover === 'original')} THEN e.created_at END ASC,
-            CASE WHEN ${Number(request.seriesCover === 'original')} THEN e.id END ASC,
-            e.created_at DESC, e.id DESC) AS cover_rank
-        FROM eligible e JOIN roots r ON r.id = e.id
+            CASE WHEN ${Number(request.seriesCover === 'recent')} THEN coalesce((SELECT value FROM json_each(${JSON.stringify(request.lastViewed ?? {})}) WHERE key = assets.id), 0) ELSE 0 END DESC,
+            CASE WHEN ${Number(request.seriesCover === 'original')} THEN assets.created_at END ASC,
+            CASE WHEN ${Number(request.seriesCover === 'original')} THEN assets.id END ASC,
+            assets.created_at DESC, assets.id DESC) AS cover_rank
+        FROM roots r CROSS JOIN assets WHERE assets.id = r.id AND ${filter}
       )
       SELECT id, series_id AS seriesId, count, anchor_id AS anchorId, anchor_time AS anchorTime FROM ranked
       WHERE cover_rank = 1 ${page.cursor ? sql`AND (anchor_time < ${page.cursor.timestampMs} OR (anchor_time = ${page.cursor.timestampMs} AND anchor_id < ${page.cursor.id}))` : sql``}
@@ -424,36 +402,13 @@ export class AssetRepository {
   public series(id: string): { assets: AssetRecord[]; jobIds: string[]; truncated: boolean } | null {
     if (!this.get(id)) return null;
     const owner = this.owner?.() ?? 'admin';
-    // Only the primary editing input forms lineage. Extra references and masks do not.
-    // Deleted frame records remain traversal nodes, never visible gallery items.
-    const nodes = this.database.all<{ node: string }>(sql`
-      WITH RECURSIVE
-      owned_assets AS (SELECT * FROM assets WHERE owner_id = ${owner}),
-      owned_jobs AS (SELECT * FROM jobs WHERE owner_id = ${owner}),
-      ranked_inputs AS (
-        SELECT i.job_id, i.asset_id, row_number() OVER (
-          PARTITION BY i.job_id ORDER BY CASE i.role WHEN 'source' THEN 0 WHEN 'first_frame' THEN 1 ELSE 2 END, i.sort_order, i.asset_id
-        ) AS rank
-        FROM job_inputs i JOIN owned_jobs j ON j.id = i.job_id JOIN owned_assets a ON a.id = i.asset_id
-        WHERE i.role IN ('source', 'first_frame', 'reference')
-      ),
-      links(a, b) AS (
-        SELECT 'a:' || asset_id, 'j:' || job_id FROM ranked_inputs WHERE rank = 1
-        UNION SELECT 'j:' || j.id, 'a:' || a.id FROM owned_assets a JOIN owned_jobs j ON j.id = a.job_id WHERE a.role = 'output'
-        UNION SELECT 'a:' || p.id, 'a:' || a.id FROM owned_assets a JOIN owned_assets p ON p.id = a.parent_asset_id
-          WHERE coalesce(json_extract(a.metadata_json, '$.temporaryVideoFrame'), 0) = 1
-      ),
-      edges(a, b) AS (SELECT a, b FROM links UNION SELECT b, a FROM links),
-      family(node) AS (SELECT 'a:' || ${id} UNION SELECT e.b FROM edges e JOIN family f ON e.a = f.node LIMIT 1001)
-      SELECT node FROM family
-    `);
-    const visible = nodes.slice(0, 1000);
-    const assetIds = visible.filter(row => row.node.startsWith('a:')).map(row => row.node.slice(2));
+    const family = loadAssetSeriesGraph(this.database, owner).family(`a:${id}`);
+    const assetIds = family.nodes.filter(node => node.startsWith('a:')).map(node => node.slice(2));
     const rows = assetIds.length ? this.database.select().from(assets).where(and(
       inArray(assets.id, assetIds), eq(assets.ownerId, owner), isNull(assets.deletedAt),
       ne(assets.role, 'mask'), sql`coalesce(json_extract(${assets.metadataJson}, '$.temporaryVideoFrame'), 0) != 1`,
     )).orderBy(asc(assets.createdAt), asc(assets.id)).all() : [];
-    return { assets: rows.map(mapAssetRow), jobIds: visible.filter(row => row.node.startsWith('j:')).map(row => row.node.slice(2)), truncated: nodes.length > 1000 };
+    return { assets: rows.map(mapAssetRow), jobIds: family.nodes.filter(node => node.startsWith('j:')).map(node => node.slice(2)), truncated: family.truncated };
   }
 
   public collectionIdsForAsset(assetId: string): readonly string[] {

@@ -60,6 +60,13 @@ import {
 } from './internal-api.js';
 
 describe('internal API schemas', () => {
+  it('accepts full editor scopes and bounds settings keys to 128 characters', () => {
+    const key = 'generation.edit.11111111-1111-4111-8111-111111111111.22222222-2222-4222-8222-222222222222';
+    expect(SettingsPatchSchema.safeParse({ values: { [key]: { image: { selected: 'fixture/model' } } } }).success).toBe(true);
+    expect(SettingsPatchSchema.safeParse({ values: { ['a'.repeat(128)]: true } }).success).toBe(true);
+    expect(SettingsPatchSchema.safeParse({ values: { ['a'.repeat(129)]: true } }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ values: { ['a'.repeat(80) + '.api_key']: 'secret' } }).success).toBe(false);
+  });
   it('accepts the registered PR5 video provider profiles', () => {
     expect(ProviderTypeSchema.parse('xai-imagine-video-v1')).toBe('xai-imagine-video-v1');
     expect(ProviderTypeSchema.parse('gemini-veo-operation-v1')).toBe('gemini-veo-operation-v1');

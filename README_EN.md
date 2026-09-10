@@ -59,7 +59,7 @@ Screenshots come from this project's automated workspace checks and show uploade
 - Video details share the floating Composer and in-place editing/extension. Image mode keeps the video seekable and captures its current frame only when opening masks or sending; temporary frames stay out of the library and are cleaned after jobs finish, without an additional player or browser decoder.
 - Generation cards show elapsed seconds live and compact completion times beside model names. Model-adding catalogs hide models already saved in the current connection and restore them after deletion.
 - Recognized models are highlighted and listed first in the add-model catalog; see the [model capability table](./docs/model-capabilities.md). Media cards can copy the complete prompt directly. Mobile card actions use icons without background fill or blur; prompt focus keeps its height, and generation settings share consistent field styling across both layouts.
-- Both layouts offer count presets 1 / 2 / 4 / 8 and a plus button for custom counts (1–32). Count creates independent single-output jobs, unaffected by model batch capabilities or parameter rules; the server queue controls execution concurrency.
+- Both layouts offer count presets 1 / 2 / 4 / 8 and a plus button for custom counts (1–32). Count creates independent single-output jobs, unaffected by model batch capabilities or parameter rules; generation submissions and upstream polls have no application concurrency cap; upstream APIs control their own limits, while downloads and local processing remain bounded.
 - Both layouts offer auto / 1K / 2K / 4K / custom image resolution popovers. Unlocking the aspect ratio switches it to auto while retaining the custom dimensions. Dimensions align to the nearest multiple of 16 on blur or apply; auto aspect ratio keeps the edges independent.
 - Selection controls throughout the app use consistent rounded popovers; aspect-ratio choices balance their rows by option count on both layouts.
 - Mobile generation settings offer auto / 1K / 2K / 4K / custom resolution, sharing desktop aspect-ratio mapping and model limits.
@@ -107,6 +107,12 @@ The project menu can mark a project private: its content is excluded from the ho
 - PWA installation controls, update notifications, and offline previews and draft recovery for authenticated sessions. Generation is unavailable offline.
 
 <a id="quick-start"></a>
+- The mobile main editor hides paging buttons; use swipes or series thumbnails to switch works, and swipe right from its left edge to close. Zoomed and two-finger gestures retain image manipulation, and closing does not cancel generation jobs.
+
+- Project editors persist model settings with full project and asset IDs. Open pages of the same account synchronize preferences through events. Series grouping reuses one ancestry calculation instead of repeatedly expanding long editing chains.
+
+- Password login and HTTP Basic share authentication attempt limits, returning `429` with `Retry-After` when exceeded. Normal Cookie sessions do not consume password attempts.
+
 ## Quick Start
 
 ### Deploy with Docker Compose

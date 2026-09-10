@@ -1,6 +1,7 @@
+import { settingsEventForAccount } from './events/settings-events.js';
 import { TemporaryVideoFrames } from './media/temporary-video-frames.js';
 import { existsSync } from 'node:fs';
-import { AccountAuth } from './security/account-auth.js';
+import { AccountAuth, AccountRateLimitError } from './security/account-auth.js';
 import { accountContext, requestOwner } from './security/account-context.js';
 import { AccountSettingsRepository } from './database/account-settings.js';
 import { registerAccountRoutes } from './routes/accounts.js';
@@ -305,7 +306,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
   const allowHttpContent = () => settings.get('network.allow_http_content')?.value === true;
   const providerRepository = new ProviderRepository(database.orm);
   const models = new ModelRepository(database.orm);
-  const accounts = options.config.adminUsername === undefined ? undefined : new AccountAuth(database.sqlite, options.config.appSecret, options.config.adminUsername, options.config.adminPassword ?? 'admin');
+  const accounts = options.config.adminUsername === undefined ? undefined : await AccountAuth.initialize(database.sqlite, options.config.appSecret, options.config.adminUsername, options.config.adminPassword ?? 'admin');
   const routeAssets = accounts ? new AssetRepository(database.orm, requestOwner) : assets;
   const routeJobs = accounts ? new JobRepository(database.orm, requestOwner) : jobs;
   const routeSettings = accounts ? new AccountSettingsRepository(database.orm, database.sqlite, settings, options.config.publicBaseUrl) : settings;
@@ -484,6 +485,13 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       },
     });
     app.addHook('onRequest', async (request, reply) => {
+      if (accounts) {
+        try { await accounts.authenticateRequest(request); }
+        catch (error) {
+          if (error instanceof AccountRateLimitError) return reply.code(429).header('retry-after', String(error.retryAfterSeconds)).send({ error: 'login_rate_limited' });
+          throw error;
+        }
+      }
       const pathname = request.routeOptions.url ?? new URL(request.url, 'http://localhost').pathname;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         const origin = request.headers.origin;
@@ -629,6 +637,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
     await registerEventRoutes(app, changeEvents, broker, accounts ? (request, event) => {
       const user = accounts.user(request);
       if (!user) return false;
+      if (event.type === 'settings.updated') return settingsEventForAccount(event, user.id);
       const table = event.type.startsWith('asset.') ? 'assets' : event.type.startsWith('job.') ? 'jobs' : event.type.startsWith('collection.') ? 'collections' : null;
       if (!table) return true;
       const row = database.sqlite.prepare(`SELECT owner_id FROM ${table} WHERE id=?`).get(event.entityId) as { owner_id: string } | undefined;

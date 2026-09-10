@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ArrowLeft, Bookmark, Check, ChevronLeft, ChevronRight, Copy, Download, FolderPlus, Info, Trash2, X } from 'lucide-react';
-import { createViewerGestureState, setViewerGestureTransform, transitionViewerGesture, type ViewerGestureLayout } from '../viewer/model/viewer-gestures';
+import { VIEWER_EDGE_BACK_WIDTH, VIEWER_EDGE_BACK_THRESHOLD, createViewerGestureState, setViewerGestureTransform, transitionViewerGesture, type ViewerGestureLayout } from '../viewer/model/viewer-gestures';
 import { JOB_LABELS, mediaExtension, type MediaItem, type Project } from './data';
 import { Choice, Options, Tool } from './ui';
 import type { ViewerMotion } from './viewer-motion';
@@ -64,6 +64,7 @@ export function Viewer(props: ViewerProps) {
     const { mode, startPoint, lastPoint } = transition.state;
     if (mode === 'swipe' && startPoint && lastPoint) props.motion?.drag(lastPoint.x - startPoint.x, lastPoint.y - startPoint.y, matchMedia('(max-width: 760px)').matches);
     else if (['none', 'tap', 'double-tap'].includes(transition.effect)) props.motion?.settle();
+    if (transition.effect === 'close') props.onClose();
     if (transition.effect === 'next') props.onMove(1);
     if (transition.effect === 'previous') props.onMove(-1);
     if (transition.effect === 'next-entry') props.onMoveEntry?.(1);
@@ -110,7 +111,7 @@ export function Viewer(props: ViewerProps) {
               if (event.pointerType !== 'touch' || matchMedia('(min-width: 761px)').matches || event.clientY > box.bottom - 52) return;
             }
             if (event.pointerType === 'mouse') event.preventDefault();
-            apply(transitionViewerGesture(gestureRef.current, { type: 'pointerdown', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout() }));
+            apply(transitionViewerGesture(gestureRef.current, { type: 'pointerdown', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout(), allowEdgeBack: event.pointerType === 'touch' && matchMedia('(max-width: 760px)').matches && event.clientX >= 0 && event.clientX <= VIEWER_EDGE_BACK_WIDTH }));
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerMove={event => { if (gestureRef.current.pointers.has(event.pointerId)) apply(transitionViewerGesture(gestureRef.current, { type: 'pointermove', pointerId: event.pointerId, point: { x: event.clientX, y: event.clientY }, layout: layout() })); }}
@@ -123,12 +124,14 @@ export function Viewer(props: ViewerProps) {
               lastTap.current = now;
             }
           }}
+          onLostPointerCapture={event => apply(transitionViewerGesture(gestureRef.current, { type: 'lostcapture', pointerId: event.pointerId }))}
           onPointerCancel={event => apply(transitionViewerGesture(gestureRef.current, { type: 'pointercancel', pointerId: event.pointerId }))}>
           {props.stageContent ?? (mediaError ? <p className="media-error" role="alert">原文件暂时无法加载<button className="quiet-command" onClick={() => setMediaError(false)}>重试</button></p> : <>
             {image && <img className="viewer-image" src={props.previewSrc ?? (props.online ? item.src : item.thumbnail)} alt={item.title} draggable={false} onError={() => setMediaError(true)} style={{ transform: `translate(${gesture.position.x}px, ${gesture.position.y}px) scale(${gesture.scale})` }} />}
             {item.kind === 'video' && (props.online ? <video key={item.id} ref={props.videoRef} src={item.src} poster={item.poster ?? undefined} controls playsInline preload="auto" className="viewer-image viewer-source-video" aria-label="原视频" aria-hidden={image} style={image ? { display: 'none' } : undefined} onLoadedMetadata={event => { const video = event.currentTarget, time = props.initialVideoTime ?? 0; if (time > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration); }} onTimeUpdate={event => props.onVideoTime?.(event.currentTarget.currentTime)} onSeeked={event => props.onVideoTime?.(event.currentTarget.currentTime)} onError={() => { if (!image) setMediaError(true); }} /> : !image && <img className="viewer-image" src={item.poster ?? item.thumbnail} alt={item.title} />)}
           </>)}
 
+          {gesture.mode === 'edge-back' && gesture.startPoint && gesture.lastPoint && gesture.lastPoint.x > gesture.startPoint.x && <span className="viewer-edge-back" aria-hidden="true" style={{ opacity: Math.min(1, (gesture.lastPoint.x - gesture.startPoint.x) / VIEWER_EDGE_BACK_THRESHOLD) }}><ChevronLeft size={24} /></span>}
           <Tool label="上一张作品" className="viewer-arrow previous" disabled={!(props.canPrevious ?? props.total > 1)} onClick={() => props.onMove(-1)}><ChevronLeft size={23} /></Tool>
           <Tool label="下一张作品" className="viewer-arrow next" disabled={!(props.canNext ?? props.total > 1)} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
 
