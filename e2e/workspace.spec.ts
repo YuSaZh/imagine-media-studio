@@ -12,15 +12,18 @@ import { test, expect, type APIRequestContext, type Page } from './fixtures.js';
 async function capturePost(page: Page, path: string) {
   let resolve!: (response: APIResponse) => void;
   let reject!: (error: unknown) => void;
+  let captured = false;
   const response = new Promise<APIResponse>((yes, no) => { resolve = yes; reject = no; });
   const pattern = `**${path}`;
   const handler = async (route: Route) => {
-    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    if (route.request().method() !== 'POST' || captured) { await route.continue(); return; }
+    captured = true;
     try {
       const upstream = await route.fetch();
       await upstream.body();
       await route.fulfill({ response: upstream });
-      await page.unroute(pattern, handler);
+      // Keep routing enabled until context cleanup: removing the last route
+      // here can leave Chromium's fulfilled response body unfinished.
       resolve(upstream);
     } catch (error) { reject(error); }
   };
