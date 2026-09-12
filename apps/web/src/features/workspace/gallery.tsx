@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bookmark, FolderInput, Images, Copy, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { copyPrompt } from './copy-prompt';
@@ -10,6 +10,7 @@ import { GenerationStatus } from './generation-status';
 import { formatGenerationTime, generationSeconds } from './generation-time';
 
 interface GalleryProps {
+  loading?: boolean;
   onNotice?: (message: string) => void;
   onVideoContinue?: (item: MediaItem, operation: 'edit' | 'extend') => void;
   canEditVideo?: boolean;
@@ -40,8 +41,21 @@ function durationLabel(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 }
 
+function Thumbnail({ item, visible }: { item: MediaItem; visible: boolean }) {
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [requested, setRequested] = useState(visible);
+  useEffect(() => { if (visible) setRequested(true); }, [visible]);
+  const mount = useCallback((image: HTMLImageElement | null) => {
+    if (image?.complete) setState(image.naturalWidth > 0 ? 'ready' : 'error');
+  }, []);
+  if (state === 'error') return <span className="media-unavailable"><ImageIcon size={25} /><span>预览不可用</span></span>;
+  return <>
+    {state === 'loading' && <span className="thumbnail-placeholder" aria-hidden="true" />}
+    {(visible || requested) && <img ref={mount} src={item.thumbnail} alt={item.title} width={item.width} height={item.height} className={`thumbnail-${state}`} loading={visible ? 'eager' : 'lazy'} fetchPriority={visible ? 'high' : 'low'} decoding="async" draggable={false} onLoad={() => setState('ready')} onError={() => setState('error')} />}
+  </>;
+}
+
 function Card({ item, props, visible }: { item: MediaItem; props: GalleryProps; visible: boolean }) {
-  const [broken, setBroken] = useState(false);
   const gesture = useRef(createSelectionGestureState());
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressClick = useRef(false);
@@ -80,7 +94,7 @@ function Card({ item, props, visible }: { item: MediaItem; props: GalleryProps; 
         if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); return; }
         if (event.shiftKey) props.onSelect(item); else props.onPick(item);
       }}>
-      {broken ? <span className="media-unavailable"><ImageIcon size={25} /><span>预览不可用</span></span> : <img src={item.thumbnail} alt={item.title} loading={visible ? 'eager' : 'lazy'} fetchPriority={visible ? 'high' : 'low'} decoding="async" draggable={false} onError={() => setBroken(true)} />}
+      <Thumbnail key={item.thumbnail} item={item} visible={visible} />
       {item.kind === 'video' && <span className="video-tag"><Play size={11} fill="currentColor" />{durationLabel(item.durationSeconds ?? 0)}</span>}
       {item.asset?.series && item.asset.series.count > 1 && !props.selecting && <span className="series-count" aria-label={`系列共 ${item.asset.series.count} 件作品`}><Images size={14} strokeWidth={1.75} aria-hidden="true" /><span>{item.asset.series.count}</span></span>}
       <span className="study-caption"><strong>{item.title}</strong><span>{item.model}{elapsed !== null ? ` · ${formatGenerationTime(elapsed)}` : ''}</span></span>
@@ -101,11 +115,13 @@ function Card({ item, props, visible }: { item: MediaItem; props: GalleryProps; 
   </article>;
 }
 
+const loadingEntries = [0.8, 1.25, 1, 1.5, 1.1, 0.85, 1.4, 1, 1.25, 0.8, 1.1, 1.4].map((height, index) => ({ type: 'loading' as const, id: `gallery-loading-${index}`, width: 1, height }));
+
 export function Gallery(props: GalleryProps) {
-  const entries = [...(props.pending ?? []).map(task => ({ type: 'task' as const, task, id: task.id, width: task.width, height: task.height })), ...props.items.map(item => ({ type: 'asset' as const, item, id: item.id, width: item.width, height: item.height }))];
+  const entries = [...(props.pending ?? []).map(task => ({ type: 'task' as const, task, id: task.id, width: task.width, height: task.height })), ...(props.loading ? loadingEntries : props.items.map(item => ({ type: 'asset' as const, item, id: item.id, width: item.width, height: item.height })))];
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
-  const [layout, setLayout] = useState({ width: 1000, margin: 0 });
+  const [layout, setLayout] = useState({ width: 1000, margin: 0, measured: false });
   const columns = layout.width < 560 ? 2 : layout.width < 920 ? 3 : 4;
   const gap = layout.width < 560 ? 8 : 12;
   const width = Math.max(1, (layout.width - gap * (columns - 1)) / columns);
@@ -123,7 +139,7 @@ export function Gallery(props: GalleryProps) {
       if (!grid || !scroll) return;
       const width = grid.clientWidth;
       const margin = grid.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
-      setLayout(current => current.width === width && Math.abs(current.margin - margin) < .5 ? current : { width, margin });
+      setLayout(current => current.measured && current.width === width && Math.abs(current.margin - margin) < .5 ? current : { width, margin, measured: true });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -139,12 +155,12 @@ export function Gallery(props: GalleryProps) {
   }, [props]);
 
   return <>
-    <div className="study-grid virtual-studies" ref={gridRef} style={{ height: virtualizer.getTotalSize() }} aria-label="作品网格">
+    <div className="study-grid virtual-studies" ref={gridRef} style={{ height: virtualizer.getTotalSize() }} role={props.loading ? 'status' : undefined} aria-busy={props.loading || undefined} aria-label={props.loading ? '正在加载作品' : '作品网格'}>
       {virtualizer.getVirtualItems().map(virtual => {
         const top = virtualizer.scrollOffset ?? 0;
-        const visible = virtual.end > top && virtual.start < top + (props.scrollRef.current?.clientHeight ?? 0);
+        const visible = layout.measured && virtual.end > top && virtual.start < top + (props.scrollRef.current?.clientHeight ?? 0);
         const entry = entries[virtual.index];
-        return entry ? <div key={entry.id} className="virtual-study" style={{ width, height: virtual.size, left: (virtual.lane ?? virtual.index % columns) * (width + gap), transform: `translateY(${virtual.start - layout.margin}px)` }}>{entry.type === 'asset' ? <Card item={entry.item} props={props} visible={visible} /> : <PendingCard task={entry.task} props={props} />}</div> : null;
+        return entry ? <div key={entry.id} className="virtual-study" style={{ width, height: virtual.size, left: (virtual.lane ?? virtual.index % columns) * (width + gap), transform: `translateY(${virtual.start - layout.margin}px)` }}>{entry.type === 'loading' ? <div className="gallery-skeleton" aria-hidden="true" /> : entry.type === 'asset' ? <Card item={entry.item} props={props} visible={visible} /> : <PendingCard task={entry.task} props={props} />}</div> : null;
       })}
     </div>
     <div className="gallery-pagination" ref={sentinel}>

@@ -467,3 +467,20 @@ manual expansion. “生成时间” appears immediately before “创建时间�
 persisted job creation-to-completion duration; uploads or missing timestamps show
 “—”. Tapping outside mobile details dismisses them, while the information toggle
 and the details project picker preserve their normal interactions.
+
+### Progressive gallery loading
+
+While the first gallery metadata page is pending, show twelve neutral skeleton
+entries through the existing masonry virtualizer, with the same responsive column
+widths and scroll container. They are loading placeholders without asset actions
+or asset identities. Once metadata arrives, reserve each real card’s dimensions
+from its stored width/height and replace its own skeleton as that thumbnail loads.
+Preserve newest-first server ordering. Initially only thumbnails intersecting
+the current scroll viewport receive an image source; overscanned/offscreen cards
+keep their placeholders until scrolled into view. Once requested, a thumbnail may
+finish and be reused without reloading when the user scrolls back.
+Every thumbnail reveals independently with a brief opacity transition; one slow
+or failed image never holds back its neighbors. Cached images appear immediately,
+failed previews keep the existing unavailable state, and reduced-motion settings
+disable the placeholder animation. Pagination and filter changes retain already
+loaded cards according to the existing query-scope rules.

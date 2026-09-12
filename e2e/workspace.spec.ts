@@ -3070,7 +3070,8 @@ test('homepage thumbnails take priority over idle editor preloads', async ({ pag
   await page.route('**/internal/assets/*/thumbnail', async route => { await imageGate; await route.continue(); });
   try {
     await open(page);
-    await expect(page.getByText('正在加载作品…', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status', { name: '正在加载作品', exact: true })).toBeVisible();
+    await expect(page.locator('.gallery-skeleton').first()).toBeVisible();
     expect(editors).toEqual([]);
     releaseData();
     const image = page.locator('.study-open img').first();
@@ -3167,4 +3168,73 @@ test('detail prompt folding follows available space and preserves full copy text
   await page.setViewportSize({ width: 1440, height: 1080 });
   await expect(card.getByRole('button', { name: '收起', exact: true })).toHaveCount(0);
   await expect(text).not.toHaveClass(/is-collapsed/);
+});
+
+test('gallery shows skeletons before metadata and reveals thumbnails independently', async ({ page, request }, testInfo) => {
+  const broken = await upload(request, 'mountain');
+  const slow = await upload(request, 'coast');
+  const recent = await upload(request, 'botanical');
+  const previousMotion = (await (await request.get('/internal/settings')).json()).settings['ui.reduce_motion'] ?? 'system';
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'always' } } });
+  let releaseList!: () => void, releaseSlow!: () => void;
+  const listGate = new Promise<void>(resolve => { releaseList = resolve; });
+  const slowGate = new Promise<void>(resolve => { releaseSlow = resolve; });
+  const imageRequests: string[] = [];
+  page.on('request', req => { const path = new URL(req.url()).pathname; if (path.endsWith('/thumbnail')) imageRequests.push(path); });
+  await page.route('**/internal/assets?**', async route => { await listGate; await route.continue(); });
+  await page.route(`**${slow.thumbnailUrl}`, async route => { await slowGate; await route.continue(); });
+  await page.route(`**${broken.thumbnailUrl}`, route => route.fulfill({ status: 404, body: '' }));
+  try {
+    await open(page);
+    await expect(page.getByRole('status', { name: '正在加载作品', exact: true })).toBeVisible();
+    await expect(page.locator('.gallery-skeleton').first()).toBeVisible();
+    await expect.poll(() => page.locator('.gallery-skeleton').count()).toBeGreaterThanOrEqual(4);
+    await expect.poll(() => page.locator('.gallery-skeleton').first().evaluate(element => getComputedStyle(element, '::after').animationName)).toBe('none');
+    await expect(page.locator('.study-card')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('gallery-loading-placeholders.png'), animations: 'disabled' });
+    releaseList();
+    const newest = page.locator(`[data-study-id="${recent.id}"]`), waiting = page.locator(`[data-study-id="${slow.id}"]`);
+    await expect(page.locator('.gallery-skeleton')).toHaveCount(0);
+    await expect(newest.locator('img')).toHaveClass('thumbnail-ready');
+    await expect(newest.locator('img')).toHaveCSS('opacity', '1');
+    await expect(waiting.locator('.thumbnail-placeholder')).toBeVisible();
+    await expect(page.locator(`[data-study-id="${broken.id}"] .media-unavailable`)).toBeVisible();
+    expect(imageRequests[0]).toContain(recent.id);
+    const positions = [await newest.boundingBox(), await waiting.boundingBox()];
+    await page.screenshot({ path: testInfo.outputPath('gallery-independent-thumbnails.png'), animations: 'disabled' });
+    releaseSlow();
+    await expect(waiting.locator('img')).toHaveClass('thumbnail-ready');
+    await expect(waiting.locator('.thumbnail-placeholder')).toHaveCount(0);
+    expect([await newest.boundingBox(), await waiting.boundingBox()]).toEqual(positions);
+  } finally {
+    releaseList(); releaseSlow();
+    await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': previousMotion } } });
+  }
+});
+
+test('gallery requests recent visible thumbnails before any offscreen cards', async ({ page, request }) => {
+  const assets = [];
+  for (let index = 0; index < 24; index++) assets.push(await upload(request, index % 2 ? 'botanical' : 'coast'));
+  const requested: string[] = [];
+  page.on('request', req => { const match = new URL(req.url()).pathname.match(/^\/internal\/assets\/([^/]+)\/thumbnail$/); if (match) requested.push(match[1]!); });
+  await open(page);
+  await expect(page.locator('.study-card').first()).toHaveAttribute('data-study-id', assets.at(-1)!.id);
+  await expect(page.locator('.study-card img').first()).toHaveClass('thumbnail-ready');
+  const positions = await page.locator('.study-card').evaluateAll(nodes => nodes.map(node => {
+    const box = node.getBoundingClientRect();
+    const root = node.closest('.workspace-desktop') ? node.closest('.gallery-scroll')! : node.closest('.workspace')!;
+    const bounds = root.getBoundingClientRect();
+    return { id: node.getAttribute('data-study-id')!, visible: box.bottom > bounds.top && box.top < bounds.bottom, below: box.top >= bounds.bottom };
+  }));
+  const visible = new Set(positions.filter(item => item.visible).map(item => item.id));
+  expect(requested[0]).toBe(assets.at(-1)!.id);
+  expect(requested.every(id => visible.has(id))).toBe(true);
+  const offscreen = positions.find(item => item.below)!;
+  expect(offscreen).toBeTruthy();
+  expect(requested).not.toContain(offscreen.id);
+  const target = page.locator(`[data-study-id="${offscreen.id}"]`);
+  await expect(target.locator('img')).toHaveCount(0);
+  await target.scrollIntoViewIfNeeded();
+  await expect(target.locator('img')).toHaveClass('thumbnail-ready');
+  expect(requested).toContain(offscreen.id);
 });
