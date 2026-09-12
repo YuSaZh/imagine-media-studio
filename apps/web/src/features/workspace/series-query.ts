@@ -2,12 +2,13 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { internalClient } from '../../api/internal-client';
 import { internalQueryKeys } from '../../api/query-keys';
 import { ACTIVE_JOB_STATUSES } from './data';
+import { readGeneralSettings, useSettingsQuery } from '../settings/api/settings-query';
 
-export const seriesKey = (id: string) => [...internalQueryKeys.assets, 'editing-series', id] as const;
-export async function fetchSeries(client: QueryClient, id: string) {
-  const result = await internalClient.getAssetSeries(id);
+export const seriesKey = (id: string, groupConcurrentImages = false) => [...internalQueryKeys.assets, 'editing-series', id, groupConcurrentImages] as const;
+export async function fetchSeries(client: QueryClient, id: string, groupConcurrentImages = false) {
+  const result = await internalClient.getAssetSeries(id, groupConcurrentImages);
   for (const asset of result.assets) {
-    client.setQueryData(seriesKey(asset.id), result);
+    client.setQueryData(seriesKey(asset.id, groupConcurrentImages), result);
     client.setQueryData([...internalQueryKeys.assets, 'detail', asset.id], { asset });
   }
   for (const job of result.jobs) client.setQueryData([...internalQueryKeys.jobs, 'detail', job.id], {
@@ -18,6 +19,9 @@ export async function fetchSeries(client: QueryClient, id: string) {
 }
 export function useAssetSeries(id: string | null, online: boolean) {
   const client = useQueryClient();
-  return useQuery({ queryKey: seriesKey(id ?? ''), queryFn: () => fetchSeries(client, id!), enabled: online && !!id, staleTime: 30000,
+  const settings = useSettingsQuery();
+  const preferences = readGeneralSettings(settings.data?.settings);
+  const grouped = preferences.groupBySeries && preferences.groupConcurrentImages;
+  return useQuery({ queryKey: seriesKey(id ?? '', grouped), queryFn: () => fetchSeries(client, id!, grouped), enabled: online && !!id, staleTime: 30000,
     refetchInterval: query => query.state.data?.jobs.some(job => ACTIVE_JOB_STATUSES.has(job.status)) ? 1500 : false });
 }

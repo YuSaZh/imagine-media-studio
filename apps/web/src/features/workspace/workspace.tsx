@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { useIsFetching, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { fetchSeries, seriesKey, useAssetSeries } from './series-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { DEFAULT_IMAGE_INPUT_POLICY, type AssetDto, type JsonObject, type JobDto } from '@imagine/shared';
@@ -26,11 +26,10 @@ import { ModelCapabilitiesSchema } from '@imagine/shared';
 import { ReferencePicker } from './reference-picker';
 import { jobStudies, pendingStudies, type PendingStudy } from './pending-studies';
 import type { MediaEditingDrafts } from './media-editing-workspace';
-const MediaEditingWorkspace = lazy(() => import('./media-editing-workspace').then(module => ({ default: module.MediaEditingWorkspace })));
+import { MediaEditingWorkspace, Editor, preloadEditingModules } from './editing-modules';
 import { Choice, Confirm, Options, Panel, Tool } from './ui';
 
 const Settings = lazy(() => import('./settings').then(module => ({ default: module.Settings })));
-const Editor = lazy(() => import('./editor').then(module => ({ default: module.Editor })));
 const Jobs = lazy(() => import('./jobs').then(module => ({ default: module.Jobs })));
 const NAVIGATION = [
   { path: '/imagine', label: '创作', icon: Sparkles },
@@ -51,6 +50,7 @@ export function Workspace() {
   const online = useOnlineStatus();
   const refresh = useRefreshWorkspace();
   const queryClient = useQueryClient();
+  const fetching = useIsFetching({ queryKey: internalQueryKeys.all });
   const catalog = useWorkspaceCatalog();
   const settingsQuery = useSettingsQuery();
   const patchSettings = usePatchSettings();
@@ -114,7 +114,7 @@ export function Workspace() {
     }
   }, [mode, model?.key]);
   const excludePrivate = !projectId && ['imagine', 'library', 'projects', 'folders'].includes(section);
-  const mediaQuery = useMedia({ groupBySeries: preferences.groupBySeries && !selecting, seriesCover: preferences.seriesCover, excludePrivate, publicProjectIds: projects.filter(project => !project.isPrivate).map(project => project.id).sort(), kind: filter, saved: section === 'saved', projectId, search: searchQuery });
+  const mediaQuery = useMedia({ groupConcurrentImages: preferences.groupBySeries && preferences.groupConcurrentImages, groupBySeries: preferences.groupBySeries && !selecting, seriesCover: preferences.seriesCover, excludePrivate, publicProjectIds: projects.filter(project => !project.isPrivate).map(project => project.id).sort(), kind: filter, saved: section === 'saved', projectId, search: searchQuery });
   const items = useMemo(() => [...new Map((mediaQuery.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()], [mediaQuery.data]);
   const displayedJobIds = useMemo(() => new Set(items.flatMap(item => item.asset?.jobId ? [item.asset.jobId] : [])), [items]);
   const jobQuery = useWorkspaceJobs(undefined, excludePrivate);
@@ -152,7 +152,7 @@ export function Workspace() {
     // Update every compatible cached page immediately; never move or duplicate a series entry.
     for (const query of queryClient.getQueryCache().findAll({ queryKey: [...internalQueryKeys.assets, 'workspace'] })) {
       const filter = query.queryKey.at(-1) as MediaFilter;
-      if (!filter.groupBySeries || filter.seriesCover !== 'recent' || filter.projectId !== projectId) continue;
+      if (!filter.groupBySeries || !!filter.groupConcurrentImages !== (preferences.groupBySeries && preferences.groupConcurrentImages) || filter.seriesCover !== 'recent' || filter.projectId !== projectId) continue;
       if (filter.kind !== 'all' && filter.kind !== viewer.kind || filter.saved && !viewer.saved || filter.projectId && !viewer.collectionIds.includes(filter.projectId)) continue;
       if (filter.excludePrivate && viewer.collectionIds.some(id => !filter.publicProjectIds?.includes(id))) continue;
       if (filter.search && ![viewer.prompt, viewer.model, viewer.asset?.originalFilename ?? ''].some(value => value.toLowerCase().includes(filter.search.toLowerCase()))) continue;
@@ -243,7 +243,7 @@ export function Workspace() {
       const next = candidates[nextIndex];
       if (!next) return null;
       if (boundary && online) {
-        const family = await queryClient.fetchQuery({ queryKey: seriesKey(next.id), queryFn: () => fetchSeries(queryClient, next.id), staleTime: 30000 });
+        const family = await queryClient.fetchQuery({ queryKey: seriesKey(next.id, preferences.groupBySeries && preferences.groupConcurrentImages), queryFn: () => fetchSeries(queryClient, next.id, preferences.groupBySeries && preferences.groupConcurrentImages), staleTime: 30000 });
         if (viewerLocation.current !== locationAtStart) return null;
         const asset = delta > 0 ? family.assets[0] : family.assets.at(-1);
         if (asset) return mapMedia(asset, family.jobs.find(job => job.id === asset.jobId));
@@ -376,6 +376,11 @@ export function Workspace() {
   const isProjects = ['projects', 'folders'].includes(section);
   const isCreate = section === 'imagine' || isProjects && !!projectId;
   const hasGallery = section !== 'settings' && section !== 'jobs' && (!isProjects || !!projectId);
+  const preloadReady = hasGallery && mediaQuery.isSuccess && settingsQuery.isSuccess && catalog.models.isSuccess && catalog.providers.isSuccess && catalog.projects.isSuccess && jobQuery.isSuccess;
+  useEffect(() => {
+    if (!online || viewerId || editorId || !preloadReady || fetching || !mainRef.current) return;
+    return preloadEditingModules(mainRef.current);
+  }, [online, viewerId, editorId, preloadReady, fetching, location.key]);
   const title = currentProject?.name ?? (section === 'library' ? '全部作品' : section === 'saved' ? '收藏' : isProjects ? '项目' : '最近创作');
 
   return <div className={`imagine-app ${layout === 'desktop' && railExpanded ? 'has-expanded-rail' : ''}`}>

@@ -147,6 +147,7 @@ describe('account boundaries', () => {
     delete manifest.migrations['0008_accounts.sql'];
     delete manifest.migrations['0009_video_sources.sql'];
     delete manifest.migrations['0010_collection_privacy.sql'];
+    delete manifest.migrations['0011_generation_batches.sql'];
     for (const name of Object.keys(manifest.migrations)) await copyFile(new URL(name, source), join(legacy, name));
     await writeFile(join(legacy, 'manifest.json'), JSON.stringify(manifest));
     const db = createDatabase(join(root, 'app.db'), legacy);

@@ -88,7 +88,7 @@ test.beforeEach(async ({ request, page }) => {
   for (const project of (await collections.json()).items) expect((await request.delete(`/internal/collections/${project.id}`)).ok()).toBeTruthy();
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
-  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
 });
 
@@ -2855,4 +2855,316 @@ test('settings events synchronize open pages without crossing account boundaries
     await request.patch('/internal/settings', { data: { values: { 'network.allow_http_content': true } } });
     await peer.close(); await otherContext.close();
   }
+});
+
+test('editor preloads before first opening without flashing a loading panel', async ({ page, request }) => {
+  await upload(request);
+  const workspaceLoaded = page.waitForResponse(response => /\/assets\/media-editing-workspace-[^/]+\.js$/.test(response.url()));
+  const maskLoaded = page.waitForResponse(response => /\/assets\/editor-[^/]+\.js$/.test(response.url()));
+  await open(page);
+  await (await workspaceLoaded).finished();
+  await (await maskLoaded).finished();
+  await expect(page.locator('.study-open')).toHaveCount(1);
+  await page.evaluate(() => {
+    const panels: string[] = [];
+    Object.assign(window, { editorLoadingPanels: panels });
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node instanceof Element && /正在加载编辑工作区/.test(node.textContent ?? '')) panels.push(node.textContent ?? '');
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await page.locator('.study-open').click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  expect(await page.evaluate(() => (window as Window & { editorLoadingPanels: string[] }).editorLoadingPanels)).toEqual([]);
+});
+
+test('floating work details preserve image geometry and grow up to the mobile content limit', async ({ page, request }, testInfo) => {
+  const uploadAsset = await upload(request);
+  const prompts = ['海边清晨，保留自然的光影与细节。', '长提示词换行与滚动验证。\n'.repeat(150)];
+  const outputs: { id: string; contentUrl: string }[] = [];
+  for (const prompt of prompts) {
+    const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt } });
+    expect(response.ok()).toBe(true);
+    const { job } = await response.json();
+    await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+    outputs.push((await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0]);
+  }
+  const mobile = testInfo.project.use.viewport!.width <= 760;
+  const heights: number[] = [];
+  for (const [index, asset] of [uploadAsset, ...outputs].entries()) {
+    await open(page, `/imagine?asset=${asset.id}`);
+    const media = page.locator('.viewer-stage > img');
+    await expect(media).toHaveAttribute('src', asset.contentUrl);
+    await expect.poll(() => media.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    const before = await media.boundingBox();
+    await page.getByRole('button', { name: '作品信息', exact: true }).click();
+    const card = page.locator('.viewer-info');
+    await expect(card).toBeVisible();
+    expect(await media.boundingBox()).toEqual(before);
+    const box = (await card.boundingBox())!;
+    const scroller = card.locator('.viewer-info-body');
+    const content = await scroller.evaluate(element => ({ height: element.clientHeight, scroll: element.scrollHeight }));
+    const topPadding = await card.locator('header').evaluate(element => parseFloat(getComputedStyle(element).paddingTop));
+    const labels = await card.locator('dt').allTextContents();
+    expect(labels.indexOf('生成时间')).toBe(labels.indexOf('创建时间') - 1);
+    const duration = card.locator('dl > div').filter({ has: page.locator('dt').getByText('生成时间', { exact: true }) }).locator('dd');
+    if (index === 0) await expect(duration).toHaveText('—');
+    else await expect(duration).toHaveText(/^\d+(m\d+)?s$/);
+    heights.push(box.height);
+    expect(box.y).toBeGreaterThanOrEqual(70);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    if (mobile) {
+      expect(topPadding).toBe(16);
+      expect(box.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.7 + 1);
+      expect(box.y + box.height).toBeLessThan((await page.locator('.image-editing-controls').boundingBox())!.y);
+    }
+    if (!mobile) expect(box.width).toBe(420);
+    expect(await scroller.evaluate(element => getComputedStyle(element).scrollbarWidth)).toBe('none');
+    if (index < 2) {
+      expect(content.scroll).toBeLessThanOrEqual(content.height + 1);
+      await expect(card.getByRole('button', { name: '展开全部', exact: true })).toHaveCount(0);
+    } else {
+      const prompt = card.locator('.viewer-info-prompt');
+      await expect(prompt).toHaveClass(/is-collapsed/);
+      const lineHeight = await prompt.evaluate(element => parseFloat(getComputedStyle(element).lineHeight));
+      const collapsedBox = (await card.boundingBox())!;
+      const maximum = await card.evaluate(element => parseFloat(getComputedStyle(element).maxHeight));
+      expect(Math.abs(collapsedBox.height - maximum)).toBeLessThanOrEqual(1);
+      const lines = await prompt.evaluate(element => Number(getComputedStyle(element).webkitLineClamp));
+      expect(lines).toBeGreaterThanOrEqual(1);
+      expect(Math.abs((await prompt.boundingBox())!.height - lineHeight * lines)).toBeLessThanOrEqual(1);
+      const unused = await scroller.evaluate(element => element.clientHeight - element.querySelector('.viewer-info-content')!.getBoundingClientRect().height);
+      expect(unused).toBeGreaterThanOrEqual(-1);
+      expect(unused).toBeLessThan(lineHeight + 1);
+      if (!mobile) expect(lines).toBeGreaterThan(3);
+      await card.getByRole('button', { name: '展开全部', exact: true }).click();
+      await expect(prompt).not.toHaveClass(/is-collapsed/);
+      expect(await card.boundingBox()).toEqual(collapsedBox);
+      const heading = await card.locator('header').boundingBox();
+      expect(await scroller.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+      await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      expect(await card.locator('header').boundingBox()).toEqual(heading);
+      await expect(card.getByRole('button', { name: '关闭作品信息', exact: true })).toBeInViewport();
+      await expect(card.getByRole('button', { name: '删除作品', exact: true })).toBeInViewport();
+      await scroller.evaluate(element => { element.scrollTop = 0; });
+      await card.getByRole('button', { name: '收起', exact: true }).click();
+      await expect(prompt).toHaveClass(/is-collapsed/);
+      expect(await card.boundingBox()).toEqual(collapsedBox);
+    }
+    await page.screenshot({ path: testInfo.outputPath(`floating-details-${index}.png`), animations: 'disabled' });
+    if (mobile) await page.touchscreen.tap(page.viewportSize()!.width / 2, 70);
+    else await page.keyboard.press('Escape');
+    await expect(card).toHaveCount(0);
+    await expect(page.locator('.study-viewer')).toBeVisible();
+  }
+  expect(heights[1]!).toBeGreaterThan(heights[0]!);
+  expect(heights[2]!).toBeGreaterThan(heights[0]!);
+});
+
+test('concurrent image series preference groups main composer outputs and survives toggles and reload', async ({ page, request }, testInfo) => {
+  const toggle = async (label: string, key: string, checked: boolean) => {
+    const input = page.getByLabel(label, { exact: true });
+    await input.click();
+    await expect(input).toBeChecked({ checked });
+    await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings[key]).toBe(checked);
+    await expect(input).toBeEnabled();
+  };
+  await open(page);
+  await page.getByLabel('创作描述', { exact: true }).fill('Concurrent gallery preference fixture');
+  await page.getByRole('button', { name: '生成设置', exact: true }).click();
+  await chooseCount(page, '2');
+  await page.keyboard.press('Escape');
+  const submission = await capturePost(page, '/internal/jobs');
+  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  const response = await submission.response;
+  expect(response.ok()).toBe(true);
+  const { jobs } = await response.json();
+  expect(jobs).toHaveLength(2);
+  await expect(page.locator('.study-card:not(.pending-study)')).toHaveCount(2, { timeout: 25000 });
+  // Allow the existing 10-second job polling fallback to reconcile completion.
+  await expect(page.locator('.pending-study')).toHaveCount(0, { timeout: 15000 });
+  await open(page, '/settings');
+  await expect(page.getByLabel('并发生图作为系列显示', { exact: true })).toHaveCount(0);
+  await toggle('按照系列显示', 'gallery.group_by_series', true);
+  await expect(page.getByLabel('并发生图作为系列显示', { exact: true })).not.toBeChecked();
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  await open(page, '/settings');
+  await toggle('并发生图作为系列显示', 'gallery.group_concurrent_images', true);
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_concurrent_images']).toBe(true);
+  await page.reload();
+  await expect(page.getByLabel('并发生图作为系列显示', { exact: true })).toBeChecked();
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.getByLabel('系列共 2 件作品')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('concurrent-series-gallery.png'), animations: 'disabled' });
+  await page.locator('.study-open').click();
+  await expect(page.locator('.editing-result')).toHaveCount(2);
+  if (testInfo.project.use.viewport!.width <= 760) {
+    await page.getByRole('button', { name: '作品信息', exact: true }).click();
+    const info = (await page.locator('.viewer-info').boundingBox())!;
+    expect(info.y + info.height).toBeLessThan((await page.locator('.editing-results').boundingBox())!.y);
+    await page.keyboard.press('Escape');
+  }
+  await page.reload();
+  await expect(page.locator('.editing-result')).toHaveCount(2);
+  await open(page, '/settings');
+  await toggle('按照系列显示', 'gallery.group_by_series', false);
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  await page.locator('.study-open').first().click();
+  await expect(page.locator('.editing-results')).toHaveCount(0);
+  await open(page, '/settings');
+  await toggle('按照系列显示', 'gallery.group_by_series', true);
+  await expect(page.getByLabel('并发生图作为系列显示', { exact: true })).toBeChecked();
+  await toggle('并发生图作为系列显示', 'gallery.group_concurrent_images', false);
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+});
+
+test('recent series covers keep separate caches when concurrent grouping changes live', async ({ page, request }) => {
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Live concurrent cover fixture', count: 2 } });
+  expect(response.ok()).toBe(true);
+  const { jobs } = await response.json();
+  const ids: string[] = [];
+  for (const job of jobs) {
+    await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+    ids.push((await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0].id);
+  }
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'recent' } } });
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_concurrent_images': true } } });
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await page.locator('.study-open').click();
+  await expect(page.locator('.editing-result')).toHaveCount(2);
+  await page.locator('.editing-result button[aria-pressed="false"]').click();
+  const selected = new URL(page.url()).searchParams.get('asset')!;
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[selected]).toBeTruthy();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/internal/assets?**', async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('groupBySeries') === 'true' && url.searchParams.get('groupConcurrentImages') === 'false') await gate;
+    await route.continue();
+  });
+  try {
+    await request.patch('/internal/settings', { data: { values: { 'gallery.group_concurrent_images': false } } });
+    await expect(page.locator('.editing-results')).toHaveCount(0);
+    await page.getByRole('button', { name: '返回作品', exact: true }).click();
+    await expect(page.locator('.study-card')).toHaveCount(2);
+    expect((await page.locator('.study-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-study-id')))).sort()).toEqual(ids.sort());
+  } finally { release(); }
+});
+
+test('homepage thumbnails take priority over idle editor preloads', async ({ page, request }) => {
+  await upload(request);
+  let releaseData!: () => void, releaseImages!: () => void;
+  const dataGate = new Promise<void>(resolve => { releaseData = resolve; });
+  const imageGate = new Promise<void>(resolve => { releaseImages = resolve; });
+  const editors: string[] = [];
+  page.on('request', req => { if (/\/assets\/(media-editing-workspace|editor)-[^/]+\.js$/.test(req.url())) editors.push(req.url()); });
+  await page.route('**/internal/assets?**', async route => { await dataGate; await route.continue(); });
+  await page.route('**/internal/assets/*/thumbnail', async route => { await imageGate; await route.continue(); });
+  try {
+    await open(page);
+    await expect(page.getByText('正在加载作品…', { exact: true })).toBeVisible();
+    expect(editors).toEqual([]);
+    releaseData();
+    const image = page.locator('.study-open img').first();
+    await expect(image).toBeVisible();
+    await expect(image).toHaveAttribute('loading', 'eager');
+    await expect(image).toHaveAttribute('fetchpriority', 'high');
+    // Observe a whole speculative quiet period with the homepage image still blocked.
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 1100)));
+    expect(editors).toEqual([]);
+    expect(await image.evaluate(node => (node as HTMLImageElement).complete)).toBe(false);
+    releaseImages();
+    await expect.poll(() => image.evaluate(node => (node as HTMLImageElement).complete && (node as HTMLImageElement).naturalWidth > 0)).toBe(true);
+    await expect.poll(() => editors.length).toBe(2);
+    await page.locator('.study-open').click();
+    await expect(page.locator('.study-viewer')).toBeVisible();
+  } finally { releaseData(); releaseImages(); }
+});
+
+test('opening a work bypasses speculative editor idle waiting', async ({ page, request }) => {
+  await upload(request);
+  await page.addInitScript(() => {
+    window.requestIdleCallback = () => 1;
+    window.cancelIdleCallback = () => {};
+  });
+  const editors: string[] = [];
+  page.on('request', req => { if (/\/assets\/(media-editing-workspace|editor)-[^/]+\.js$/.test(req.url())) editors.push(req.url()); });
+  await open(page);
+  await expect(page.locator('.study-open')).toBeVisible();
+  expect(editors).toEqual([]);
+  await page.locator('.study-open').click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  expect(editors.some(url => url.includes('media-editing-workspace-'))).toBe(true);
+  expect(editors.some(url => /\/editor-/.test(url))).toBe(false);
+});
+
+test('historical event replay keeps homepage request counts bounded', async ({ page, request }) => {
+  await upload(request);
+  const calls = new Map<string, number>();
+  page.on('request', req => {
+    const path = new URL(req.url()).pathname;
+    if (['/internal/collections', '/internal/jobs'].includes(path)) calls.set(path, (calls.get(path) ?? 0) + 1);
+  });
+  const body = Array.from({ length: 200 }, (_, index) => `id: ${index + 1}\nevent: change\ndata: ${JSON.stringify({ version: 1, id: index + 1, type: 'asset.updated', entityId: 'replay-fixture', revision: index, occurredAt: '2026-09-12T00:00:00.000Z' })}\n\n`).join('');
+  await page.route('**/internal/events', route => route.fulfill({ contentType: 'text/event-stream', body }));
+  await open(page);
+  await expect(page.locator('.study-open img')).toBeVisible();
+  await expect.poll(() => page.locator('.study-open img').evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  for (const path of ['/internal/collections', '/internal/jobs']) {
+    expect(calls.get(path)).toBeGreaterThan(0);
+    expect(calls.get(path)).toBeLessThanOrEqual(3);
+  }
+});
+
+
+test('session validation has no separate access page and keeps workspace data gated', async ({ page }) => {
+  let requested!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { requested = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const protectedRequests: string[] = [];
+  page.on('request', req => { if (/\/internal\/(assets|jobs|collections|settings|models|providers)(\?|$)/.test(req.url())) protectedRequests.push(req.url()); });
+  await page.route('**/internal/auth/status', async route => { requested(); await gate; await route.continue(); });
+  try {
+    await page.goto('/imagine');
+    await started;
+    await expect(page.getByText('Checking access', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.auth-gate')).toHaveCount(0);
+    await expect(page.locator('.workspace')).toHaveCount(0);
+    expect(protectedRequests).toEqual([]);
+    release();
+    await expect(page.locator('.workspace-header')).toBeVisible();
+  } finally { release(); }
+});
+
+test('detail prompt folding follows available space and preserves full copy text', async ({ page, request, context }) => {
+  const prompt = Array.from({ length: 8 }, (_, index) => `提示词第 ${index + 1} 行：清晨的自然光与远山。`).join('\n');
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt } });
+  expect(response.ok()).toBe(true);
+  const { job } = await response.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const asset = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await open(page, `/imagine?asset=${asset.id}`);
+  await page.getByRole('button', { name: '作品信息', exact: true }).click();
+  const card = page.locator('.viewer-info'), text = card.locator('.viewer-info-prompt');
+  await expect(text).not.toHaveClass(/is-collapsed/);
+  await expect(card.getByRole('button', { name: '展开全部', exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await expect(text).toHaveClass(/is-collapsed/);
+  await card.getByRole('button', { name: '复制提示词', exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(prompt);
+  await card.getByRole('button', { name: '展开全部', exact: true }).click();
+  await expect(text).not.toHaveClass(/is-collapsed/);
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await expect(card.getByRole('button', { name: '收起', exact: true })).toHaveCount(0);
+  await expect(text).not.toHaveClass(/is-collapsed/);
 });

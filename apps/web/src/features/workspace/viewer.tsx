@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { ArrowLeft, Bookmark, Check, ChevronLeft, ChevronRight, Copy, Download, FolderPlus, Info, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Bookmark, ChevronLeft, ChevronRight, Download, Info } from 'lucide-react';
 import { VIEWER_EDGE_BACK_WIDTH, VIEWER_EDGE_BACK_THRESHOLD, createViewerGestureState, setViewerGestureTransform, transitionViewerGesture, type ViewerGestureLayout } from '../viewer/model/viewer-gestures';
-import { JOB_LABELS, mediaExtension, type MediaItem, type Project } from './data';
-import { Choice, Options, Tool } from './ui';
+import { mediaExtension, type MediaItem, type Project } from './data';
+import { Tool } from './ui';
 import type { ViewerMotion } from './viewer-motion';
-import { copyPrompt } from './copy-prompt';
+import { ViewerInfo } from './viewer-info';
 
 export interface ViewerProps {
   motion?: ViewerMotion;
@@ -38,6 +38,7 @@ export function Viewer(props: ViewerProps) {
   const { item } = props;
   const image = !props.stageContent && (item.kind === 'image' || props.previewSrc !== undefined);
   const [info, setInfo] = useState(false);
+  const infoId = useId();
   const [mediaError, setMediaError] = useState(false);
   const [gesture, setGesture] = useState(createViewerGestureState);
   const gestureRef = useRef(gesture);
@@ -86,11 +87,14 @@ export function Viewer(props: ViewerProps) {
     stage.addEventListener('wheel', wheel, { passive: false });
     return () => stage.removeEventListener('wheel', wheel);
   }, [item.id, image, stageNode]);
-  const copy = () => copyPrompt(item.prompt, props.onNotice);
   const writeDisabled = !props.online || props.busy || !!props.stageContent;
   return <Dialog.Root open onOpenChange={open => !open && props.onClose()}><Dialog.Portal>
     <Dialog.Overlay className="viewer-backdrop" />
     <Dialog.Content className={`study-viewer ${item.kind === 'image' ? 'image-editing-viewer' : 'video-editing-viewer'} ${info ? 'has-info' : ''}`} aria-describedby={undefined}
+      onPointerDownCapture={event => {
+        if (info && matchMedia('(max-width: 760px)').matches && !(event.target as Element).closest('.viewer-info, .viewer-info-projects, .viewer-info-trigger')) setInfo(false);
+      }}
+      onEscapeKeyDown={event => { if (info) { event.preventDefault(); setInfo(false); } }}
       onCloseAutoFocus={event => { event.preventDefault(); if (focusRef.current?.isConnected) focusRef.current.focus(); }}
       onKeyDown={event => {
         if ((event.target as HTMLElement).closest('input,textarea,select,video')) return;
@@ -99,7 +103,7 @@ export function Viewer(props: ViewerProps) {
       <header className="viewer-heading"><div className="viewer-heading-main"><Dialog.Close asChild><button type="button" className="tool" aria-label="返回作品"><ArrowLeft size={20} /></button></Dialog.Close><Dialog.Title>{item.title}</Dialog.Title><span className="viewer-index">{props.index + 1} / {props.total}</span></div><div className="viewer-heading-actions">
         <Tool label={item.saved ? '取消收藏' : '收藏作品'} disabled={writeDisabled} className={item.saved ? 'is-saved' : ''} onClick={props.onSave}><Bookmark size={18} fill={item.saved ? 'currentColor' : 'none'} /></Tool>
         <a className="tool" aria-label="下载原文件" title="下载原文件" aria-disabled={writeDisabled} href={!writeDisabled ? item.src : undefined} download={`${item.title.slice(0, 60)}.${mediaExtension(item)}`}><Download size={19} /></a>
-        <Tool label="作品信息" disabled={!!props.stageContent} aria-pressed={info} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
+        <Tool label="作品信息" className="viewer-info-trigger" disabled={!!props.stageContent} aria-pressed={info} aria-expanded={info} aria-controls={info ? infoId : undefined} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
       </div></header>
       <div className="viewer-workspace">
         <div className="viewer-stage" ref={mountStage} data-viewer-scale={gesture.scale} onClick={event => { if (!(event.target as HTMLElement).closest('button,a,video')) props.onStageClick?.(); }}
@@ -136,13 +140,7 @@ export function Viewer(props: ViewerProps) {
           <Tool label="下一张作品" className="viewer-arrow next" disabled={!(props.canNext ?? props.total > 1)} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
 
         </div>
-        {info && !props.stageContent && <aside className="viewer-info"><header><h3>作品信息</h3><Tool label="关闭作品信息" onClick={() => setInfo(false)}><X size={17} /></Tool></header>
-          <span className="muted-label">提示词</span><p>{item.prompt || '本地上传素材'}</p>{item.prompt && <button className="text-command" onClick={() => void copy()}><Copy size={15} />复制提示词</button>}
-          <dl><div><dt>服务</dt><dd>{props.providerName}</dd></div><div><dt>模型</dt><dd>{item.model}</dd></div><div><dt>尺寸</dt><dd>{item.width} × {item.height}</dd></div><div><dt>类型</dt><dd>{item.mimeType || (image ? '图片' : '视频')}</dd></div>{item.durationSeconds !== null && <div><dt>时长</dt><dd>{item.durationSeconds.toFixed(1)} 秒</dd></div>}<div><dt>创建时间</dt><dd>{new Date(item.createdAt).toLocaleString()}</dd></div>{item.job && <div><dt>状态</dt><dd>{JOB_LABELS[item.job.status]}</dd></div>}</dl>
-          {props.online && <Options label="加入项目" trigger={<><FolderPlus size={16} />加入项目</>}><div className="option-heading">项目</div>{props.projects.length ? props.projects.map(project => <Choice key={project.id} active={item.collectionIds.includes(project.id)} onClick={() => props.onProject(project.id, !item.collectionIds.includes(project.id))}><span>{project.name}</span>{item.collectionIds.includes(project.id) && <Check size={15} />}</Choice>) : <p className="menu-empty">还没有项目</p>}</Options>}
-          {item.job && <details className="request-details"><summary>请求参数</summary><pre>{JSON.stringify(item.job.request, null, 2)}</pre></details>}
-          <button className="text-command danger" disabled={writeDisabled} onClick={props.onDelete}><Trash2 size={15} />删除作品</button>
-        </aside>}
+        {info && !props.stageContent && <ViewerInfo key={item.id} {...props} id={infoId} writeDisabled={writeDisabled} onClose={() => setInfo(false)} />}
       </div>
       {props.editingControls}
 

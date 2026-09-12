@@ -413,16 +413,7 @@ export function AuthGate({
       </AuthFrame>
     );
   }
-  if (status === null) {
-    return (
-      <AuthFrame>
-        <div aria-live="polite" className="auth-gate-status">
-          <LoaderCircle aria-hidden="true" className="is-spinning" size={20} />
-          <strong>Checking access</strong>
-        </div>
-      </AuthFrame>
-    );
-  }
+  if (status === null) return null;
   return (
     <AuthPrompt
       username={username}

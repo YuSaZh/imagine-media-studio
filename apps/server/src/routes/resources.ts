@@ -60,6 +60,7 @@ const JobPageQuerySchema = CursorPageQuerySchema.extend({
 
 const AssetPageQuerySchema = CursorPageQuerySchema.extend({
   groupBySeries: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  groupConcurrentImages: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   seriesCover: z.enum(['recent', 'latest', 'original']).optional(),
   excludePrivate: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   type: AssetTypeSchema.optional(),
@@ -477,7 +478,7 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
     const context = query.collectionId ?? 'default';
     const history = z.record(z.string(), z.record(z.string(), z.number().finite().nonnegative())).safeParse(viewed);
     const page = options.assets.page({
-      ...(query.groupBySeries ? { groupBySeries: true, seriesCover: query.seriesCover ?? 'latest', lastViewed: history.success ? history.data[context] ?? {} : {} } : {}),
+      ...(query.groupBySeries ? { groupBySeries: true, groupConcurrentImages: query.groupConcurrentImages ?? false, seriesCover: query.seriesCover ?? 'latest', lastViewed: history.success ? history.data[context] ?? {} : {} } : {}),
       ...(query.excludePrivate ? { excludePrivate: true } : {}),
       limit: query.limit,
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
@@ -507,7 +508,9 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
   });
 
   app.get<{ Params: { id: string } }>('/internal/assets/:id/series', async (request, reply) => {
-    const series = options.assets.series(request.params.id);
+    const query = parseOrReply(z.object({ groupConcurrentImages: z.enum(['true', 'false']).optional() }).strict(), request.query, reply);
+    if (!query) return;
+    const series = options.assets.series(request.params.id, query.groupConcurrentImages === 'true');
     if (!series) return errorResponse(reply, 404, 'asset_not_found');
     return {
       assets: series.assets.map(asset => toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id))),

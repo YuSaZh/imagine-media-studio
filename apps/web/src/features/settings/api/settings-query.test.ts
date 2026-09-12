@@ -9,12 +9,14 @@ describe('readGeneralSettings', () => {
         'composer.default_mode': 'video',
         'gallery.autoplay_previews': true,
         'gallery.group_by_series': true,
+        'gallery.group_concurrent_images': true,
         'gallery.series_cover': 'recent',
         'gallery.initial_filter': 'image',
         'ui.reduce_motion': 'always',
       }),
     ).toEqual({
       groupBySeries: true,
+      groupConcurrentImages: true,
       seriesCover: 'recent',
       autoplayPreviews: true,
       clearPromptAfterSubmit: false,
@@ -32,6 +34,7 @@ describe('readGeneralSettings', () => {
       }),
     ).toEqual({
       groupBySeries: false,
+      groupConcurrentImages: false,
       seriesCover: 'latest',
       autoplayPreviews: false,
       clearPromptAfterSubmit: true,

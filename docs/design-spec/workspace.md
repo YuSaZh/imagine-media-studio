@@ -267,6 +267,10 @@ xAI video catalog discovery tries the official dedicated path and falls back to 
 
 ## Sign-in screen
 
+Initial session validation runs without a dedicated access-check page, brand or
+spinner. The workspace mounts only after authentication succeeds; failures and
+expired sessions retain visible retry/login handling.
+
 The login page uses a compact branded card with Username and Password fields
 and a Login button. It omits the protected-workspace caption and decorative
 password/button icons; submission progress and authentication errors remain visible.
@@ -316,6 +320,16 @@ Series are reconstructed server-side from the primary source/first-frame/first-r
 ### Series display preferences
 
 Preferences offer an account-persisted “按照系列显示” switch, off by default.
+Its nested “并发生图作为系列显示” switch also defaults off and retains its saved
+value when the parent switch is disabled. With both enabled, images from one
+concurrent submission and their edits share a gallery entry and editor strip.
+The server records image batches regardless of the display setting; toggling it
+regroups existing recorded batches. Independent submissions and video-only batches
+remain separate. Historical jobs without a recorded batch retain existing grouping.
+Batch links survive retries and restart, and all existing cover/filter/privacy and
+pagination rules apply. The asset-list and series-detail APIs accept the optional
+`groupConcurrentImages=true` query flag; gallery grouping still requires
+`groupBySeries=true`. Browser query keys include the effective grouping choice.
 When enabled, recent creations, All Works, favorites and project galleries merge
 each editing series into one entry with a bottom-left member-count badge and stacked-image icon, leaving the top-left video duration unobstructed. Hover captions reserve room above the badge. Grouping
 runs on the server before cursor pagination. The latest matching member anchors
@@ -413,3 +427,43 @@ At viewport widths up to 760px, a single touch starting in the screen's leftmost
 ### Persistent editor settings and live preferences
 
 Workspace and per-source editor memory retain their existing account/project/mode/model separation. UUID project and asset IDs are supported together; settings keys allow 128 characters without changing existing key names or stored JSON. Switching models and reloading restores each model's parameters independently. Settings changed in another page of the same account refresh through SSE; global settings reach all signed-in accounts, and private preference keys are not exposed to other accounts. Remote invalidations wait for local optimistic writes to settle. Recent-series history changes also invalidate the affected gallery query family.
+
+### Editor preload and floating details
+
+The homepage has priority over speculative editing downloads. Visible gallery
+images load eagerly at high priority; offscreen previews remain lazy at low
+priority. Historical SSE event bursts coalesce query-family refreshes in 100ms windows;
+in-flight requests are reused, with one trailing refresh for changes received
+during the fetch. This avoids cancelled-request storms while retaining live
+updates and local optimistic settings writes. Once the gallery, settings and catalog/job requests settle and visible
+images have loaded and decoded, editing modules preload one at a time on idle
+turns after a 500ms quiet period. Scrolling or typing resets that period; route
+changes, active data requests, hidden tabs and offline state defer pending work.
+Browsers without idle callbacks use the quiet period followed by a frame callback.
+Opening a work explicitly still loads its editor immediately. A warmed module renders synchronously on its
+first opening without a temporary loading dialog; early opens or slow/failed
+loads retain genuine loading/error handling. This does not fetch all originals
+or perform Provider calls.
+
+Desktop work details float below the information button in a 420px card with a
+border, rounded corners and subtle shadow. Opening it never resizes or shifts
+the image stage. Both layouts hide the details scrollbar and keep the title and
+close button outside the scrolling body. Mobile details use 16px top padding, grow
+naturally with prompt content and preserve line breaks. They scroll only after reaching their 70dvh
+height cap (further limited by the floating toolbar, Composer, keyboard and safe
+areas). A visible series strip also reserves space below the details card. Both layouts bound long content within the viewport. Escape closes the
+details first, then the viewer on the next press.
+
+When the complete details would exceed their available height, the card uses its
+maximum allowed height immediately. After reserving space for the fixed header,
+metadata and actions, the prompt shows as many complete lines as fit, with an
+ellipsis and an “展开全部” button for the remainder. The line count is measured
+from the current font, width and available height. Shorter/fitting prompts stay
+complete in a naturally sized card. Expansion and “收起” keep the same card size
+and position; only the body content and scrolling change. If metadata alone
+exceeds the available space, retain one prompt line and allow the body to scroll.
+Changing the viewport remeasures available space, and opening another work resets
+manual expansion. “生成时间” appears immediately before “创建时间” and uses the
+persisted job creation-to-completion duration; uploads or missing timestamps show
+“—”. Tapping outside mobile details dismisses them, while the information toggle
+and the details project picker preserve their normal interactions.

@@ -59,10 +59,13 @@ export class AssetSeriesGraph {
 }
 
 /** Load the account graph once. Hidden/deleted nodes still carry ancestry. */
-export function loadAssetSeriesGraph(database: AppDatabase, ownerId: string): AssetSeriesGraph {
+export function loadAssetSeriesGraph(database: AppDatabase, ownerId: string, groupConcurrentImages = false): AssetSeriesGraph {
   const nodes = database.all<SeriesNode>(sql`
     WITH owned_assets AS (SELECT id, role, job_id, parent_asset_id, metadata_json FROM assets WHERE owner_id = ${ownerId}),
-    owned_jobs AS (SELECT id FROM jobs WHERE owner_id = ${ownerId}),
+    owned_jobs AS (
+      SELECT j.id, CASE WHEN ${groupConcurrentImages ? 1 : 0} = 1 AND j.operation LIKE 'image.%' THEN b.batch_id END AS batch_id
+      FROM jobs j LEFT JOIN job_generation_batches b ON b.job_id = j.id WHERE j.owner_id = ${ownerId}
+    ),
     ranked_inputs AS (
       SELECT i.job_id, i.asset_id, row_number() OVER (
         PARTITION BY i.job_id ORDER BY CASE i.role WHEN 'source' THEN 0 WHEN 'first_frame' THEN 1 ELSE 2 END, i.sort_order, i.asset_id
@@ -75,8 +78,10 @@ export function loadAssetSeriesGraph(database: AppDatabase, ownerId: string): As
         ELSE NULL END AS parent
     FROM owned_assets a LEFT JOIN owned_jobs j ON j.id = a.job_id LEFT JOIN owned_assets p ON p.id = a.parent_asset_id
     UNION ALL
-    SELECT 'j:' || j.id AS node, 'a:' || i.asset_id AS parent
+    SELECT 'j:' || j.id AS node, coalesce('a:' || i.asset_id, 'b:' || j.batch_id) AS parent
     FROM owned_jobs j LEFT JOIN ranked_inputs i ON i.job_id = j.id AND i.rank = 1
+    UNION ALL
+    SELECT DISTINCT 'b:' || batch_id AS node, NULL AS parent FROM owned_jobs WHERE batch_id IS NOT NULL
   `);
   return new AssetSeriesGraph(nodes);
 }

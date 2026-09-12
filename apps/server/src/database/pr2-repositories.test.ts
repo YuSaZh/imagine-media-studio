@@ -51,6 +51,60 @@ function assetInput(path: string) {
 }
 
 describe('PR 2 database repositories', () => {
+  it('groups concurrent image submissions only when requested and preserves lineage, filters and batch retries', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm, () => 'admin');
+    const jobs = new JobRepository(database.orm);
+    const provider = new ProviderRepository(database.orm).create({ name: 'Batch fixture', type: 'mock' });
+    const request = createMockGenerationRequest({ providerId: provider.id });
+    const batch = jobs.createBatch(request, 3);
+    const outputs = batch.slice(0, 2).map((job, index) => assets.create({ ...assetInput(`batch-${index}.png`), role: 'output', jobId: job.id, favorite: index === 0 }));
+    const separate = jobs.createBatch(request, 2);
+    const other = assets.create({ ...assetInput('separate.png'), role: 'output', jobId: separate[0]!.id });
+    const edited = jobs.create(createMockGenerationRequest({ inputs: [{ assetId: outputs[0]!.id, role: 'source' }] }));
+    const child = assets.create({ ...assetInput('derived.png'), role: 'output', jobId: edited.id });
+    [other, ...outputs, child].forEach((asset, index) => database.sqlite.prepare('UPDATE assets SET created_at=? WHERE id=?').run(1000 + index, asset.id));
+    expect(assets.page({ groupBySeries: true }).items).toHaveLength(3);
+    expect(assets.series(outputs[1]!.id)?.assets).toHaveLength(1);
+    const grouped = { groupBySeries: true, groupConcurrentImages: true };
+    const first = assets.page({ ...grouped, limit: 1 });
+    expect(first.items[0]).toMatchObject({ id: child.id, series: { count: 3 } });
+    expect(assets.page({ ...grouped, limit: 1, cursor: first.nextCursor! }).items.map(asset => asset.id)).toEqual([other.id]);
+    expect(assets.page({ ...grouped, seriesCover: 'original' }).items[0]?.id).toBe(outputs[0]!.id);
+    expect(assets.page({ ...grouped, seriesCover: 'recent', lastViewed: { [outputs[1]!.id]: 100 } }).items[0]?.id).toBe(outputs[1]!.id);
+    expect(assets.page({ ...grouped, favorite: true }).items[0]).toMatchObject({ id: outputs[0]!.id, series: { count: 1 } });
+    const collections = new CollectionRepository(database.orm, () => 'admin');
+    const project = collections.create('Private batch member', true);
+    collections.addAssets(project.id, [outputs[0]!.id]);
+    expect(assets.page({ ...grouped, excludePrivate: true }).items[0]?.series?.count).toBe(2);
+    expect(assets.page({ ...grouped, collectionId: project.id }).items.map(asset => asset.id)).toEqual([outputs[0]!.id]);
+    expect(new AssetRepository(database.orm, () => 'other-account').page(grouped).items).toEqual([]);
+    expect(new AssetRepository(database.orm, () => 'other-account').series(outputs[0]!.id, true)).toBeNull();
+    jobs.compareAndSetStatus(batch[2]!.id, 0, ['queued'], 'failed', 'failed');
+    const retry = jobs.retry(batch[2]!.id)!;
+    const retried = assets.create({ ...assetInput('retried.png'), role: 'output', jobId: retry.id });
+    expect(assets.series(retried.id, true)?.assets.map(asset => asset.id).sort()).toEqual([...outputs, child, retried].map(asset => asset.id).sort());
+    expect(assets.series(retried.id, true)?.jobIds).toContain(batch[2]!.id);
+    assets.softDelete(outputs[0]!.id);
+    expect(assets.series(child.id, true)?.assets).toHaveLength(3);
+    expect(assets.series(child.id, false)?.assets.map(asset => asset.id)).toEqual([child.id]);
+    expect(batch.every(job => !JSON.stringify(job.request).includes('batch'))).toBe(true);
+    expect(database.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it('does not batch single images or videos and rolls back failed batch creation', async () => {
+    const database = await createTestDatabase();
+    const jobs = new JobRepository(database.orm);
+    const provider = new ProviderRepository(database.orm).create({ name: 'Batch fixture', type: 'mock' });
+    jobs.createBatch(createMockGenerationRequest({ providerId: provider.id }), 1);
+    jobs.createBatch(createMockGenerationRequest({ providerId: provider.id, operation: 'video.generate' }), 2);
+    expect(database.sqlite.prepare('SELECT count(*) AS count FROM job_generation_batches').get()).toEqual({ count: 0 });
+    database.sqlite.exec("CREATE TRIGGER fail_batch BEFORE INSERT ON job_generation_batches BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+    expect(() => jobs.createBatch(createMockGenerationRequest({ providerId: provider.id }), 2)).toThrow('job_generation_batches');
+    expect(jobs.page({}).items).toHaveLength(3);
+    expect(database.sqlite.prepare('SELECT count(*) AS count FROM job_generation_batches').get()).toEqual({ count: 0 });
+  });
+
   it('gives every branch into a malformed ancestry cycle the same canonical series', async () => {
     const database = await createTestDatabase();
     const assets = new AssetRepository(database.orm, () => 'admin');

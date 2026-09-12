@@ -11,6 +11,7 @@
     "0007_pr8_media_repair_queue.sql": "296fd6f959c8029aabe8920018d7a10def1eda7cfed233d6ebd293be096e0f64",
     "0008_accounts.sql": "d2dcf9672c2529dd6a6c955bcb48f0eb6a117d6b677c26eb887a742c68eae2f4",
     "0009_video_sources.sql": "bd90c9b47afef073f8b8f9b9ce9aadd194c716c1b5cebf8290651107e2a96403",
-    "0010_collection_privacy.sql": "2c2f84efe18f6f790b5082308660f3f9d4e2a18b96de5fb53e002a16ff86529f"
+    "0010_collection_privacy.sql": "2c2f84efe18f6f790b5082308660f3f9d4e2a18b96de5fb53e002a16ff86529f",
+    "0011_generation_batches.sql": "b64567e3a74174caea3df1d516ffc79a7b5b7b9fd9473a759c65b221035fb4d9"
   }
 }

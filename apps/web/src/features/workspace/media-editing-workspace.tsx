@@ -2,7 +2,7 @@ import { copyPrompt } from './copy-prompt';
 import { useViewerMotion, type ViewerMotion } from './viewer-motion';
 import { useAssetSeries } from './series-query';
 import { GenerationStatus } from './generation-status';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_IMAGE_INPUT_POLICY, MASK_OVERLAY_COLOR, ModelCapabilitiesSchema, type AssetDto, type MaskDocument, type MediaOperation } from '@imagine/shared';
 import { Brush, Copy, Play, Sparkles, LoaderCircle } from 'lucide-react';
@@ -21,7 +21,7 @@ import { useRefreshWorkspace } from './queries';
 import type { WorkspaceLayout } from './workspace-layout';
 import { captureVideoFrame, videoFrameLabel } from './video-frame';
 import type { VideoMode } from './data';
-const Editor = lazy(() => import('./editor').then(module => ({ default: module.Editor })));
+import { Editor } from './editing-modules';
 
 export interface MediaEditingDraft { prompt: string; mode: MediaKind; references: AssetDto[]; mask: AssetDto | null; document?: MaskDocument; jobs: string[]; videoMode?: 'edit' | 'extend'; videoTime?: number; frame?: { asset: AssetDto; timeSeconds: number } }
 export type MediaEditingDrafts = Map<string, MediaEditingDraft>;

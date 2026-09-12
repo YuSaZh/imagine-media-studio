@@ -193,6 +193,11 @@ export const jobs = sqliteTable(
   ],
 );
 
+export const jobGenerationBatches = sqliteTable('job_generation_batches', {
+  jobId: text('job_id').primaryKey().references(() => jobs.id, { onDelete: 'cascade' }),
+  batchId: text('batch_id').notNull(),
+}, table => [index('job_generation_batches_batch_idx').on(table.batchId)]);
+
 export const assets = sqliteTable(
   'assets',
   {

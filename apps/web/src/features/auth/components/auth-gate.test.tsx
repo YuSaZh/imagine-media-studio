@@ -272,6 +272,10 @@ afterEach(() => {
 });
 
 describe('AuthGate', () => {
+  it('renders no access-check page or protected content before validation resolves', () => {
+    expect(renderToStaticMarkup(<AuthGate><div>Protected workspace</div></AuthGate>)).toBe('');
+  });
+
 
   it('fails closed for an unknown device when explicitly offline', async () => {
     vi.stubGlobal('navigator', { onLine: false });

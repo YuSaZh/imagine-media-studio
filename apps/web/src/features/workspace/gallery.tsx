@@ -40,7 +40,7 @@ function durationLabel(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 }
 
-function Card({ item, props }: { item: MediaItem; props: GalleryProps }) {
+function Card({ item, props, visible }: { item: MediaItem; props: GalleryProps; visible: boolean }) {
   const [broken, setBroken] = useState(false);
   const gesture = useRef(createSelectionGestureState());
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -80,7 +80,7 @@ function Card({ item, props }: { item: MediaItem; props: GalleryProps }) {
         if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); return; }
         if (event.shiftKey) props.onSelect(item); else props.onPick(item);
       }}>
-      {broken ? <span className="media-unavailable"><ImageIcon size={25} /><span>预览不可用</span></span> : <img src={item.thumbnail} alt={item.title} loading="lazy" draggable={false} onError={() => setBroken(true)} />}
+      {broken ? <span className="media-unavailable"><ImageIcon size={25} /><span>预览不可用</span></span> : <img src={item.thumbnail} alt={item.title} loading={visible ? 'eager' : 'lazy'} fetchPriority={visible ? 'high' : 'low'} decoding="async" draggable={false} onError={() => setBroken(true)} />}
       {item.kind === 'video' && <span className="video-tag"><Play size={11} fill="currentColor" />{durationLabel(item.durationSeconds ?? 0)}</span>}
       {item.asset?.series && item.asset.series.count > 1 && !props.selecting && <span className="series-count" aria-label={`系列共 ${item.asset.series.count} 件作品`}><Images size={14} strokeWidth={1.75} aria-hidden="true" /><span>{item.asset.series.count}</span></span>}
       <span className="study-caption"><strong>{item.title}</strong><span>{item.model}{elapsed !== null ? ` · ${formatGenerationTime(elapsed)}` : ''}</span></span>
@@ -141,8 +141,10 @@ export function Gallery(props: GalleryProps) {
   return <>
     <div className="study-grid virtual-studies" ref={gridRef} style={{ height: virtualizer.getTotalSize() }} aria-label="作品网格">
       {virtualizer.getVirtualItems().map(virtual => {
+        const top = virtualizer.scrollOffset ?? 0;
+        const visible = virtual.end > top && virtual.start < top + (props.scrollRef.current?.clientHeight ?? 0);
         const entry = entries[virtual.index];
-        return entry ? <div key={entry.id} className="virtual-study" style={{ width, height: virtual.size, left: (virtual.lane ?? virtual.index % columns) * (width + gap), transform: `translateY(${virtual.start - layout.margin}px)` }}>{entry.type === 'asset' ? <Card item={entry.item} props={props} /> : <PendingCard task={entry.task} props={props} />}</div> : null;
+        return entry ? <div key={entry.id} className="virtual-study" style={{ width, height: virtual.size, left: (virtual.lane ?? virtual.index % columns) * (width + gap), transform: `translateY(${virtual.start - layout.margin}px)` }}>{entry.type === 'asset' ? <Card item={entry.item} props={props} visible={visible} /> : <PendingCard task={entry.task} props={props} />}</div> : null;
       })}
     </div>
     <div className="gallery-pagination" ref={sentinel}>

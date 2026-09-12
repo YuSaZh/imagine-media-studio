@@ -571,7 +571,14 @@ export class JobRepository {
 
   public createBatch(request: GenerationRequest, count: number, adapterRef?: CustomAdapterRef | null): JobRecord[] {
     if (!Number.isInteger(count) || count < 1 || count > MAX_GENERATION_COUNT) throw new RangeError('Invalid generation count');
-    return this.database.transaction(() => Array.from({ length: count }, () => this.createAtCurrent({ ...request, count: 1 }, adapterRef)));
+    return this.database.transaction(() => {
+      const batch = Array.from({ length: count }, () => this.createAtCurrent({ ...request, count: 1 }, adapterRef));
+      if (count > 1 && request.operation.startsWith('image.')) {
+        const batchId = randomUUID();
+        for (const job of batch) this.database.run(sql`INSERT INTO job_generation_batches(job_id, batch_id) VALUES (${job.id}, ${batchId})`);
+      }
+      return batch;
+    });
   }
 
   public createWithInputs(
@@ -1310,6 +1317,7 @@ export class JobRepository {
       for (const input of inputs) {
         transaction.insert(jobInputs).values({ ...input, jobId: retryId }).run();
       }
+      transaction.run(sql`INSERT INTO job_generation_batches(job_id, batch_id) SELECT ${retryId}, batch_id FROM job_generation_batches WHERE job_id = ${source.id}`);
       const outputCount = Math.max(1, request.count ?? 1);
       for (let slot = 0; slot < outputCount; slot += 1) {
         transaction
