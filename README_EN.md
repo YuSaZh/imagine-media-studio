@@ -49,6 +49,8 @@ Screenshots come from this project's automated workspace checks and show uploade
 
 ### Image Generation and Editing
 
+- Galleries show placeholder cards first and reveal each thumbnail independently, prioritizing recent visible works. Offscreen thumbnails start loading only when scrolled into view.
+
 - Text-to-image generation, reference-image editing, and masked editing, with file upload, clipboard paste, and drag and drop.
 - A built-in mask canvas with brush, eraser, undo, and redo.
 - Model-aware aspect ratio, resolution, and quality controls; compatible models support custom pixel dimensions.
@@ -186,6 +188,8 @@ Open **Settings > Connections (设置 > 连接)** to add an API, then add or sel
 | `@sha256:<digest>` | Exact image content for reproducible deployment and rollback records |
 
 For test builds, use `ghcr.io/yusazh/imagine-media-studio:test`. Pushing to `main` triggers CI; a maintainer must also run **Test Image**, which updates `test` only after verification succeeds.
+
+For ordinary changes, run tests for the affected modules and behavior. Before a stable release, the final prepared source must pass complete local CI, including quality checks, the full eight-viewport browser suite, and isolated Docker smoke. Then push the release commit to GitHub `main` and the matching `vX.Y.Z` tag without waiting separately for remote branch CI. The tag workflow automatically runs quality checks and all eight browser viewports, builds one AMD64/ARM64 candidate, and verifies that exact digest in a container. It then promotes the same image to the version tags and `latest` and creates the GitHub Release. See the [release procedure](./RELEASE.md#stable-releases).
 
 Before upgrading, back up according to the [release and backup guide](./RELEASE.md). Preserve `.env` and the existing data mount, then run these commands from the deployment directory:
 

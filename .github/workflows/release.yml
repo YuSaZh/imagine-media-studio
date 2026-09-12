@@ -16,24 +16,22 @@ env:
   IMAGE: ghcr.io/yusazh/imagine-media-studio
 
 jobs:
-  publish:
-    name: Publish multi-arch GHCR candidate
+  validate:
+    name: Validate release source and notes
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 5
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      artifact-metadata: write
     outputs:
-      digest: ${{ steps.push.outputs.digest }}
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out release source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+
+      - name: Require release commit on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -44,6 +42,44 @@ jobs:
       - name: Validate stable tag and package version
         id: release
         run: node .github/scripts/release-guard.mjs
+
+      - name: Validate changelog section with an unpublished fixture digest
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        run: node .github/scripts/release-notes.mjs
+
+      - name: Clean validation notes
+        if: always()
+        run: node .github/scripts/release-notes.mjs --cleanup
+
+  checks:
+    name: Quality and eight-viewport browser checks
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      # The smoke job below tests the actual release image instead of rebuilding it.
+      skip-docker-smoke: true
+
+  publish:
+    name: Publish multi-arch GHCR candidate
+    needs: [validate, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      version: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
@@ -65,7 +101,7 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: type=raw,value=candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          labels: org.opencontainers.image.version=${{ steps.release.outputs.version }}
+          labels: org.opencontainers.image.version=${{ needs.validate.outputs.version }}
 
       - name: Build and push linux/amd64 and linux/arm64 images
         id: push
@@ -79,7 +115,7 @@ jobs:
           build-args: |
             OCI_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             OCI_REVISION=${{ github.sha }}
-            OCI_VERSION=${{ steps.release.outputs.version }}
+            OCI_VERSION=${{ needs.validate.outputs.version }}
           sbom: true
           provenance: mode=max
 

@@ -32,6 +32,25 @@ const changelogText = await readFile(new URL('../../CHANGELOG.md', import.meta.u
 const document = parseDocument(workflowText, { uniqueKeys: true });
 assert.equal(document.errors.length, 0, document.errors.map((error) => error.message).join('; '));
 const workflow = document.toJS();
+const ciText = await readFile(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
+const ciDocument = parseDocument(ciText, { uniqueKeys: true });
+assert.equal(ciDocument.errors.length, 0, ciDocument.errors.map(error => error.message).join('; '));
+const ci = ciDocument.toJS();
+
+assert.deepEqual(ci.on.push.branches, ['main']);
+assert.ok(Object.hasOwn(ci.on, 'pull_request'));
+assert.equal(ci.on.push.tags, undefined, 'Release must own tag runs to avoid a duplicate CI image build.');
+assert.equal(ci.on.workflow_call?.inputs?.['skip-docker-smoke']?.type, 'boolean');
+assert.equal(ci.on.workflow_call.inputs['skip-docker-smoke'].default, false);
+assert.equal(ci.jobs['docker-smoke'].if, 'inputs.skip-docker-smoke != true');
+assert.ok(ci.jobs['docker-smoke'].steps.some(candidate => candidate.run?.includes('docker compose build')));
+assert.equal(ci.jobs.quality.if, undefined);
+assert.equal(ci.jobs['workspace-e2e'].if, undefined);
+for (const command of ['pnpm lint', 'pnpm typecheck', 'pnpm test', 'pnpm build']) {
+  assert.ok(ci.jobs.quality.steps.some(candidate => candidate.run === command));
+}
+assert.equal(ci.jobs['workspace-e2e'].strategy.matrix.project.length, 8);
+assert.ok(ci.jobs['workspace-e2e'].steps.some(candidate => candidate.run?.includes('--update-snapshots=none')));
 
 assert.equal(workflow.name, 'Release');
 assert.deepEqual(workflow.permissions, {});
@@ -39,6 +58,8 @@ assert.deepEqual(workflow.on.push.tags, ['v[0-9]+.[0-9]+.[0-9]+']);
 assert.equal(workflow.on.workflow_dispatch, undefined);
 
 const publish = workflow.jobs.publish;
+const validate = workflow.jobs.validate;
+const checks = workflow.jobs.checks;
 const smoke = workflow.jobs.smoke;
 const promote = workflow.jobs.promote;
 const githubRelease = workflow.jobs['github-release'];
@@ -46,6 +67,21 @@ assert.ok(publish);
 assert.ok(smoke);
 assert.ok(promote);
 assert.ok(githubRelease);
+assert.deepEqual(validate.permissions, { contents: 'read' });
+assert.deepEqual(checks.permissions, { contents: 'read' });
+assert.equal(checks.needs, 'validate');
+assert.equal(checks.uses, './.github/workflows/ci.yml', 'Checks must use the tagged source, not a moving branch.');
+assert.deepEqual(checks.with, { 'skip-docker-smoke': true });
+assert.equal(checks.secrets, undefined);
+assert.deepEqual(publish.needs, ['validate', 'checks']);
+assert.equal(publish.if, undefined, 'Failed or cancelled checks must prevent publishing.');
+assert.notEqual(ci.concurrency.group, workflow.concurrency.group);
+assert.equal(validate.outputs.version, '${{ steps.release.outputs.version }}');
+assert.equal(publish.outputs.version, '${{ needs.validate.outputs.version }}');
+assert.ok(validate.steps.some(candidate => candidate.run === 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main'));
+assert.ok(validate.steps.some(candidate => candidate.run === 'node .github/scripts/release-notes.mjs'));
+assert.equal(validate.steps.at(-1).run, 'node .github/scripts/release-notes.mjs --cleanup');
+assert.equal(validate.steps.at(-1).if, 'always()');
 assert.deepEqual(publish.permissions, {
   attestations: 'write',
   'artifact-metadata': 'write',
@@ -111,14 +147,14 @@ for (const reference of actionRefs) {
   );
   const matches = workflowText.match(pattern) ?? [];
   const expectedUses = {
-    'actions/checkout': 3,
+    'actions/checkout': 4,
     'actions/setup-node': 3,
     'docker/login-action': 3,
     'docker/setup-buildx-action': 2,
   }[reference.name] ?? 1;
   assert.equal(matches.length, expectedUses, `Unexpected pin count for ${reference.name}.`);
   const ref = actionRef(reference);
-  assert.ok(action(publish, ref), `Missing pinned ${ref} action in publish.`);
+  assert.ok(action(reference.name === 'actions/setup-node' ? validate : publish, ref), `Missing pinned ${ref} action.`);
 }
 for (const reference of actionRefs.filter(({ name }) =>
   ['actions/checkout', 'actions/setup-node', 'docker/login-action'].includes(name))) {
@@ -130,7 +166,7 @@ assert.ok(action(githubRelease, actionRef(actionRefs[0])));
 assert.ok(action(githubRelease, actionRef(actionRefs[1])));
 
 for (const job of Object.values(workflow.jobs)) {
-  for (const workflowStep of job.steps) {
+  for (const workflowStep of job.steps ?? []) {
     if (workflowStep.uses !== undefined) {
       assert.match(workflowStep.uses, /^[^@]+@[a-f0-9]{40}$/u, `Action is not pinned: ${workflowStep.uses}`);
     }
@@ -144,7 +180,7 @@ const metadataRef = actionRef(actionRefs[5]);
 const buildRef = actionRef(actionRefs[6]);
 const attestRef = actionRef(actionRefs[7]);
 for (const [jobName, job] of [
-  ['publish', publish],
+  ['validate', validate],
   ['smoke', smoke],
   ['github-release', githubRelease],
 ]) {
@@ -158,11 +194,10 @@ for (const [jobName, job] of [
 }
 assert.doesNotMatch(workflowText, /pnpm\/action-setup@/u);
 
-const guard = step(publish, (candidate) => candidate.id === 'release', 'release guard');
+const guard = step(validate, (candidate) => candidate.id === 'release', 'release guard');
 assert.equal(guard.run, 'node .github/scripts/release-guard.mjs');
-const loginIndex = publish.steps.findIndex((candidate) => candidate.uses === loginRef);
-const guardIndex = publish.steps.indexOf(guard);
-assert.ok(guardIndex >= 0 && guardIndex < loginIndex, 'The tag/version gate must run before registry login.');
+assert.ok(!validate.steps.some(candidate => candidate.uses === loginRef), 'Validation must not access the registry.');
+assert.equal(action(validate, checkoutRef).with['fetch-depth'], 0);
 
 const metadata = action(publish, metadataRef);
 assert.equal(metadata.with.images, '${{ env.IMAGE }}');
@@ -171,7 +206,7 @@ assert.equal(
   metadata.with.tags,
   'type=raw,value=candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
 );
-assert.equal(metadata.with.labels, 'org.opencontainers.image.version=${{ steps.release.outputs.version }}');
+assert.equal(metadata.with.labels, 'org.opencontainers.image.version=${{ needs.validate.outputs.version }}');
 assert.doesNotMatch(JSON.stringify(publish), /type=semver|value=latest|prefix=sha-/u);
 
 const build = action(publish, buildRef);
@@ -183,8 +218,11 @@ assert.equal(build.with.labels, '${{ steps.meta.outputs.labels }}');
 assert.equal(build.with.sbom, true);
 assert.equal(build.with.provenance, 'mode=max');
 assert.ok(build.with['build-args'].includes("OCI_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}"));
-assert.ok(build.with['build-args'].includes('OCI_VERSION=${{ steps.release.outputs.version }}'));
+assert.ok(build.with['build-args'].includes('OCI_VERSION=${{ needs.validate.outputs.version }}'));
 assert.ok(build.with['build-args'].includes('OCI_REVISION=${{ github.sha }}'));
+assert.equal(Object.values(workflow.jobs).flatMap(job => job.steps ?? [])
+  .filter(candidate => candidate.uses === buildRef).length, 1, 'Build the multi-platform image only once.');
+assert.doesNotMatch(workflowText, /docker (?:compose|buildx) build|gh run list/u);
 
 const attest = action(publish, attestRef);
 assert.equal(attest.with['subject-name'], '${{ env.IMAGE }}');
@@ -219,7 +257,7 @@ assert.ok(promotion.run.includes("metadata?.['containerimage.descriptor']?.diges
 assert.doesNotMatch(JSON.stringify(smoke), /IMAGE:latest|type=semver/u);
 assert.deepEqual(
   Object.entries(workflow.jobs)
-    .filter(([, job]) => job.steps.some((candidate) => candidate.run?.includes('--tag "$IMAGE:latest"')))
+    .filter(([, job]) => job.steps?.some((candidate) => candidate.run?.includes('--tag "$IMAGE:latest"')))
     .map(([jobName]) => jobName),
   ['promote'],
   'The mutable latest image tag must exist only in the post-smoke promotion job.',
@@ -253,14 +291,14 @@ const packageJson = JSON.parse(await readFile(new URL('../../package.json', impo
 const serverPackageJson = JSON.parse(await readFile(new URL('../../apps/server/package.json', import.meta.url), 'utf8'));
 const webPackageJson = JSON.parse(await readFile(new URL('../../apps/web/package.json', import.meta.url), 'utf8'));
 const releaseVersions = await readReleaseVersions();
-assert.equal(packageJson.version, '0.1.7');
+assert.equal(packageJson.version, '0.1.8');
 assert.equal(serverPackageJson.version, packageJson.version);
 assert.equal(webPackageJson.version, packageJson.version);
 assert.deepEqual(releaseVersions, {
-  appInfo: '0.1.7',
-  root: '0.1.7',
-  server: '0.1.7',
-  web: '0.1.7',
+  appInfo: '0.1.8',
+  root: '0.1.8',
+  server: '0.1.8',
+  web: '0.1.8',
 });
 assert.equal(validateReleaseVersions(releaseVersions), packageJson.version);
 for (const field of ['appInfo', 'server', 'web']) {
@@ -278,16 +316,16 @@ assert.throws(() => validateReleaseTag('v0.1.1', packageJson.version), /exactly 
 assert.throws(() => validateReleaseTag('v01.2.3', '01.2.3'), /stable/);
 assert.throws(() => validateReleaseTag('v1.2.3', '1.2.3', 'refs/heads/main'), /pushed tag ref/);
 assert.deepEqual(validateReleaseTag('v1.2.3', '1.2.3'), { tag: 'v1.2.3', version: '1.2.3' });
-assert.deepEqual(validateReleaseTag('v0.1.7', packageJson.version), { tag: 'v0.1.7', version: '0.1.7' });
+assert.deepEqual(validateReleaseTag('v0.1.8', packageJson.version), { tag: 'v0.1.8', version: '0.1.8' });
 
 const releaseDigest = `sha256:${'a'.repeat(64)}`;
 const releaseNotes = formatReleaseNotes(changelogText, packageJson.version, releaseDigest);
-assert.match(releaseNotes, /是否允许 HTTP 内容/u);
-assert.match(releaseNotes, /### 编辑与作品库/u);
+assert.match(releaseNotes, /并发生图作为系列显示/u);
+assert.match(releaseNotes, /### 详情与移动端交互/u);
 assert.match(releaseNotes, /### 贡献者/u);
-assert.match(releaseNotes, /compare\/v0\.1\.6\.\.\.v0\.1\.7/u);
+assert.match(releaseNotes, /compare\/v0\.1\.7\.\.\.v0\.1\.8/u);
 assert.match(releaseNotes, new RegExp(releaseDigest, 'u'));
-assert.match(releaseNotes, /blob\/v0\.1\.7\/RELEASE\.md/u);
+assert.match(releaseNotes, /blob\/v0\.1\.8\/RELEASE\.md/u);
 assert.doesNotMatch(releaseNotes, /\[Unreleased\]/u);
 assert.throws(() => formatReleaseNotes(changelogText, '0.1.1', releaseDigest), /exactly one section/u);
 assert.throws(() => formatReleaseNotes(changelogText, packageJson.version, 'sha256:bad'), /immutable/u);

@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+    inputs:
+      skip-docker-smoke:
+        description: Release replaces the source image build with smoke on its published candidate digest.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -72,6 +78,7 @@ jobs:
 
   docker-smoke:
     name: Single-container PR 3, PR 5, PR 6 and PR 8 API, video, adapter, archive and persistence smoke
+    if: inputs.skip-docker-smoke != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

@@ -6,15 +6,26 @@ workflow plus scripts before changing CI or publishing behavior.
 - CI validates lint, types, unit/contracts, production build, eight browser
   viewports, and isolated Docker smoke. Keep checks available to pull requests
   without production credentials. Do not weaken acceptance to work around a failure.
+- Keep local and GitHub commands, tool versions, test coverage, and runtime setup
+  aligned through shared scripts. Follow the [CI parity rules](../CONTRIBUTING.md#local-and-github-ci-parity);
+  ordinary changes need affected-area checks, while a release requires complete
+  local CI on the final prepared source before pushing the release commit and
+  tag. Filtered regressions must not be reported as complete CI acceptance.
 - Test Image is manually dispatched on `main` and requires successful CI for the
   same commit. Build a unique multi-architecture candidate, smoke its immutable
   digest, then attach `test` and `test-sha-*` to that verified digest.
 - Test publication must not update stable tags. Keep test attestation storage in
   GitHub (`push-to-registry: false`) so it does not add a second tagged GHCR entry.
   BuildKit provenance/SBOM and the actual image remain enabled.
-- Stable release validates a semantic version tag and package versions, publishes
-  a candidate, verifies its digest, then promotes stable tags and GitHub Release.
-  Never rebuild during promotion or publish success before the required gates.
+- A stable tag starts release validation and calls CI for quality and all eight
+  browser viewports on that same commit. Require the commit to be on `main` and
+  validate package versions and CHANGELOG before building. After complete local
+  CI passes, push the release source and tag without a separate wait for remote
+  branch CI.
+- The release CI call skips its source Docker build because release smoke tests
+  the single multi-architecture candidate by digest. Regular branch/PR CI keeps
+  Docker smoke enabled. Promote that verified digest and create GitHub Release
+  only after all required gates pass; never rebuild during promotion.
 - Preserve minimum per-job permissions, secret handling, serialized publication,
   and cleanup on failure. Pin new or updated publishing actions to reviewed full
   commit SHAs. Keep dependency/action upgrades separately reviewable.

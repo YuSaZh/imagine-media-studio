@@ -59,8 +59,15 @@ Directory guides must not weaken the runtime and secret boundaries below.
 - Follow existing module boundaries, shared schemas, helpers, and test patterns.
   Avoid unrelated refactors, generated-file churn, or dependencies for small tasks.
 - Use the [verification matrix](./CONTRIBUTING.md#verification) for local checks.
-  Run relevant available gates before pushing; GitHub Actions remains the remote
-  acceptance gate. Do not equate fixtures with live Provider acceptance.
+  For ordinary changes, run tests for the affected modules and behavior; full CI
+  is not required after every edit or ordinary push. Before a release, the final
+  prepared source must pass complete local CI equivalent to GitHub CI, including
+  the full eight-viewport browser suite and isolated Docker smoke. Only then push
+  the release commit to GitHub and the matching tag to start automatic release.
+  Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity) and report
+  focused runs, skips, and environment differences accurately. These testing
+  rules apply to this repository. GitHub Actions remains the remote acceptance
+  gate; fixtures do not prove live Provider acceptance.
 - Keep Chinese and English READMEs consistent when changing public behavior,
   deployment commands, configuration, or documentation links.
 - Update current specifications with behavior changes. Keep dated test results

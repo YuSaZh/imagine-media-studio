@@ -1,9 +1,9 @@
-# Imagine Media Studio v0.1.7 Release Guide
+# Imagine Media Studio v0.1.8 Release Guide
 
-Imagine Media Studio `v0.1.7` adds editing series, gallery grouping and cover preferences, smoother desktop/mobile media navigation, and one persistent administrator setting for HTTP Provider calls and media downloads. HTTP content is enabled by default for new configurations; explicit legacy false flags initialize it as disabled. No database migration is added.
+Imagine Media Studio `v0.1.8` adds progressive gallery thumbnails, optional series grouping for concurrent image generation, and floating media details with adaptive prompt folding. It also improves startup scheduling, account settings synchronization, and mobile editing navigation. Migration `0011_generation_batches.sql` records new image-generation batches; historical jobs without batch records are not grouped retroactively.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.7)
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.8)
 for deployment and verification. Replace `<digest-from-release>` below with its
 64-character SHA-256 digest.
 
@@ -43,7 +43,7 @@ remains an administrator trust boundary.
 
 ## Install the released image
 
-For `v0.1.7`, take the exact digest from the GitHub Release or release workflow
+For `v0.1.8`, take the exact digest from the GitHub Release or release workflow
 summary:
 
 ```bash
@@ -120,6 +120,8 @@ external `APP_SECRET` is absent.
 
 ## Upgrade and migration
 
+Version `v0.1.8` applies migration `0011_generation_batches.sql` on startup. Existing accounts, projects, media, and settings are retained. Concurrent-image grouping is disabled by default and requires the parent series preference to be enabled. Upgrading does not infer batches for historical jobs. Rollback to an older release requires a verified compatible database or a pre-upgrade archive; migrations are forward-only.
+
 1. Record the running image digest, environment-file backup, and active data
    root. Never rely on `latest` as the rollback record.
 2. Create and verify a full-data archive with the currently running image.
@@ -151,11 +153,11 @@ docker run --rm \
   --entrypoint node "$IMAGE" \
   dist/maintenance/data-archive-cli.js restore \
   --bundle /recovery/live/backups/<id>.bundle \
-  --target /recovery/restored-v0.1.7
+  --target /recovery/restored-v0.1.8
 ```
 
 Inspect the restored tree, recreate the application container with
-`imagine-state/restored-v0.1.7` bound to `/data`, and keep the same
+`imagine-state/restored-v0.1.8` bound to `/data`, and keep the same
 `APP_SECRET`. A container-only rollback may reuse the live database only when
 the older application is known to support its schema. Otherwise restore the
 verified pre-upgrade archive to a new root and switch the bind mount. The CLI
@@ -163,9 +165,9 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
-Use the digest, not `0.1.7`, `0.1`, or `latest`, as the verification subject:
+Use the digest, not `0.1.8`, `0.1`, or `latest`, as the verification subject:
 
-Run these commands from a verified `v0.1.7` source checkout. GitHub CLI must be
+Run these commands from a verified `v0.1.8` source checkout. GitHub CLI must be
 authenticated with `gh auth login` or a `GH_TOKEN` that can read this repository;
 keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.
@@ -281,14 +283,32 @@ from earlier runs are not automatically removed.
 
 Prepare the description according to [.github/RELEASE_NOTES.md](./.github/RELEASE_NOTES.md).
 
-1. Require the release-preparation commit and normal CI on `main` to pass.
-2. Confirm the root, server, web, and app-info versions match the intended
-   stable tag; ensure `CHANGELOG.md` has one non-empty matching version section
-   and the working tree is clean.
-3. Create and push only the matching stable tag. Do not manually create the
-   GitHub Release or pre-push stable GHCR tags.
-4. Require the tag workflow to validate the version, publish and attest a
-   unique candidate, smoke the exact digest, and only then promote the stable,
-   minor, `latest`, and full commit-SHA tags.
+1. Prepare the release commit locally. Confirm the root, server, web, and app-info
+   versions match the intended stable tag; ensure `CHANGELOG.md` has one non-empty
+   matching version section and the working tree is clean.
+2. Run complete local CI on that final source and require it to pass before
+   pushing the release commit or tag: quality checks, all unit/integration and
+   release tests, production build, the full browser suite in all eight viewports,
+   and the same isolated Docker smoke as GitHub CI. Follow the
+   [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
+   `pnpm run ci` alone is only the quality gate; focused regressions do not meet
+   this pre-release requirement.
+3. Push the verified release commit to GitHub `main`, then create and push the
+   matching stable tag. There is no separate wait for remote branch CI before
+   tagging: the tag starts its own required verification. The workflow checks
+   that the commit is on `main`, validates all four versions and the CHANGELOG section,
+   then calls the same commit's CI workflow for lint, types, unit/release tests,
+   production build, and all eight browser viewports. A failed or cancelled
+   check prevents publication. Do not manually create the GitHub Release or
+   pre-push stable GHCR tags.
+4. After those checks pass, the workflow builds and attests one AMD64/ARM64
+   candidate, runs isolated health, restart, persistence, and full Docker smoke
+   on its exact digest, then automatically promotes the stable, minor, `latest`,
+   and full commit-SHA image tags and creates the GitHub Release. The release
+   CI call skips the separate source-image Docker build; its container gate is
+   supplied by candidate smoke. Promotion reuses the verified image without
+   rebuilding. Normal `main`/PR CI retains its own Docker smoke.
 5. Verify the Release, GHCR tags, digest attestation, SBOM, provenance, and all
    required platform manifests before announcing availability.
+
+The workflow reuse follows GitHub's [reusable workflow mechanism](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows); the local workflow reference selects the same commit as the release tag. Pushing a branch alone does not publish a stable image, and publication does not deploy or restart an existing installation.
