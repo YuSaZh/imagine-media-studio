@@ -156,11 +156,13 @@ export function Workspace() {
       if (filter.kind !== 'all' && filter.kind !== viewer.kind || filter.saved && !viewer.saved || filter.projectId && !viewer.collectionIds.includes(filter.projectId)) continue;
       if (filter.excludePrivate && viewer.collectionIds.some(id => !filter.publicProjectIds?.includes(id))) continue;
       if (filter.search && ![viewer.prompt, viewer.model, viewer.asset?.originalFilename ?? ''].some(value => value.toLowerCase().includes(filter.search.toLowerCase()))) continue;
+      // An older gallery response must not overwrite the newly selected cover.
+      void queryClient.cancelQueries({ queryKey: query.queryKey, exact: true });
       queryClient.setQueryData<InfiniteData<MediaPage>>(query.queryKey, current => current ? { ...current, pages: current.pages.map(page => ({ ...page, items: page.items.map(item => memberIds.has(item.id) && viewer.asset ? { ...viewer, asset: { ...viewer.asset, ...(item.asset?.series ? { series: item.asset.series } : {}) } } : item) })) } : current);
     }
     patchSettings.mutate({ 'gallery.series_last_viewed': { ...history, [context]: bounded } }, {
-      onSuccess: () => { void queryClient.invalidateQueries({ queryKey: [...internalQueryKeys.assets, 'workspace'] }); },
-      onError: () => { setNotice({ text: '最近查看记录保存失败', error: true }); void queryClient.invalidateQueries({ queryKey: [...internalQueryKeys.assets, 'workspace'] }); },
+      onSuccess: () => { if (queryClient.isMutating({ mutationKey: internalQueryKeys.settings }) === 0) void queryClient.invalidateQueries({ queryKey: [...internalQueryKeys.assets, 'workspace'] }); },
+      onError: () => { setNotice({ text: '最近查看记录保存失败', error: true }); if (queryClient.isMutating({ mutationKey: internalQueryKeys.settings }) === 0) void queryClient.invalidateQueries({ queryKey: [...internalQueryKeys.assets, 'workspace'] }); },
     });
   }, [viewerId, viewer, viewerSeries.data, online, projectId, settingsQuery.data, patchSettings, queryClient]);
 

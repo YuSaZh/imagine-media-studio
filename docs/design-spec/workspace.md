@@ -357,7 +357,10 @@ retains its accessible name and keyboard focus but has no tooltip on entry.
 
 Each selected member immediately updates the account/project-scoped recent-view
 record and compatible cached gallery covers; every switch saves independently.
-Only after saving succeeds does the gallery refetch the authoritative cover.
+Cancel older compatible gallery queries before updating the cover so delayed
+responses cannot replace the new selection. Refetch the authoritative cover only
+after settings writes have settled, keeping earlier saves from refreshing over a
+newer pending selection.
 Filtering, private project visibility and per-entry counts remain respected.
 Series responses seed member caches so moving among already loaded members keeps
 the editing layout populated. When moving beyond loaded gallery entries, fetch the

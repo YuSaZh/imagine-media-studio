@@ -2260,9 +2260,11 @@ test('editor keeps a reloadable series across repeated image and video generatio
   const original = await upload(request);
   let hold = true;
   const heldJobs = new Set<string>();
+  const submittedResponses: APIResponse[] = [];
   await page.route('**/internal/jobs', async route => {
     if (route.request().method() !== 'POST') return route.continue();
     const response = await route.fetch(), data = await response.json();
+    submittedResponses.push(response);
     for (const job of data.jobs ?? [data.job]) heldJobs.add(job.id);
     await route.fulfill({ response, json: data });
   });
@@ -2281,11 +2283,13 @@ test('editor keeps a reloadable series across repeated image and video generatio
   const prompt = controls.getByLabel('创作描述', { exact: true });
   let previous = original.id;
   for (let round = 1; round <= 2; round++) {
-    hold = true; heldJobs.clear();
+    hold = true; heldJobs.clear(); submittedResponses.length = 0;
     await prompt.fill(`Series round ${round}`);
     const response = page.waitForResponse(response => response.url().endsWith('/internal/jobs') && response.request().method() === 'POST');
     await controls.getByRole('button', { name: '开始生成', exact: true }).click();
-    const created = await (await response).json();
+    await response;
+    expect(submittedResponses).toHaveLength(1);
+    const created = await submittedResponses[0]!.json();
     expect(created.job.request.inputs[0].assetId).toBe(previous);
     await expect(viewer.getByLabel('编辑生成状态')).toContainText(/生成中|排队/);
     await expect(viewer.getByLabel('编辑生成状态').getByRole('button')).toHaveCount(0);
@@ -2498,26 +2502,43 @@ test('recent series cover changes before the view save finishes and without a re
   const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
   await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'recent', 'gallery.series_last_viewed': { default: { [original.id]: Date.now() } } } } });
   await open(page, '/library');
+  const firstSave = page.waitForResponse(response => response.url().endsWith('/internal/settings') && response.request().method() === 'PATCH' && !!response.request().postDataJSON()?.values?.['gallery.series_last_viewed']?.default?.[original.id]);
   await page.locator(`[data-study-id="${original.id}"] .study-open`).click();
+  await (await firstSave).finished();
   await expect(page.locator('.editing-result')).toHaveCount(2);
   await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[original.id]).toBeTruthy();
   let release!: () => void, started!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const received = new Promise<void>(resolve => { started = resolve; });
+  let releaseGallery!: () => void, galleryStarted!: () => void;
+  const galleryGate = new Promise<void>(resolve => { releaseGallery = resolve; });
+  const staleGallery = new Promise<void>(resolve => { galleryStarted = resolve; });
+  await page.route('**/internal/assets?**', async route => {
+    const response = await route.fetch();
+    await response.body();
+    galleryStarted();
+    await galleryGate;
+    await route.fulfill({ response });
+  });
   await page.route('**/internal/settings', async route => {
     const body = route.request().method() === 'PATCH' ? route.request().postDataJSON() : null;
     if (body?.values?.['gallery.series_last_viewed']?.default?.[result.id]) { started(); await gate; }
     await route.continue();
   });
   try {
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await staleGallery;
     await page.getByRole('button', { name: '编辑此生成结果', exact: true }).click();
     await received;
+    const oldResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/internal/assets');
+    releaseGallery();
+    await (await oldResponse).finished();
     await page.getByRole('button', { name: '返回作品', exact: true }).click();
     await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
     release();
     await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[result.id]).toBeTruthy();
     await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
-  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+  } finally { release(); releaseGallery(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 
 test('mobile editor uses small series thumbnails floating tools and focus-only model guidance', async ({ page, request }, testInfo) => {
