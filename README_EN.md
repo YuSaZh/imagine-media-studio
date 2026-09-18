@@ -49,7 +49,8 @@ Screenshots come from this project's automated workspace checks and show uploade
 
 ### Image Generation and Editing
 
-- Galleries show placeholder cards first and reveal each thumbnail independently, prioritizing recent visible works. Offscreen thumbnails start loading only when scrolled into view.
+- Galleries show placeholder cards first and reveal each thumbnail independently, prioritizing recent visible works. Thumbnails within 1000px above or below the viewport preload at low priority; more distant images wait. The next page of work metadata also loads 1000px ahead.
+- Thumbnails and video posters use private browser caching separated by login credentials for repeat scrolling. The PWA reads cached previews first, keeping up to 256 entries for seven days. Expired HTTP responses use ETag validation to avoid downloading unchanged images; logout and deletion clear the relevant caches.
 
 - Text-to-image generation, reference-image editing, and masked editing, with file upload, clipboard paste, and drag and drop.
 - A built-in mask canvas with brush, eraser, undo, and redo.

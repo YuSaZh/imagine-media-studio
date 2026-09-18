@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearDerivedMediaRuntimeCache,
+  clearDerivedMediaForAssets,
   createDerivedMediaRuntimeCaching,
   DERIVED_MEDIA_AUTH_FAILURE_PLUGIN,
   DERIVED_MEDIA_CACHE_NAME,
@@ -17,6 +18,7 @@ function candidate(
   path: string,
   options: Readonly<{
     headers?: HeadersInit;
+    cache?: RequestCache;
     method?: string;
     sameOrigin?: boolean;
   }> = {},
@@ -25,6 +27,7 @@ function candidate(
     request: {
       headers: new Headers(options.headers),
       method: options.method ?? 'GET',
+      ...(options.cache ? { cache: options.cache } : {}),
     },
     sameOrigin: options.sameOrigin ?? true,
     url: new URL(path, 'https://studio.example'),
@@ -54,6 +57,10 @@ describe('PWA derived media cache policy', () => {
     expect(isDerivedMediaRuntimeRequest(candidate('/internal/assets/video-1/poster', { sameOrigin: false }))).toBe(false);
     expect(isDerivedMediaRuntimeRequest(candidate('/internal/assets/video-1/content'))).toBe(false);
     expect(isDerivedMediaRuntimeRequest(candidate('/internal/providers/provider-1/models'))).toBe(false);
+    for (const cache of ['reload', 'no-store', 'no-cache'] as const) {
+      expect(isDerivedMediaRuntimeRequest(candidate('/internal/assets/image-1/thumbnail', { cache }))).toBe(false);
+    }
+    expect(isDerivedMediaRuntimeRequest(candidate('/internal/assets/image-1/thumbnail', { headers: { 'If-None-Match': '"etag"' } }))).toBe(false);
   });
 
   it('keeps the Workbox callbacks self-contained when generateSW serializes them', () => {
@@ -68,21 +75,81 @@ describe('PWA derived media cache policy', () => {
     expect(authFailureSource).not.toContain('DERIVED_MEDIA_');
   });
 
-  it('builds a no-timeout NetworkFirst entry with a no-store network fetch', () => {
+  it('reuses bounded cached previews and allows the HTTP cache on misses', () => {
     const runtimeCaching = createDerivedMediaRuntimeCaching();
 
     expect(runtimeCaching).toMatchObject({
-      handler: 'NetworkFirst',
+      handler: 'CacheFirst',
       method: 'GET',
       options: {
         cacheName: DERIVED_MEDIA_CACHE_NAME,
         cacheableResponse: { statuses: [200] },
-        fetchOptions: { cache: 'no-store' },
+        fetchOptions: { cache: 'default' },
+        expiration: { maxEntries: 256, maxAgeSeconds: 604800 },
         plugins: [DERIVED_MEDIA_AUTH_FAILURE_PLUGIN],
       },
       urlPattern: isDerivedMediaRuntimeRequest,
     });
     expect(runtimeCaching.options).not.toHaveProperty('networkTimeoutSeconds');
+  });
+
+  it('evicts only the deleted asset previews and leaves app caches untouched', async () => {
+    const keys = ['gone/thumbnail', 'gone/poster', 'kept/thumbnail'].map(path => new Request(`https://studio.example/internal/assets/${path}`));
+    const deleteEntry = vi.fn().mockResolvedValue(true);
+    const open = vi.fn().mockResolvedValue({ keys: async () => keys, delete: deleteEntry });
+    vi.stubGlobal('caches', { keys: async () => [DERIVED_MEDIA_CACHE_NAME, 'workbox-precache'], open });
+    await clearDerivedMediaForAssets(['gone']);
+    expect(open).toHaveBeenCalledExactlyOnceWith(DERIVED_MEDIA_CACHE_NAME);
+    expect(deleteEntry.mock.calls.map(([request]) => request.url)).toEqual(keys.slice(0, 2).map(request => request.url));
+  });
+
+  it('does not repopulate a new session cache with a response started before logout', async () => {
+    let entries = new Map<string, Response>();
+    let exists = false;
+    vi.stubGlobal('caches', {
+      open: async () => { exists = true; return {
+        match: async (key: string) => entries.get(key)?.clone(),
+        put: async (key: string, value: Response) => { entries.set(key, value); },
+      }; },
+      has: async () => exists,
+      delete: async () => { entries = new Map(); exists = false; return true; },
+    });
+    const oldState = {}, concurrentState = {}, newState = {};
+    const request = new Request('https://studio.example/internal/assets/a/thumbnail');
+    const response = new Response('image');
+    await Promise.all([
+      DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.requestWillFetch({ request, state: oldState }),
+      DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.requestWillFetch({ request, state: concurrentState }),
+    ]);
+    await expect(DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.cacheWillUpdate({ response, state: oldState })).resolves.toBe(response);
+    await expect(DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.cacheWillUpdate({ response, state: concurrentState })).resolves.toBe(response);
+    await clearDerivedMediaRuntimeCache();
+    await DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.requestWillFetch({ request, state: newState });
+    await expect(DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.cacheWillUpdate({ response, state: oldState })).resolves.toBeNull();
+    await expect(DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.cacheWillUpdate({ response, state: newState })).resolves.toBe(response);
+  });
+
+  it('removes a late cache write even when deletion follows write approval', async () => {
+    const entries = new Map<string, Response>();
+    const key = (request: Request | string) => typeof request === 'string' ? request : request.url;
+    const cache = {
+      match: async (request: Request | string) => entries.get(key(request))?.clone(),
+      put: async (request: Request | string, response: Response) => { entries.set(key(request), response); },
+      delete: async (request: Request | string) => entries.delete(key(request)),
+      keys: async () => [...entries.keys()].map(url => new Request(url)),
+    };
+    vi.stubGlobal('caches', { open: async () => cache, keys: async () => [DERIVED_MEDIA_CACHE_NAME], has: async () => true });
+    const request = new Request('https://studio.example/internal/assets/gone/thumbnail');
+    const retained = new Request('https://studio.example/internal/assets/kept/thumbnail');
+    const state = {}, response = new Response('image');
+    await cache.put(retained, response.clone());
+    await DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.requestWillFetch({ request, state });
+    await expect(DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.cacheWillUpdate({ response, state })).resolves.toBe(response);
+    await clearDerivedMediaForAssets(['gone']);
+    await cache.put(request, response);
+    await DERIVED_MEDIA_AUTH_FAILURE_PLUGIN.cacheDidUpdate({ cacheName: DERIVED_MEDIA_CACHE_NAME, request, state });
+    expect(await cache.match(request)).toBeUndefined();
+    expect(await cache.match(retained)).toBeDefined();
   });
 
   it('returns a direct media 401 even when both cache deletions fail', async () => {

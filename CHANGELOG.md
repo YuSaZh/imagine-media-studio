@@ -4,6 +4,9 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ## [Unreleased]
 
+- 瀑布流缩略图在视口上下 1000px 内低优先级预加载，保留可见图片的高优先级；下一批作品信息也提前 1000px 获取。
+- 优化缩略图和视频封面的浏览器/PWA 缓存，来回滚动可直接复用；补齐 ETag、Last-Modified 与 304 校验，并保留账号隔离、会话切换和删除后的缓存清理。
+
 ## [0.1.8] - 2026-09-12
 
 发布日期：2026-09-12 · 上一稳定版：v0.1.7

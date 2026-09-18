@@ -33,6 +33,17 @@ function installBrowserTargets(): void {
 }
 
 describe('subscribeToInternalEvents', () => {
+  it('batches preview cache cleanup during a burst of deletion events', async () => {
+    installBrowserTargets();
+    const keys = vi.fn().mockResolvedValue([]);
+    vi.stubGlobal('caches', { keys });
+    const client = new QueryClient(), source = new FakeEventSource();
+    const unsubscribe = subscribeToInternalEvents(client, () => source);
+    for (const id of [1, 2, 3]) source.emit({ version: 1, id, type: 'asset.deleted', entityId: `asset-${id}`, revision: 1, occurredAt: '2026-09-12T00:00:00.000Z' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(keys).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
   it('refreshes settings and only refreshes gallery data for recent-cover history', async () => {
     installBrowserTargets();
     const client = new QueryClient(), source = new FakeEventSource();

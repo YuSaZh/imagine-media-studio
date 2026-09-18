@@ -20,6 +20,47 @@ describe('account boundaries', () => {
     expect(result.statusCode).toBe(200);
     return { cookie: String(result.headers['set-cookie']).split(';')[0]!, origin: 'http://localhost:80' };
   }
+  it('caches private previews while enforcing ownership before conditional responses', async () => {
+    await setup();
+    const admin = await login('admin');
+    const path = 'media/thumbnails/cache-fixture.webp';
+    await mkdir(join(root, 'media/thumbnails'), { recursive: true });
+    await writeFile(join(root, path), 'private-thumbnail');
+    const asset = server.assets.create({ type: 'image', role: 'upload', filePath: 'media/original.png', thumbnailPath: path, mimeType: 'image/png', fileSize: 10, sha256: 'a'.repeat(64) });
+    const url = `/internal/assets/${asset.id}/thumbnail`;
+    const first = await server.app.inject({ url, headers: admin });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers['cache-control']).toBe('private, max-age=3600, must-revalidate');
+    expect(first.headers.vary).toBe('Cookie, Authorization');
+    const etag = String(first.headers.etag);
+    for (const method of ['GET', 'HEAD'] as const) {
+      const unchanged = await server.app.inject({ method, url, headers: { ...admin, 'if-none-match': etag } });
+      expect(unchanged.statusCode).toBe(304);
+      expect(unchanged.body).toBe('');
+      expect(unchanged.headers['content-length']).toBeUndefined();
+      expect(unchanged.headers['cache-control']).toContain('max-age=3600');
+    }
+    const unauthorized = await server.app.inject({ url, headers: { 'if-none-match': etag } });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unauthorized.headers['cache-control']).toBe('no-store');
+    expect(unauthorized.headers['clear-site-data']).toBe('"cache"');
+    await server.app.inject({ method: 'POST', url: '/internal/accounts', headers: admin, payload: { username: 'cache-user', password: 'cache-password' } });
+    const other = await login('cache-user', 'cache-password');
+    const forbidden = await server.app.inject({ url, headers: { ...other, 'if-none-match': etag } });
+    expect(forbidden.statusCode).toBe(404);
+    expect(forbidden.headers['cache-control']).toBe('no-store');
+    await writeFile(join(root, path), 'repaired-private-thumbnail');
+    const repaired = await server.app.inject({ url, headers: { ...admin, 'if-none-match': etag } });
+    expect(repaired.statusCode).toBe(200);
+    expect(repaired.headers.etag).not.toBe(etag);
+    expect(repaired.body).toBe('repaired-private-thumbnail');
+    const deleted = await server.app.inject({ method: 'DELETE', url: `/internal/assets/${asset.id}`, headers: admin });
+    expect(deleted.statusCode).toBe(204);
+    expect(deleted.headers['clear-site-data']).toBe('"cache"');
+    const missing = await server.app.inject({ url, headers: { ...admin, 'if-none-match': String(repaired.headers.etag) } });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers['cache-control']).toBe('no-store');
+  });
   it('persists UUID editor settings across server restart and isolates accounts', async () => {
     await setup();
     const admin = await login('admin');

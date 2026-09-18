@@ -5,12 +5,14 @@ export interface MediaResponsePlan {
   end: number | null;
   headers: Record<string, string>;
   start: number | null;
-  statusCode: 200 | 206 | 416;
+  statusCode: 200 | 206 | 304 | 416;
 }
 
 export interface PlanMediaResponseOptions {
   etag: string;
   ifRange?: string;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
   lastModified?: Date;
   method: 'GET' | 'HEAD';
   range?: string;
@@ -43,6 +45,14 @@ function fullResponse(options: PlanMediaResponseOptions): MediaResponsePlan {
 
 /** Plans a single byte range. Multipart ranges are deliberately ignored. */
 export function planMediaResponse(options: PlanMediaResponseOptions): MediaResponsePlan {
+  const unchanged = options.ifNoneMatch !== undefined
+    ? options.ifNoneMatch.split(',').some(value => value.trim() === '*' || value.trim().replace(/^W\//, '') === options.etag.replace(/^W\//, ''))
+    : options.ifModifiedSince !== undefined && options.lastModified !== undefined &&
+      Number.isFinite(Date.parse(options.ifModifiedSince)) &&
+      Math.floor(options.lastModified.getTime() / 1000) * 1000 <= Date.parse(options.ifModifiedSince);
+  if (unchanged) {
+    return { body: false, start: null, end: null, statusCode: 304, headers: { etag: options.etag } };
+  }
   if (
     options.range === undefined ||
     options.size === 0 ||

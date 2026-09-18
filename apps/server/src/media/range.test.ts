@@ -3,6 +3,23 @@ import { describe, expect, it } from 'vitest';
 import { planMediaResponse } from './range.js';
 
 describe('planMediaResponse', () => {
+  it('validates cached GET and HEAD responses before processing ranges', () => {
+    for (const method of ['GET', 'HEAD'] as const) {
+      for (const ifNoneMatch of ['"current"', 'W/"current"', '"other", W/"current"', '*']) {
+        expect(planMediaResponse({ etag: '"current"', ifNoneMatch, method, range: 'bytes=0-1', size: 10 })).toEqual({
+          body: false, start: null, end: null, statusCode: 304, headers: { etag: '"current"' },
+        });
+      }
+    }
+  });
+
+  it('uses Last-Modified only when If-None-Match is absent', () => {
+    const base = { etag: '"current"', lastModified: new Date('2026-09-12T00:00:00.500Z'), method: 'GET' as const, size: 10 };
+    expect(planMediaResponse({ ...base, ifModifiedSince: 'Sat, 12 Sep 2026 00:00:00 GMT' }).statusCode).toBe(304);
+    expect(planMediaResponse({ ...base, ifModifiedSince: 'Fri, 11 Sep 2026 00:00:00 GMT' }).statusCode).toBe(200);
+    expect(planMediaResponse({ ...base, ifModifiedSince: 'invalid' }).statusCode).toBe(200);
+    expect(planMediaResponse({ ...base, ifNoneMatch: '"old"', ifModifiedSince: 'Sat, 12 Sep 2026 00:00:00 GMT' }).statusCode).toBe(200);
+  });
   it('plans full GET and HEAD responses', () => {
     expect(planMediaResponse({ etag: '"sha"', method: 'GET', size: 10 })).toMatchObject({
       body: true,

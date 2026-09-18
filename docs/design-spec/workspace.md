@@ -434,8 +434,8 @@ Workspace and per-source editor memory retain their existing account/project/mod
 ### Editor preload and floating details
 
 The homepage has priority over speculative editing downloads. Visible gallery
-images load eagerly at high priority; offscreen previews remain lazy at low
-priority. Historical SSE event bursts coalesce query-family refreshes in 100ms windows;
+images load eagerly at high priority; nearby offscreen previews preload at low
+priority within 1000px of the viewport. Historical SSE event bursts coalesce query-family refreshes in 100ms windows;
 in-flight requests are reused, with one trailing refresh for changes received
 during the fetch. This avoids cancelled-request storms while retaining live
 updates and local optimistic settings writes. Once the gallery, settings and catalog/job requests settle and visible
@@ -478,12 +478,46 @@ entries through the existing masonry virtualizer, with the same responsive colum
 widths and scroll container. They are loading placeholders without asset actions
 or asset identities. Once metadata arrives, reserve each real card’s dimensions
 from its stored width/height and replace its own skeleton as that thumbnail loads.
-Preserve newest-first server ordering. Initially only thumbnails intersecting
-the current scroll viewport receive an image source; overscanned/offscreen cards
-keep their placeholders until scrolled into view. Once requested, a thumbnail may
-finish and be reused without reloading when the user scrolls back.
+Preserve newest-first server ordering. Visible thumbnails load at high priority;
+thumbnails within 1000px above or below the current scroll viewport preload at
+low priority. Only cards intersecting that bounded range receive an image source;
+browser lazy-loading heuristics do not extend or delay this preload distance.
+The virtualizer mounts enough cards to cover that range at every column width;
+more distant cards keep their placeholders. Once requested, a thumbnail may
+finish and be reused without reloading when the user scrolls back. Fetch the next
+metadata page when its pagination sentinel comes within 1000px of the viewport.
 Every thumbnail reveals independently with a brief opacity transition; one slow
 or failed image never holds back its neighbors. Cached images appear immediately,
 failed previews keep the existing unavailable state, and reduced-motion settings
 disable the placeholder animation. Pagination and filter changes retain already
 loaded cards according to the existing query-scope rules.
+
+### Preview caching
+
+Successful thumbnail and poster responses use `private, max-age=3600,
+must-revalidate` and `Vary: Cookie, Authorization`, so browsers can reuse them
+when virtualized cards mount again, including on LAN HTTP previews without a
+Service Worker. Original media still requires revalidation. Conditional GET/HEAD
+honors `If-None-Match` (including weak validators and lists) before
+`If-Modified-Since` and Range, returning an empty 304 only after authentication,
+asset ownership and file existence checks. Derived ETags include the file size and
+modification time so repair does not validate an obsolete representation.
+Internal JSON, authentication failures and missing media remain `no-store`.
+
+When a Service Worker is active, same-origin GET thumbnails/posters use
+CacheFirst with at most 256 previews for seven days. Explicit reload/no-cache
+requests, conditional requests, authorization headers, ranges and other media
+remain outside this runtime cache. Cache misses may use the browser HTTP cache.
+A local generation marker prevents delayed responses from an old login session
+from repopulating a cleared cache; it contains no credentials or account data.
+The existing login/logout/401 and cross-tab session cleanup remains in force.
+Asset deletion removes its cached thumbnail/poster, including deletions received
+through SSE; deleting a project with its media clears the derived preview cache.
+
+Successful login/logout, account changes, media/project deletion and protected
+401 responses also send `Clear-Site-Data: "cache"` to clear the browser's HTTP
+cache on supporting secure origins. This does not request removal of cookies,
+drafts, IndexedDB or Service Worker storage. On ordinary LAN HTTP, browsers may
+ignore that header; credential-dependent cache variants and the one-hour HTTP
+freshness bound still apply. Static PWA precaching and its update prompt remain
+separate from the preview cache and keep their existing behavior.

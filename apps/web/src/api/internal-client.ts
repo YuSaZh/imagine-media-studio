@@ -87,7 +87,7 @@ import {
   type TrustedAdapterManifest,
 } from '@imagine/shared';
 import { readExportedYamlEnvelopeVersion } from './adapter-document.js';
-import { clearDerivedMediaRuntimeCache } from '../pwa-media-cache.js';
+import { clearDerivedMediaForAssets, clearDerivedMediaRuntimeCache } from '../pwa-media-cache.js';
 import {
   assertOnlineForWrite,
   broadcastOfflineSessionChange,
@@ -1138,8 +1138,10 @@ export const internalClient = {
       body: jsonBody({ favorite }),
     }),
   getAssetSeries: async (assetId: string, groupConcurrentImages = false) => requestJson(`/internal/assets/${encodeURIComponent(assetId)}/series${groupConcurrentImages ? "?groupConcurrentImages=true" : ""}`, AssetSeriesResponseSchema),
-  deleteAsset: async (assetId: string) =>
-    requestEmpty(`/internal/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' }),
+  deleteAsset: async (assetId: string) => {
+    await requestEmpty(`/internal/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' });
+    await clearDerivedMediaForAssets([assetId]).catch(() => undefined);
+  },
   listCollections: async (options: { cursor?: string; limit?: number } = {}) =>
     requestJson(`/internal/collections${queryString(options)}`, CollectionPageSchema),
   createCollection: async (name: string) =>
@@ -1152,8 +1154,10 @@ export const internalClient = {
       method: 'PATCH',
       body: jsonBody(typeof change === 'string' ? { name: change } : change),
     }),
-  deleteCollection: async (collectionId: string, deleteAssets = false) =>
-    requestEmpty(`/internal/collections/${encodeURIComponent(collectionId)}${deleteAssets ? "?deleteAssets=true" : ""}`, { method: 'DELETE' }),
+  deleteCollection: async (collectionId: string, deleteAssets = false) => {
+    await requestEmpty(`/internal/collections/${encodeURIComponent(collectionId)}${deleteAssets ? "?deleteAssets=true" : ""}`, { method: 'DELETE' });
+    if (deleteAssets) await clearDerivedMediaRuntimeCache().catch(() => undefined);
+  },
   addCollectionAssets: async (collectionId: string, assetIds: readonly string[]) =>
     requestJson(`/internal/collections/${encodeURIComponent(collectionId)}/assets`, CollectionAssetsResponseSchema, {
       method: 'POST',

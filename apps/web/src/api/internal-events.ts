@@ -2,6 +2,7 @@ import { InternalEventSchema, type InternalEvent } from '@imagine/shared';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
 import { internalQueryKeys } from './query-keys.js';
+import { clearDerivedMediaForAssets } from '../pwa-media-cache.js';
 
 interface EventSourceLike {
   addEventListener(type: string, listener: (event: MessageEvent<string>) => void): void;
@@ -46,6 +47,7 @@ export function subscribeToInternalEvents(
 ): () => void {
   const source = createEventSource('/internal/events');
   const pendingKeys = new Map<string, QueryKey>();
+  const deletedAssets = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let refreshing = false, closed = false;
   const scheduleRefresh = () => {
@@ -54,10 +56,14 @@ export function subscribeToInternalEvents(
       timer = undefined;
       if (closed || queryClient.isMutating({ mutationKey: internalQueryKeys.settings }) > 0) return;
       const keys = [...pendingKeys.values()]; pendingKeys.clear();
+      const deleted = [...deletedAssets]; deletedAssets.clear();
       refreshing = true;
       // Replay bursts share each in-flight query. Events arriving during the
       // fetch stay queued for one trailing refresh, so newer state is not lost.
-      void Promise.all(keys.map(queryKey => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false })))
+      void Promise.all([
+        clearDerivedMediaForAssets(deleted).catch(() => undefined),
+        ...keys.map(queryKey => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false })),
+      ])
         .catch(() => undefined).finally(() => { refreshing = false; scheduleRefresh(); });
     }, 100);
   };
@@ -82,6 +88,7 @@ export function subscribeToInternalEvents(
     }
     const parsed = InternalEventSchema.safeParse(payload);
     if (!parsed.success) return;
+    if (parsed.data.type === 'asset.deleted') deletedAssets.add(parsed.data.entityId);
     for (const queryKey of queryKeysForEvent(parsed.data)) {
       if (parsed.data.type === 'settings.updated' && queryClient.isMutating({ mutationKey: internalQueryKeys.settings }) > 0) {
         deferredKeys.set(JSON.stringify(queryKey), queryKey);
@@ -99,7 +106,7 @@ export function subscribeToInternalEvents(
   document.addEventListener('visibilitychange', handleVisibility);
 
   return () => {
-    closed = true; clearTimeout(timer); pendingKeys.clear();
+    closed = true; clearTimeout(timer); pendingKeys.clear(); deletedAssets.clear();
     source.close();
     unsubscribeMutations(); deferredKeys.clear();
     window.removeEventListener('online', refreshAll);

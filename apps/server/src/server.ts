@@ -566,8 +566,15 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
         ].join('; '),
       );
       const pathname = new URL(request.url, 'http://localhost').pathname;
-      if (/^\/internal(?:\/|$)/.test(pathname) && !pathname.includes('/content')) {
+      const mediaResponse = /^\/internal\/assets\/[^/]+\/(?:content|thumbnail|poster)$/.test(pathname) && reply.statusCode < 400;
+      if (/^\/internal(?:\/|$)/.test(pathname) && !mediaResponse) {
         reply.header('cache-control', 'no-store');
+      }
+      const sessionChanged = request.method === 'POST' && /^\/internal\/auth\/(?:login|logout)$/.test(pathname) || request.method === 'PATCH' && pathname === '/internal/account';
+      const mediaDeleted = request.method === 'DELETE' && /^\/internal\/(?:assets|collections)\/[^/]+$/.test(pathname);
+      if (/^\/internal(?:\/|$)/.test(pathname) && (reply.statusCode === 401 || reply.statusCode < 300 && (sessionChanged || mediaDeleted))) {
+        // Clear the browser's HTTP cache without removing drafts or PWA storage.
+        reply.header('clear-site-data', '"cache"');
       }
       return payload;
     });

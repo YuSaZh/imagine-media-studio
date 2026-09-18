@@ -419,7 +419,7 @@ export class AssetMediaService {
     return {
       absolutePath,
       asset,
-      etag: `"${asset.sha256}-${variant}"`,
+      etag: variant === 'content' ? `"${asset.sha256}-${variant}"` : `"${asset.sha256}-${variant}-${file.size.toString(36)}-${file.mtimeMs.toString(36)}"`,
       fileSize: file.size,
       lastModified: file.mtime,
       mimeType: variant === 'content' ? asset.mimeType : mimeTypeForDerivedVariant(variant),

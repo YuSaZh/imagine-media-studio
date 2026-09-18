@@ -3236,9 +3236,9 @@ test('gallery shows skeletons before metadata and reveals thumbnails independent
   }
 });
 
-test('gallery requests recent visible thumbnails before any offscreen cards', async ({ page, request }) => {
+test('gallery preloads thumbnails within 1000px while prioritizing visible cards', async ({ page, request }) => {
   const assets = [];
-  for (let index = 0; index < 24; index++) assets.push(await upload(request, index % 2 ? 'botanical' : 'coast'));
+  for (let index = 0; index < 40; index++) assets.push(await upload(request, index % 2 ? 'botanical' : 'coast'));
   const requested: string[] = [];
   page.on('request', req => { const match = new URL(req.url()).pathname.match(/^\/internal\/assets\/([^/]+)\/thumbnail$/); if (match) requested.push(match[1]!); });
   await open(page);
@@ -3248,17 +3248,100 @@ test('gallery requests recent visible thumbnails before any offscreen cards', as
     const box = node.getBoundingClientRect();
     const root = node.closest('.workspace-desktop') ? node.closest('.gallery-scroll')! : node.closest('.workspace')!;
     const bounds = root.getBoundingClientRect();
-    return { id: node.getAttribute('data-study-id')!, visible: box.bottom > bounds.top && box.top < bounds.bottom, below: box.top >= bounds.bottom };
+    return { id: node.getAttribute('data-study-id')!, visible: box.bottom > bounds.top && box.top < bounds.bottom, distanceBelow: box.top - bounds.bottom };
   }));
-  const visible = new Set(positions.filter(item => item.visible).map(item => item.id));
+  const withinRange = new Set(positions.filter(item => item.distanceBelow < 1000).map(item => item.id));
   expect(requested[0]).toBe(assets.at(-1)!.id);
-  expect(requested.every(id => visible.has(id))).toBe(true);
-  const offscreen = positions.find(item => item.below)!;
-  expect(offscreen).toBeTruthy();
-  expect(requested).not.toContain(offscreen.id);
-  const target = page.locator(`[data-study-id="${offscreen.id}"]`);
+  expect(requested.every(id => withinRange.has(id))).toBe(true);
+  for (const item of positions.filter(item => item.visible)) {
+    await expect(page.locator(`[data-study-id="${item.id}"] img`)).toHaveAttribute('fetchpriority', 'high');
+  }
+  const nearby = positions.filter(item => item.distanceBelow >= 0 && item.distanceBelow < 1000);
+  expect(nearby.length).toBeGreaterThan(0);
+  for (const item of nearby) {
+    const image = page.locator(`[data-study-id="${item.id}"] img`);
+    await expect(image).toHaveClass('thumbnail-ready');
+    await expect(image).toHaveAttribute('fetchpriority', 'low');
+    expect(requested).toContain(item.id);
+  }
+  const distant = positions.find(item => item.distanceBelow >= 1000)!;
+  expect(distant).toBeTruthy();
+  expect(requested).not.toContain(distant.id);
+  const target = page.locator(`[data-study-id="${distant.id}"]`);
   await expect(target.locator('img')).toHaveCount(0);
-  await target.scrollIntoViewIfNeeded();
+  await target.evaluate(node => {
+    const scroll = node.closest('.workspace-desktop') ? node.closest('.gallery-scroll')! : node.closest('.workspace')!;
+    scroll.scrollTop += node.getBoundingClientRect().top - scroll.getBoundingClientRect().bottom - 900;
+  });
   await expect(target.locator('img')).toHaveClass('thumbnail-ready');
-  expect(requested).toContain(offscreen.id);
+  await expect(target.locator('img')).toHaveAttribute('fetchpriority', 'low');
+  expect(requested).toContain(distant.id);
+  await target.scrollIntoViewIfNeeded();
+  await expect(target.locator('img')).toHaveAttribute('fetchpriority', 'high');
+});
+
+test('gallery reuses cached thumbnails after scrolling and reload', async ({ page, request }) => {
+  for (let index = 0; index < 40; index++) await upload(request, 'botanical');
+  await open(page);
+  const first = page.locator('.study-card').first();
+  const id = await first.getAttribute('data-study-id');
+  const target = page.locator(`[data-study-id="${id}"]`);
+  await expect(target.locator('img')).toHaveClass('thumbnail-ready');
+  const src = await target.locator('img').evaluate((image: HTMLImageElement) => image.src);
+  await expect.poll(() => page.evaluate(src => performance.getEntriesByName(src).filter(entry => (entry as PerformanceResourceTiming).transferSize > 0).length, src)).toBe(1);
+  await page.evaluate(() => {
+    const scroll = document.querySelector('.workspace-desktop .gallery-scroll') ?? document.querySelector('.workspace')!;
+    scroll.scrollTop = scroll.scrollHeight;
+  });
+  await expect(target).toHaveCount(0);
+  await page.evaluate(() => {
+    performance.clearResourceTimings();
+    const scroll = document.querySelector('.workspace-desktop .gallery-scroll') ?? document.querySelector('.workspace')!;
+    scroll.scrollTop = 0;
+  });
+  await expect(target.locator('img')).toHaveClass('thumbnail-ready');
+  const transfers = () => page.evaluate(src => performance.getEntriesByName(src).filter(entry => (entry as PerformanceResourceTiming).transferSize > 0).length, src);
+  expect(await transfers()).toBe(0);
+  // A new document can still use the browser's private HTTP cache.
+  await page.goto('/imagine');
+  await expect(target.locator('img')).toHaveClass('thumbnail-ready');
+  expect(await transfers()).toBe(0);
+});
+
+test.describe('PWA thumbnail reuse', () => {
+  test.use({ serviceWorkers: 'allow' });
+  test('cached previews avoid network and clear on deletion and logout', async ({ page, request, context }) => {
+    const deleted = await upload(request, 'coast'), retained = await upload(request, 'botanical');
+    await open(page);
+    await page.evaluate(async () => { await navigator.serviceWorker.ready; });
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+    await expect(page.locator('.study-card img')).toHaveCount(2);
+    await expect.poll(() => page.evaluate(async url => !!await (await caches.open('imagine-derived-media-v2')).match(url), retained.thumbnailUrl)).toBe(true);
+    await expect.poll(() => page.evaluate(async url => !!await (await caches.open('imagine-derived-media-v2')).match(url), deleted.thumbnailUrl)).toBe(true);
+    const session = await context.newCDPSession(page);
+    await session.send('Network.clearBrowserCache');
+    const network: string[] = [];
+    context.on('request', request => { if (request.serviceWorker() && new URL(request.url()).pathname === retained.thumbnailUrl) network.push(request.url()); });
+    for (let repeat = 0; repeat < 3; repeat++) {
+      expect(await page.evaluate(async url => (await (await fetch(url)).blob()).size, retained.thumbnailUrl)).toBeGreaterThan(0);
+    }
+    expect(network).toEqual([]);
+    expect(await page.evaluate(async id => (await fetch(`/internal/assets/${id}`, { method: 'DELETE' })).status, deleted.id)).toBe(204);
+    await expect.poll(() => page.evaluate(async url => !!await (await caches.open('imagine-derived-media-v2')).match(url), deleted.thumbnailUrl)).toBe(false);
+    expect(await page.evaluate(async url => !!await (await caches.open('imagine-derived-media-v2')).match(url), retained.thumbnailUrl)).toBe(true);
+    await open(page, '/settings/account');
+    await page.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => caches.has('imagine-derived-media-v2'))).toBe(false);
+    expect(await page.evaluate(async url => (await fetch(url)).status, retained.thumbnailUrl)).toBe(401);
+    const username = `cache-${randomUUID().slice(0, 8)}`;
+    expect((await request.post('/internal/accounts', { data: { username, password: 'cache-test-password' } })).status()).toBe(201);
+    await page.getByLabel('用户名', { exact: true }).fill(username);
+    await page.getByLabel('密码', { exact: true }).fill('cache-test-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.locator('.workspace-header')).toBeVisible();
+    expect(await page.evaluate(async url => (await fetch(url)).status, retained.thumbnailUrl)).toBe(404);
+    await session.detach();
+  });
 });

@@ -55,6 +55,11 @@ job execution or retain a parallel global inventory of server records. Offline
 mode supports bounded authorized previews and drafts, disables writes, and excludes
 secrets and full videos from caches. See the [workspace spec](../design-spec/workspace.md).
 
+Derived previews use private HTTP caching with credential-sensitive `Vary` and
+conditional 304 responses after ownership checks. PWA preview storage is bounded
+and uses CacheFirst; auth transitions clear it and reject late writes from the
+previous cache generation. See the [preview cache contract](../design-spec/workspace.md#preview-caching).
+
 ## Provider and Job Boundaries
 
 Model capabilities and stored parameter policies drive controls and server

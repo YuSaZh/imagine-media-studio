@@ -160,6 +160,8 @@ async function sendAsset(
   if (!delivery) return errorResponse(reply, 404, 'asset_media_not_found');
   const rangeHeader = request.headers.range;
   const ifRangeHeader = request.headers['if-range'];
+  const ifNoneMatch = request.headers['if-none-match'];
+  const ifModifiedSince = request.headers['if-modified-since'];
   const plan = planMediaResponse({
     etag: delivery.etag,
     method: request.method === 'HEAD' ? 'HEAD' : 'GET',
@@ -167,10 +169,13 @@ async function sendAsset(
     lastModified: delivery.lastModified,
     ...(typeof rangeHeader === 'string' ? { range: rangeHeader } : {}),
     ...(typeof ifRangeHeader === 'string' ? { ifRange: ifRangeHeader } : {}),
+    ...(typeof ifNoneMatch === 'string' ? { ifNoneMatch } : {}),
+    ...(typeof ifModifiedSince === 'string' ? { ifModifiedSince } : {}),
   });
   reply.code(plan.statusCode).headers({
     ...plan.headers,
-    'cache-control': 'private, max-age=0, must-revalidate',
+    'cache-control': variant === 'content' ? 'private, max-age=0, must-revalidate' : 'private, max-age=3600, must-revalidate',
+    vary: 'Cookie, Authorization',
     'content-type': delivery.mimeType,
     'last-modified': delivery.lastModified.toUTCString(),
   });

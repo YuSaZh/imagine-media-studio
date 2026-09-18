@@ -9,6 +9,8 @@ import type { PendingStudy } from './pending-studies';
 import { GenerationStatus } from './generation-status';
 import { formatGenerationTime, generationSeconds } from './generation-time';
 
+const GALLERY_PRELOAD_DISTANCE = 1000;
+
 interface GalleryProps {
   loading?: boolean;
   onNotice?: (message: string) => void;
@@ -41,21 +43,21 @@ function durationLabel(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 }
 
-function Thumbnail({ item, visible }: { item: MediaItem; visible: boolean }) {
+function Thumbnail({ item, visible, shouldLoad }: { item: MediaItem; visible: boolean; shouldLoad: boolean }) {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [requested, setRequested] = useState(visible);
-  useEffect(() => { if (visible) setRequested(true); }, [visible]);
+  const [requested, setRequested] = useState(shouldLoad);
+  useEffect(() => { if (shouldLoad) setRequested(true); }, [shouldLoad]);
   const mount = useCallback((image: HTMLImageElement | null) => {
     if (image?.complete) setState(image.naturalWidth > 0 ? 'ready' : 'error');
   }, []);
   if (state === 'error') return <span className="media-unavailable"><ImageIcon size={25} /><span>预览不可用</span></span>;
   return <>
     {state === 'loading' && <span className="thumbnail-placeholder" aria-hidden="true" />}
-    {(visible || requested) && <img ref={mount} src={item.thumbnail} alt={item.title} width={item.width} height={item.height} className={`thumbnail-${state}`} loading={visible ? 'eager' : 'lazy'} fetchPriority={visible ? 'high' : 'low'} decoding="async" draggable={false} onLoad={() => setState('ready')} onError={() => setState('error')} />}
+    {(shouldLoad || requested) && <img ref={mount} src={item.thumbnail} alt={item.title} width={item.width} height={item.height} className={`thumbnail-${state}`} loading="eager" fetchPriority={visible ? 'high' : 'low'} decoding="async" draggable={false} onLoad={() => setState('ready')} onError={() => setState('error')} />}
   </>;
 }
 
-function Card({ item, props, visible }: { item: MediaItem; props: GalleryProps; visible: boolean }) {
+function Card({ item, props, visible, shouldLoad }: { item: MediaItem; props: GalleryProps; visible: boolean; shouldLoad: boolean }) {
   const gesture = useRef(createSelectionGestureState());
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressClick = useRef(false);
@@ -94,7 +96,7 @@ function Card({ item, props, visible }: { item: MediaItem; props: GalleryProps; 
         if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); return; }
         if (event.shiftKey) props.onSelect(item); else props.onPick(item);
       }}>
-      <Thumbnail key={item.thumbnail} item={item} visible={visible} />
+      <Thumbnail key={item.thumbnail} item={item} visible={visible} shouldLoad={shouldLoad} />
       {item.kind === 'video' && <span className="video-tag"><Play size={11} fill="currentColor" />{durationLabel(item.durationSeconds ?? 0)}</span>}
       {item.asset?.series && item.asset.series.count > 1 && !props.selecting && <span className="series-count" aria-label={`系列共 ${item.asset.series.count} 件作品`}><Images size={14} strokeWidth={1.75} aria-hidden="true" /><span>{item.asset.series.count}</span></span>}
       <span className="study-caption"><strong>{item.title}</strong><span>{item.model}{elapsed !== null ? ` · ${formatGenerationTime(elapsed)}` : ''}</span></span>
@@ -125,12 +127,14 @@ export function Gallery(props: GalleryProps) {
   const columns = layout.width < 560 ? 2 : layout.width < 920 ? 3 : 4;
   const gap = layout.width < 560 ? 8 : 12;
   const width = Math.max(1, (layout.width - gap * (columns - 1)) / columns);
+  // Mount enough cards to cover the preload distance even at the minimum card height.
+  const overscan = Math.max(6, Math.ceil(GALLERY_PRELOAD_DISTANCE / (width * .5 + gap)) * columns);
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => props.scrollRef.current,
     getItemKey: index => entries[index]?.id ?? index,
     estimateSize: index => width * Math.max(.5, Math.min(1.8, (entries[index]?.height ?? 1) / (entries[index]?.width ?? 1))),
-    lanes: columns, gap, overscan: 6, scrollMargin: layout.margin,
+    lanes: columns, gap, overscan, scrollMargin: layout.margin,
   });
   useLayoutEffect(() => {
     const measure = () => {
@@ -149,7 +153,7 @@ export function Gallery(props: GalleryProps) {
   useEffect(() => { virtualizer.measure(); }, [width, columns, virtualizer]);
   useEffect(() => {
     if (!sentinel.current || !props.hasMore || props.fetching || props.error) return;
-    const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) props.onMore(); }, { root: props.scrollRef.current, rootMargin: '500px' });
+    const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) props.onMore(); }, { root: props.scrollRef.current, rootMargin: `${GALLERY_PRELOAD_DISTANCE}px` });
     observer.observe(sentinel.current);
     return () => observer.disconnect();
   }, [props]);
@@ -158,9 +162,11 @@ export function Gallery(props: GalleryProps) {
     <div className="study-grid virtual-studies" ref={gridRef} style={{ height: virtualizer.getTotalSize() }} role={props.loading ? 'status' : undefined} aria-busy={props.loading || undefined} aria-label={props.loading ? '正在加载作品' : '作品网格'}>
       {virtualizer.getVirtualItems().map(virtual => {
         const top = virtualizer.scrollOffset ?? 0;
-        const visible = layout.measured && virtual.end > top && virtual.start < top + (props.scrollRef.current?.clientHeight ?? 0);
+        const bottom = top + (props.scrollRef.current?.clientHeight ?? 0);
+        const visible = layout.measured && virtual.end > top && virtual.start < bottom;
+        const shouldLoad = layout.measured && virtual.end > top - GALLERY_PRELOAD_DISTANCE && virtual.start < bottom + GALLERY_PRELOAD_DISTANCE;
         const entry = entries[virtual.index];
-        return entry ? <div key={entry.id} className="virtual-study" style={{ width, height: virtual.size, left: (virtual.lane ?? virtual.index % columns) * (width + gap), transform: `translateY(${virtual.start - layout.margin}px)` }}>{entry.type === 'loading' ? <div className="gallery-skeleton" aria-hidden="true" /> : entry.type === 'asset' ? <Card item={entry.item} props={props} visible={visible} /> : <PendingCard task={entry.task} props={props} />}</div> : null;
+        return entry ? <div key={entry.id} className="virtual-study" style={{ width, height: virtual.size, left: (virtual.lane ?? virtual.index % columns) * (width + gap), transform: `translateY(${virtual.start - layout.margin}px)` }}>{entry.type === 'loading' ? <div className="gallery-skeleton" aria-hidden="true" /> : entry.type === 'asset' ? <Card item={entry.item} props={props} visible={visible} shouldLoad={shouldLoad} /> : <PendingCard task={entry.task} props={props} />}</div> : null;
       })}
     </div>
     <div className="gallery-pagination" ref={sentinel}>
