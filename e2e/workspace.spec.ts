@@ -2283,7 +2283,7 @@ test('editor keeps a reloadable series across repeated image and video generatio
     if (hold && heldJobs.has(data.job?.id)) { data.assets = []; data.job = { ...data.job, status: 'remote_running', completedAt: null }; }
     await route.fulfill({ response, json: data });
   });
-  await page.route('**/internal/assets/*/series', async route => {
+  await page.route('**/internal/assets/*/series?*', async route => {
     const response = await route.fetch(), data = await response.json();
     if (hold) { data.assets = data.assets.filter((asset: { jobId: string }) => !heldJobs.has(asset.jobId)); data.jobs = data.jobs.map((job: { id: string }) => heldJobs.has(job.id) ? { ...job, status: 'remote_running', completedAt: null } : job); }
     await route.fulfill({ response, json: data });
