@@ -1,9 +1,9 @@
-# Imagine Media Studio v0.1.8 Release Guide
+# Imagine Media Studio v0.1.9 Release Guide
 
-Imagine Media Studio `v0.1.8` adds progressive gallery thumbnails, optional series grouping for concurrent image generation, and floating media details with adaptive prompt folding. It also improves startup scheduling, account settings synchronization, and mobile editing navigation. Migration `0011_generation_batches.sql` records new image-generation batches; historical jobs without batch records are not grouped retroactively.
+Imagine Media Studio `v0.1.9` lets concurrent image series open before the first output, then displays completed results as they arrive. It adds an opt-in uploaded-reference series preference, removes the mobile Composer summary row, and improves thumbnail preloading and caching. No new database migration is introduced relative to v0.1.8.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.8)
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.9)
 for deployment and verification. Replace `<digest-from-release>` below with its
 64-character SHA-256 digest.
 
@@ -43,7 +43,7 @@ remains an administrator trust boundary.
 
 ## Install the released image
 
-For `v0.1.8`, take the exact digest from the GitHub Release or release workflow
+For `v0.1.9`, take the exact digest from the GitHub Release or release workflow
 summary:
 
 ```bash
@@ -120,7 +120,7 @@ external `APP_SECRET` is absent.
 
 ## Upgrade and migration
 
-Version `v0.1.8` applies migration `0011_generation_batches.sql` on startup. Existing accounts, projects, media, and settings are retained. Concurrent-image grouping is disabled by default and requires the parent series preference to be enabled. Upgrading does not infer batches for historical jobs. Rollback to an older release requires a verified compatible database or a pre-upgrade archive; migrations are forward-only.
+Version `v0.1.9` introduces no database migration relative to v0.1.8. Existing accounts, projects, media, and settings are retained. Uploaded references are separate from generated series by default; enable the nested uploaded-reference option to include them. Concurrent-image grouping still requires the parent series preference and recorded generation batches. Older installations apply all intervening migrations on startup; migrations remain forward-only.
 
 1. Record the running image digest, environment-file backup, and active data
    root. Never rely on `latest` as the rollback record.
@@ -153,11 +153,11 @@ docker run --rm \
   --entrypoint node "$IMAGE" \
   dist/maintenance/data-archive-cli.js restore \
   --bundle /recovery/live/backups/<id>.bundle \
-  --target /recovery/restored-v0.1.8
+  --target /recovery/restored-v0.1.9
 ```
 
 Inspect the restored tree, recreate the application container with
-`imagine-state/restored-v0.1.8` bound to `/data`, and keep the same
+`imagine-state/restored-v0.1.9` bound to `/data`, and keep the same
 `APP_SECRET`. A container-only rollback may reuse the live database only when
 the older application is known to support its schema. Otherwise restore the
 verified pre-upgrade archive to a new root and switch the bind mount. The CLI
@@ -165,9 +165,9 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
-Use the digest, not `0.1.8`, `0.1`, or `latest`, as the verification subject:
+Use the digest, not `0.1.9`, `0.1`, or `latest`, as the verification subject:
 
-Run these commands from a verified `v0.1.8` source checkout. GitHub CLI must be
+Run these commands from a verified `v0.1.9` source checkout. GitHub CLI must be
 authenticated with `gh auth login` or a `GH_TOKEN` that can read this repository;
 keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.
