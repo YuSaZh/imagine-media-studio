@@ -52,6 +52,9 @@ import { videoOperationPolicies } from '../providers/video-operation-policy.js';
 import { toAssetDto, toCollectionDto, toJobDto, toModelDto } from './dto.js';
 
 const JobPageQuerySchema = CursorPageQuerySchema.extend({
+  groupBySeries: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  groupConcurrentImages: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  groupUploadedReferences: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   excludePrivate: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   status: JobStatusSchema.optional(),
   providerId: z.string().min(1).optional(),
@@ -61,6 +64,7 @@ const JobPageQuerySchema = CursorPageQuerySchema.extend({
 const AssetPageQuerySchema = CursorPageQuerySchema.extend({
   groupBySeries: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   groupConcurrentImages: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  groupUploadedReferences: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   seriesCover: z.enum(['recent', 'latest', 'original']).optional(),
   excludePrivate: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
   type: AssetTypeSchema.optional(),
@@ -236,9 +240,22 @@ function registerJobRoutes(app: FastifyInstance, options: ResourceRoutesOptions)
       ...(query.providerId === undefined ? {} : { providerId: query.providerId }),
       ...(query.modelId === undefined ? {} : { modelId: query.modelId }),
     });
+    const roots = query.groupBySeries ? options.assets.jobSeriesRoots(query.groupConcurrentImages, query.groupUploadedReferences) : undefined;
     return {
-      items: page.items.map((job) => toJobDto(job, options.jobs.listOutputs(job.id).length)),
+      items: page.items.map((job) => ({ ...toJobDto(job, options.jobs.listOutputs(job.id).length), ...(roots ? { seriesId: roots.get(`j:${job.id}`) } : {}) })),
       nextCursor: page.nextCursor,
+    };
+  });
+
+  app.get<{ Params: { id: string } }>('/internal/jobs/:id/series', async (request, reply) => {
+    const query = parseOrReply(z.object({ groupConcurrentImages: z.enum(['true', 'false']).optional(), groupUploadedReferences: z.enum(['true', 'false']).optional() }).strict(), request.query, reply);
+    if (!query) return;
+    if (!options.jobs.get(request.params.id)) return errorResponse(reply, 404, 'job_not_found');
+    const series = options.assets.seriesForJob(request.params.id, query.groupConcurrentImages === 'true', query.groupUploadedReferences === 'true');
+    return {
+      assets: series.assets.map(asset => toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id))),
+      jobs: series.jobIds.flatMap(id => { const job = options.jobs.get(id); return job ? [toJobDto(job, options.assets.countForJob(id))] : []; }),
+      truncated: series.truncated,
     };
   });
 
@@ -483,7 +500,7 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
     const context = query.collectionId ?? 'default';
     const history = z.record(z.string(), z.record(z.string(), z.number().finite().nonnegative())).safeParse(viewed);
     const page = options.assets.page({
-      ...(query.groupBySeries ? { groupBySeries: true, groupConcurrentImages: query.groupConcurrentImages ?? false, seriesCover: query.seriesCover ?? 'latest', lastViewed: history.success ? history.data[context] ?? {} : {} } : {}),
+      ...(query.groupBySeries ? { groupBySeries: true, groupConcurrentImages: query.groupConcurrentImages ?? false, groupUploadedReferences: query.groupUploadedReferences ?? false, seriesCover: query.seriesCover ?? 'latest', lastViewed: history.success ? history.data[context] ?? {} : {} } : {}),
       ...(query.excludePrivate ? { excludePrivate: true } : {}),
       limit: query.limit,
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
@@ -513,9 +530,9 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
   });
 
   app.get<{ Params: { id: string } }>('/internal/assets/:id/series', async (request, reply) => {
-    const query = parseOrReply(z.object({ groupConcurrentImages: z.enum(['true', 'false']).optional() }).strict(), request.query, reply);
+    const query = parseOrReply(z.object({ groupConcurrentImages: z.enum(['true', 'false']).optional(), groupUploadedReferences: z.enum(['true', 'false']).optional() }).strict(), request.query, reply);
     if (!query) return;
-    const series = options.assets.series(request.params.id, query.groupConcurrentImages === 'true');
+    const series = options.assets.series(request.params.id, query.groupConcurrentImages === 'true', query.groupUploadedReferences === 'true');
     if (!series) return errorResponse(reply, 404, 'asset_not_found');
     return {
       assets: series.assets.map(asset => toAssetDto(asset, options.assets.collectionIdsForAsset(asset.id))),

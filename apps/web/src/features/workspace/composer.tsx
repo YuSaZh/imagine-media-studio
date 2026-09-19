@@ -172,7 +172,6 @@ export function Composer(props: ComposerProps) {
     props.onCreate({ model, operation, prompt, inputs: references, ratio, resolution: resolution === 'custom' ? `${customWidth}x${customHeight}` : resolution, count, duration, negativePrompt, seed, audio, extra, parameters });
   };
   const modelOptions = props.editing ? props.models : props.models.filter(candidate => candidate.capabilities.operations.includes(operation));
-  const sizeLabel = rules ? selectedRatio : resolution === 'custom' ? `${customWidth}×${customHeight}` : resolution || ratio;
   const chooseImageResolution = (value: string, selectedRatio?: string) => {
     if (selectedRatio) setRatio(selectedRatio);
     const size = /^([1-9]\d*)x([1-9]\d*)$/.exec(value);
@@ -271,6 +270,5 @@ export function Composer(props: ComposerProps) {
       <span className="composer-spacer" />
       <button type="submit" className="generate-button" aria-label="开始生成" disabled={!canSubmit}>{props.submitting ? <LoaderCircle className="spin" size={20} /> : <ArrowUp size={21} strokeWidth={2.5} />}</button>
     </div>
-    <div className="mobile-model-status"><span>{model ? `${model.providerName} · ${model.name}` : props.loading ? '正在加载模型' : '尚未配置模型'}</span><span>{sizeLabel}{mode === 'image' ? ` · ${count} 张` : ''}</span></div>
   </form>;
 }

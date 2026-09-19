@@ -60,6 +60,7 @@ export interface CreateAssetInput {
 export interface AssetPageRequest extends PageRequest {
   readonly groupBySeries?: boolean;
   readonly groupConcurrentImages?: boolean;
+  readonly groupUploadedReferences?: boolean;
   readonly seriesCover?: 'recent' | 'latest' | 'original';
   readonly lastViewed?: Readonly<Record<string, number>>;
   readonly excludePrivate?: boolean;
@@ -195,7 +196,7 @@ export class AssetRepository {
   private seriesPage(request: AssetPageRequest, filter: SQL): CursorPage<AssetRecord> {
     const page = normalizePageRequest(request);
     const owner = this.owner?.() ?? 'admin';
-    const roots = loadAssetSeriesGraph(this.database, owner, request.groupConcurrentImages).assetRoots();
+    const roots = loadAssetSeriesGraph(this.database, owner, request.groupConcurrentImages, request.groupUploadedReferences).assetRoots();
     const rows = this.database.all<{ id: string; seriesId: string; count: number; anchorId: string; anchorTime: number }>(sql`
       WITH roots AS (
         SELECT json_extract(value, '$[0]') AS id, json_extract(value, '$[1]') AS series_id FROM json_each(${JSON.stringify(roots)})
@@ -400,10 +401,22 @@ export class AssetRepository {
       .all().length;
   }
 
-  public series(id: string, groupConcurrentImages = false): { assets: AssetRecord[]; jobIds: string[]; truncated: boolean } | null {
+  public jobSeriesRoots(groupConcurrentImages = false, groupUploadedReferences = false): ReadonlyMap<string, string> {
+    return loadAssetSeriesGraph(this.database, this.owner?.() ?? 'admin', groupConcurrentImages, groupUploadedReferences).roots;
+  }
+
+  public series(id: string, groupConcurrentImages = false, groupUploadedReferences = false): { assets: AssetRecord[]; jobIds: string[]; truncated: boolean } | null {
     if (!this.get(id)) return null;
+    return this.seriesFromNode(`a:${id}`, groupConcurrentImages, groupUploadedReferences);
+  }
+
+  public seriesForJob(id: string, groupConcurrentImages = false, groupUploadedReferences = false) {
+    return this.seriesFromNode(`j:${id}`, groupConcurrentImages, groupUploadedReferences);
+  }
+
+  private seriesFromNode(node: string, groupConcurrentImages: boolean, groupUploadedReferences: boolean) {
     const owner = this.owner?.() ?? 'admin';
-    const family = loadAssetSeriesGraph(this.database, owner, groupConcurrentImages).family(`a:${id}`);
+    const family = loadAssetSeriesGraph(this.database, owner, groupConcurrentImages, groupUploadedReferences).family(node);
     const assetIds = family.nodes.filter(node => node.startsWith('a:')).map(node => node.slice(2));
     const rows = assetIds.length ? this.database.select().from(assets).where(and(
       inArray(assets.id, assetIds), eq(assets.ownerId, owner), isNull(assets.deletedAt),

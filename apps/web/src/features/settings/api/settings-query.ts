@@ -19,6 +19,7 @@ export const PWA_SETTING_DEFAULTS = {
 export interface GeneralSettingsValues {
   groupBySeries: boolean;
   groupConcurrentImages: boolean;
+  groupUploadedReferences: boolean;
   seriesCover: 'recent' | 'latest' | 'original';
   autoplayPreviews: boolean;
   clearPromptAfterSubmit: boolean;
@@ -40,6 +41,7 @@ export function readGeneralSettings(settings: JsonObject | undefined): GeneralSe
   return {
     groupBySeries: settings?.['gallery.group_by_series'] === true,
     groupConcurrentImages: settings?.['gallery.group_concurrent_images'] === true,
+    groupUploadedReferences: settings?.['gallery.group_uploaded_references'] === true,
     seriesCover: oneOf(settings?.['gallery.series_cover'], ['recent', 'latest', 'original'], 'latest'),
     autoplayPreviews:
       typeof settings?.['gallery.autoplay_previews'] === 'boolean'

@@ -145,6 +145,6 @@ Series queries load one account's primary-parent graph and resolve roots with an
 
 Concurrent image submissions persist server-only job-to-batch links in
 `job_generation_batches` (additive migration 0011). Retry jobs inherit the link;
-Provider requests and job DTOs are unchanged. When requested, the account-scoped
+Provider requests remain unchanged. Grouped job-list DTOs optionally expose the account-scoped series root for pending gallery entries. When requested, the account-scoped
 series graph attaches jobs with no primary source to a batch root. Existing primary
 source lineage takes precedence, and historical jobs are not heuristically grouped.

@@ -103,7 +103,6 @@ svg { flex-shrink: 0; }
 .generate-button { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; background: #252b27; color: #fff; }
 .generate-button:disabled { opacity: 1; color: #fdfdfd; background: #d8dcd9; }
 .generate-button:not(:disabled):hover { background: var(--accent); }
-.mobile-model-status { display: none; }
 .mobile-image-shortcuts { display: flex; flex: 1; min-width: 0; }
 .creation-controls .mobile-image-shortcuts > .option-trigger { display: inline-flex; flex: 1; gap: 2px; width: 0; min-width: 0; height: 40px; padding: 0; }
 .mobile-image-shortcuts > .option-trigger > svg { width: 13px; height: 13px; flex-shrink: 0; }
@@ -332,11 +331,8 @@ svg { flex-shrink: 0; }
   .creation-controls .option-trigger { height: 40px; width: 38px; }
   .creation-controls .ratio-trigger { display: none; }
   .generate-button { width: 40px; height: 40px; }
-  .mobile-model-status { display: flex; justify-content: space-between; gap: 10px; height: 22px; padding: 7px 6px 1px; font-size: 10px; line-height: 14px; color: #6a756c; }
   .mobile-control { display: flex; }
   .mobile-control .select-trigger { max-width: 185px; }
-  .mobile-model-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-model-status > span:last-child { flex-shrink: 0; max-width: 45%; }
   .library-area { padding: 13px 12px 35px; }
   .section-create .library-area { padding-bottom: calc(var(--composer-size) + var(--keyboard-lift) + 42px + env(safe-area-inset-bottom)); }
   .section-library .library-area, .section-saved .library-area, .section-projects .library-area { margin-top: 14px; }
@@ -436,7 +432,6 @@ svg { flex-shrink: 0; }
   .video-input-row { height: 34px; margin: 0; }
   .video-input-choices { height: 34px; }
   .video-input-choices button { padding: 0 5px; font-size: 11px; }
-  .mobile-model-status { order: 4; }
   .generation-settings-trigger { margin-left: auto; }
   .composer-spacer { display: none; }
   .card-bookmark, .card-bookmark:not(.is-saved) { display: grid; right: 81px; top: 9px; width: 30px; height: 30px; }
@@ -807,3 +802,8 @@ svg { flex-shrink: 0; }
 @media (max-width: 760px) {
   .viewer-edge-back { position: absolute; left: 12px; top: 50%; z-index: 3; display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #dce3dde0; border-radius: 50%; background: #fafbf9f2; color: var(--ink); box-shadow: 0 3px 14px #24352712; pointer-events: none; }
 }
+
+.pending-study:has(.series-count) .pending-study-copy { bottom: 42px; pointer-events: none; }
+.pending-study.has-cover .pending-study-copy { background: #ffffffde; padding: 8px; border-radius: 8px; pointer-events: none; }
+.pending-series-open { position: absolute; inset: 0; z-index: 1; }
+.pending-series-viewer .image-editing-controls { bottom: max(20px, env(safe-area-inset-bottom)); }

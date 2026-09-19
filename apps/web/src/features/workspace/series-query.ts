@@ -4,11 +4,11 @@ import { internalQueryKeys } from '../../api/query-keys';
 import { ACTIVE_JOB_STATUSES } from './data';
 import { readGeneralSettings, useSettingsQuery } from '../settings/api/settings-query';
 
-export const seriesKey = (id: string, groupConcurrentImages = false) => [...internalQueryKeys.assets, 'editing-series', id, groupConcurrentImages] as const;
-export async function fetchSeries(client: QueryClient, id: string, groupConcurrentImages = false) {
-  const result = await internalClient.getAssetSeries(id, groupConcurrentImages);
+export const seriesKey = (id: string, groupConcurrentImages = false, groupUploadedReferences = false) => [...internalQueryKeys.assets, 'editing-series', id, groupConcurrentImages, groupUploadedReferences] as const;
+export async function fetchSeries(client: QueryClient, id: string, groupConcurrentImages = false, groupUploadedReferences = false) {
+  const result = await internalClient.getAssetSeries(id, groupConcurrentImages, groupUploadedReferences);
   for (const asset of result.assets) {
-    client.setQueryData(seriesKey(asset.id, groupConcurrentImages), result);
+    client.setQueryData(seriesKey(asset.id, groupConcurrentImages, groupUploadedReferences), result);
     client.setQueryData([...internalQueryKeys.assets, 'detail', asset.id], { asset });
   }
   for (const job of result.jobs) client.setQueryData([...internalQueryKeys.jobs, 'detail', job.id], {
@@ -22,6 +22,6 @@ export function useAssetSeries(id: string | null, online: boolean) {
   const settings = useSettingsQuery();
   const preferences = readGeneralSettings(settings.data?.settings);
   const grouped = preferences.groupBySeries && preferences.groupConcurrentImages;
-  return useQuery({ queryKey: seriesKey(id ?? '', grouped), queryFn: () => fetchSeries(client, id!, grouped), enabled: online && !!id, staleTime: 30000,
+  return useQuery({ queryKey: seriesKey(id ?? '', grouped, preferences.groupUploadedReferences), queryFn: () => fetchSeries(client, id!, grouped, preferences.groupUploadedReferences), enabled: online && !!id, staleTime: 30000,
     refetchInterval: query => query.state.data?.jobs.some(job => ACTIVE_JOB_STATUSES.has(job.status)) ? 1500 : false });
 }

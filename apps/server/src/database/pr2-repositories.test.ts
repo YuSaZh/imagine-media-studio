@@ -58,6 +58,13 @@ describe('PR 2 database repositories', () => {
     const provider = new ProviderRepository(database.orm).create({ name: 'Batch fixture', type: 'mock' });
     const request = createMockGenerationRequest({ providerId: provider.id });
     const batch = jobs.createBatch(request, 3);
+    expect(assets.seriesForJob(batch[0]!.id, true)).toMatchObject({ assets: [], jobIds: expect.arrayContaining(batch.map(job => job.id)), truncated: false });
+    expect(assets.seriesForJob(batch[0]!.id, false).jobIds).toEqual([batch[0]!.id]);
+    expect(new AssetRepository(database.orm, () => 'other-account').seriesForJob(batch[0]!.id, true).jobIds).toEqual([]);
+    const queuedRoots = assets.jobSeriesRoots(true);
+    expect(new Set(batch.map(job => queuedRoots.get(`j:${job.id}`))).size).toBe(1);
+    expect(new Set(batch.map(job => assets.jobSeriesRoots(false).get(`j:${job.id}`))).size).toBe(3);
+    expect(new AssetRepository(database.orm, () => 'other-account').jobSeriesRoots(true).size).toBe(0);
     const outputs = batch.slice(0, 2).map((job, index) => assets.create({ ...assetInput(`batch-${index}.png`), role: 'output', jobId: job.id, favorite: index === 0 }));
     const separate = jobs.createBatch(request, 2);
     const other = assets.create({ ...assetInput('separate.png'), role: 'output', jobId: separate[0]!.id });
@@ -66,6 +73,7 @@ describe('PR 2 database repositories', () => {
     [other, ...outputs, child].forEach((asset, index) => database.sqlite.prepare('UPDATE assets SET created_at=? WHERE id=?').run(1000 + index, asset.id));
     expect(assets.page({ groupBySeries: true }).items).toHaveLength(3);
     expect(assets.series(outputs[1]!.id)?.assets).toHaveLength(1);
+    expect(assets.seriesForJob(batch[2]!.id, true).assets.map(asset => asset.id).sort()).toEqual([...outputs, child].map(asset => asset.id).sort());
     const grouped = { groupBySeries: true, groupConcurrentImages: true };
     const first = assets.page({ ...grouped, limit: 1 });
     expect(first.items[0]).toMatchObject({ id: child.id, series: { count: 3 } });
@@ -90,6 +98,22 @@ describe('PR 2 database repositories', () => {
     expect(assets.series(child.id, false)?.assets.map(asset => asset.id)).toEqual([child.id]);
     expect(batch.every(job => !JSON.stringify(job.request).includes('batch'))).toBe(true);
     expect(database.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it.each(['upload', 'reference'])('toggles uploaded %s membership without changing output lineage or account isolation', async role => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm, () => 'admin');
+    const jobs = new JobRepository(database.orm);
+    const provider = new ProviderRepository(database.orm).create({ name: 'Reference fixture', type: 'mock' });
+    const upload = assets.create({ ...assetInput('reference.png'), role });
+    const batch = jobs.createBatch(createMockGenerationRequest({ providerId: provider.id, inputs: [{ assetId: upload.id, role: 'reference' }] }), 2);
+    const outputs = batch.map(job => assets.create({ ...assetInput(`${job.id}.png`), role: 'output', jobId: job.id }));
+    expect(assets.page({ groupBySeries: true, groupConcurrentImages: true }).items).toHaveLength(2);
+    expect(assets.series(outputs[0]!.id, true, false)?.assets).toHaveLength(2);
+    expect(assets.page({ groupBySeries: true, groupConcurrentImages: true, groupUploadedReferences: true }).items).toHaveLength(1);
+    expect(assets.series(outputs[0]!.id, true, true)?.assets).toHaveLength(3);
+    expect(assets.jobSeriesRoots(true, true).get(`j:${batch[0]!.id}`)).toBe(`a:${upload.id}`);
+    expect(new AssetRepository(database.orm, () => 'other-account').series(upload.id, true, true)).toBeNull();
   });
 
   it('does not batch single images or videos and rolls back failed batch creation', async () => {
@@ -137,25 +161,25 @@ describe('PR 2 database repositories', () => {
     const second = jobs.create(createMockGenerationRequest({ inputs: [{ assetId: middle.id, role: 'reference' }] }));
     const newest = assets.create({ ...assetInput('newest.png'), role: 'output', jobId: second.id });
     [original, extra, middle, newest].forEach((asset, index) => database.sqlite.prepare('UPDATE assets SET created_at=? WHERE id=?').run(1000 + index, asset.id));
-    const firstPage = assets.page({ groupBySeries: true, limit: 1 });
+    const firstPage = assets.page({ groupBySeries: true, groupUploadedReferences: true, limit: 1 });
     expect(firstPage.items[0]).toMatchObject({ id: newest.id, series: { count: 3 } });
-    const nextPage = assets.page({ groupBySeries: true, limit: 1, cursor: firstPage.nextCursor! });
+    const nextPage = assets.page({ groupBySeries: true, groupUploadedReferences: true, limit: 1, cursor: firstPage.nextCursor! });
     expect(nextPage.items.map(asset => asset.id)).toEqual([extra.id]);
     expect(nextPage.nextCursor).toBeNull();
-    const oldCover = assets.page({ groupBySeries: true, seriesCover: 'original', limit: 1 });
+    const oldCover = assets.page({ groupBySeries: true, groupUploadedReferences: true, seriesCover: 'original', limit: 1 });
     expect(oldCover.items[0]?.id).toBe(original.id);
     expect(oldCover.nextCursor).toBe(firstPage.nextCursor);
-    expect(assets.page({ groupBySeries: true, seriesCover: 'recent', lastViewed: { [middle.id]: 100 }, limit: 1 }).items[0]?.id).toBe(middle.id);
-    expect(assets.page({ groupBySeries: true, favorite: true }).items[0]).toMatchObject({ id: middle.id, series: { count: 1 } });
-    expect(assets.page({ groupBySeries: true, search: 'newest', seriesCover: 'original' }).items[0]?.id).toBe(newest.id);
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: true, seriesCover: 'recent', lastViewed: { [middle.id]: 100 }, limit: 1 }).items[0]?.id).toBe(middle.id);
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: true, favorite: true }).items[0]).toMatchObject({ id: middle.id, series: { count: 1 } });
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: true, search: 'newest', seriesCover: 'original' }).items[0]?.id).toBe(newest.id);
     const collections = new CollectionRepository(database.orm, () => 'admin');
     const project = collections.create('private', true);
     collections.addAssets(project.id, [original.id]);
-    expect(assets.page({ groupBySeries: true, excludePrivate: true, seriesCover: 'original' }).items.find(asset => asset.series?.count === 2)?.id).toBe(middle.id);
-    expect(assets.page({ groupBySeries: true, collectionId: project.id }).items.map(asset => asset.id)).toEqual([original.id]);
-    expect(new AssetRepository(database.orm, () => 'other-account').page({ groupBySeries: true }).items).toEqual([]);
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: true, excludePrivate: true, seriesCover: 'original' }).items.find(asset => asset.series?.count === 2)?.id).toBe(middle.id);
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: true, collectionId: project.id }).items.map(asset => asset.id)).toEqual([original.id]);
+    expect(new AssetRepository(database.orm, () => 'other-account').page({ groupBySeries: true, groupUploadedReferences: true }).items).toEqual([]);
     assets.softDelete(middle.id);
-    expect(assets.page({ groupBySeries: true, limit: 1 }).items[0]).toMatchObject({ id: newest.id, series: { count: 2 } });
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: true, limit: 1 }).items[0]).toMatchObject({ id: newest.id, series: { count: 2 } });
   });
 
   it('inherits parent project privacy for captured references and rejects foreign parents', async () => {

@@ -1096,7 +1096,7 @@ export const internalClient = {
       body: jsonBody(input),
       ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
     }),
-  listJobs: async (options: { excludePrivate?: boolean; cursor?: string; limit?: number; modelId?: string; providerId?: string; status?: string } = {}) =>
+  listJobs: async (options: { groupBySeries?: boolean; groupConcurrentImages?: boolean; groupUploadedReferences?: boolean; excludePrivate?: boolean; cursor?: string; limit?: number; modelId?: string; providerId?: string; status?: string } = {}) =>
     requestJson(`/internal/jobs${queryString(options)}`, JobPageSchema),
   getJob: async (jobId: string) =>
     requestJson(`/internal/jobs/${encodeURIComponent(jobId)}`, JobDetailResponseSchema),
@@ -1112,7 +1112,7 @@ export const internalClient = {
     }),
   deleteJob: async (jobId: string) =>
     requestEmpty(`/internal/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
-  listAssets: async (options: { groupConcurrentImages?: boolean; groupBySeries?: boolean; seriesCover?: 'recent' | 'latest' | 'original'; excludePrivate?: boolean; collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
+  listAssets: async (options: { groupUploadedReferences?: boolean; groupConcurrentImages?: boolean; groupBySeries?: boolean; seriesCover?: 'recent' | 'latest' | 'original'; excludePrivate?: boolean; collectionId?: string; cursor?: string; favorite?: boolean; jobId?: string; limit?: number; role?: string; type?: string; search?: string; includeJobs?: boolean } = {}) =>
     requestJson(`/internal/assets${queryString(options)}`, AssetPageSchema),
   getAsset: async (assetId: string) =>
     requestJson(`/internal/assets/${encodeURIComponent(assetId)}`, AssetResponseSchema),
@@ -1137,7 +1137,8 @@ export const internalClient = {
       method: 'PATCH',
       body: jsonBody({ favorite }),
     }),
-  getAssetSeries: async (assetId: string, groupConcurrentImages = false) => requestJson(`/internal/assets/${encodeURIComponent(assetId)}/series${groupConcurrentImages ? "?groupConcurrentImages=true" : ""}`, AssetSeriesResponseSchema),
+  getJobSeries: async (jobId: string, groupConcurrentImages = false, groupUploadedReferences = false) => requestJson(`/internal/jobs/${encodeURIComponent(jobId)}/series?groupConcurrentImages=${groupConcurrentImages}&groupUploadedReferences=${groupUploadedReferences}`, AssetSeriesResponseSchema),
+  getAssetSeries: async (assetId: string, groupConcurrentImages = false, groupUploadedReferences = false) => requestJson(`/internal/assets/${encodeURIComponent(assetId)}/series?groupConcurrentImages=${groupConcurrentImages}&groupUploadedReferences=${groupUploadedReferences}`, AssetSeriesResponseSchema),
   deleteAsset: async (assetId: string) => {
     await requestEmpty(`/internal/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' });
     await clearDerivedMediaForAssets([assetId]).catch(() => undefined);

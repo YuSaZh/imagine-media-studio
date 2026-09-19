@@ -5,7 +5,7 @@ import { copyPrompt } from './copy-prompt';
 import { createSelectionGestureState, LONG_PRESS_DURATION_MS, reduceSelectionGesture } from '../gallery/model/selection-gesture';
 import type { MediaItem } from './data';
 import { Choice, Options } from './ui';
-import type { PendingStudy } from './pending-studies';
+import { groupPendingStudies, type PendingStudy } from './pending-studies';
 import { GenerationStatus } from './generation-status';
 import { formatGenerationTime, generationSeconds } from './generation-time';
 
@@ -13,6 +13,8 @@ const GALLERY_PRELOAD_DISTANCE = 1000;
 
 interface GalleryProps {
   loading?: boolean;
+  onShowJobs?: () => void;
+  onOpenPendingSeries?: (jobId: string) => void;
   onNotice?: (message: string) => void;
   onVideoContinue?: (item: MediaItem, operation: 'edit' | 'extend') => void;
   canEditVideo?: boolean;
@@ -120,7 +122,8 @@ function Card({ item, props, visible, shouldLoad }: { item: MediaItem; props: Ga
 const loadingEntries = [0.8, 1.25, 1, 1.5, 1.1, 0.85, 1.4, 1, 1.25, 0.8, 1.1, 1.4].map((height, index) => ({ type: 'loading' as const, id: `gallery-loading-${index}`, width: 1, height }));
 
 export function Gallery(props: GalleryProps) {
-  const entries = [...(props.pending ?? []).map(task => ({ type: 'task' as const, task, id: task.id, width: task.width, height: task.height })), ...(props.loading ? loadingEntries : props.items.map(item => ({ type: 'asset' as const, item, id: item.id, width: item.width, height: item.height })))];
+  const grouped = groupPendingStudies(props.pending ?? [], props.items);
+  const entries = [...grouped.pending.map(task => ({ type: 'task' as const, task, id: task.id, width: task.width, height: task.height })), ...(props.loading ? loadingEntries : grouped.items.map(item => ({ type: 'asset' as const, item, id: item.id, width: item.width, height: item.height })))];
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState({ width: 1000, margin: 0, measured: false });
@@ -177,10 +180,14 @@ export function Gallery(props: GalleryProps) {
 
 function PendingCard({ task, props }: { task: PendingStudy; props: GalleryProps }) {
   const failed = ['failed', 'rejected', 'expired'].includes(task.status);
-  return <article className={`study-card pending-study ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? '生成失败' : task.kind === 'image' ? '正在生成图片' : '正在生成视频'} aria-busy={!failed}>
-    <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div><div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? '生成失败'}</span> : <><LoaderCircle size={17} className="spin" /><GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />{task.progress !== null && <span>{Math.round(task.progress)}%</span>}</>}<p>{task.prompt}</p></div>
-    {task.jobId && <button type="button" className="pending-study-action" aria-label={failed ? '重试生成' : '取消生成'} title={failed ? '重试生成' : '取消生成'} disabled={!props.online} onClick={() => failed ? props.onRetryJob?.(task.jobId!) : props.onCancelJob?.(task.jobId!)}>{failed ? <RefreshCw size={17} /> : <X size={17} />}</button>}
+  return <article className={`study-card pending-study ${task.cover ? 'has-cover' : ''} ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? '生成失败' : task.kind === 'image' ? '正在生成图片' : '正在生成视频'} aria-busy={!failed}>
+    {!task.cover && task.seriesId && task.jobId && <button className="study-open pending-series-open" aria-label="查看生成中的系列" onClick={() => props.onOpenPendingSeries?.(task.jobId!)} />}
+    {task.cover && <button className="study-open" aria-label={`查看 ${task.cover.title}`} onClick={() => props.onPick(task.cover!)}><Thumbnail item={task.cover} visible={true} shouldLoad={true} /></button>}
+    {!!task.seriesCount && task.seriesCount > 1 && <span className="series-count" aria-label={`系列共 ${task.seriesCount} 件作品`}><Images size={14} /><span>{task.seriesCount}</span></span>}
+    {!task.cover && <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div>}<div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? '生成失败'}</span> : <><LoaderCircle size={17} className="spin" /><GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />{task.progress !== null && <span>{Math.round(task.progress)}%</span>}</>}<p>{task.prompt}</p>{task.members && task.members.length > 1 && <span>{task.members.length} 个任务 · {task.members.filter(member => ['failed', 'rejected', 'expired'].includes(member.status)).length} 个失败</span>}</div>
+    {task.members && task.members.length > 1 && <button type="button" className="pending-study-action" aria-label="查看系列任务" title="查看系列任务" onClick={props.onShowJobs}><MoreHorizontal size={17} /></button>}
+    {(!task.members || task.members.length === 1) && task.jobId && <button type="button" className="pending-study-action" aria-label={failed ? '重试生成' : '取消生成'} title={failed ? '重试生成' : '取消生成'} disabled={!props.online} onClick={() => failed ? props.onRetryJob?.(task.jobId!) : props.onCancelJob?.(task.jobId!)}>{failed ? <RefreshCw size={17} /> : <X size={17} />}</button>}
     {failed && task.prompt && <button type="button" className="card-copy-prompt" aria-label="复制提示词" title="复制提示词" onClick={() => void copyPrompt(task.prompt, props.onNotice ?? (() => {}))}><Copy size={17} /></button>}
-    {failed && task.jobId && <button type="button" className="pending-study-action pending-study-delete" aria-label="删除失败任务" title="删除失败任务" disabled={!props.online} onClick={() => props.onDeleteJob?.(task.jobId!)}><Trash2 size={17} /></button>}
+    {failed && (!task.members || task.members.length === 1) && task.jobId && <button type="button" className="pending-study-action pending-study-delete" aria-label="删除失败任务" title="删除失败任务" disabled={!props.online} onClick={() => props.onDeleteJob?.(task.jobId!)}><Trash2 size={17} /></button>}
   </article>;
 }

@@ -91,7 +91,7 @@ test.beforeEach(async ({ request, page }) => {
   for (const project of (await collections.json()).items) expect((await request.delete(`/internal/collections/${project.id}`)).ok()).toBeTruthy();
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
-  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
 });
 
@@ -469,7 +469,14 @@ test('prompt focus keeps geometry and settings fields share one appearance', asy
     } } })).status()).toBe(201);
     await open(page);
     const input = page.getByLabel('创作描述', { exact: true });
-    await expect(page.locator('.mobile-model-status:visible, .model-trigger:visible').filter({ hasText: 'GPT Image 2' }).first()).toBeVisible();
+    await expect(page.locator('.mobile-model-status')).toHaveCount(0);
+    if (testInfo.project.use.viewport!.width <= 760) {
+      await page.getByRole('button', { name: '生成设置', exact: true }).click();
+      await expect(page.getByLabel('模型与服务', { exact: true })).toContainText('GPT Image 2');
+      await page.keyboard.press('Escape');
+    } else {
+      await expect(page.locator('.model-trigger').filter({ hasText: 'GPT Image 2' })).toBeVisible();
+    }
     const composer = page.locator('.creation-composer');
     const before = (await composer.boundingBox())!;
     const inputBefore = (await input.boundingBox())!;
@@ -3344,4 +3351,85 @@ test.describe('PWA thumbnail reuse', () => {
     expect(await page.evaluate(async url => (await fetch(url)).status, retained.thumbnailUrl)).toBe(404);
     await session.detach();
   });
+});
+
+
+test('pending concurrent series and uploaded reference suboption survive reload', async ({ page, request }, testInfo) => {
+  const reference = await upload(request);
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Pending series fixture', count: 2, inputs: [{ assetId: reference.id, role: 'reference' }] } });
+  expect(response.ok()).toBe(true);
+  const { jobs } = await response.json();
+  const ids = new Set<string>(jobs.map((job: { id: string }) => job.id));
+  for (const id of ids) await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.group_concurrent_images': true } } });
+  const groupedAssets = await (await request.get('/internal/assets?groupBySeries=true&groupConcurrentImages=true')).json();
+  const coverJobId = groupedAssets.items.find((asset: { jobId: string }) => ids.has(asset.jobId)).jobId;
+  let ready = 0;
+  const seriesResponse = async (route: Route) => {
+    const response = await route.fetch(); const data = await response.json();
+    data.assets = data.assets.filter((asset: { jobId: string }) => !ids.has(asset.jobId) || ready === 2 || ready === 1 && asset.jobId === coverJobId);
+    for (const job of data.jobs) if (ids.has(job.id) && (ready === 0 || ready === 1 && job.id !== coverJobId)) { job.status = 'remote_running'; job.completedAt = null; job.outputCount = 0; }
+    await route.fulfill({ response, json: data });
+  };
+  await page.route('**/internal/jobs/*/series?*', seriesResponse);
+  await page.route('**/internal/assets/*/series?*', seriesResponse);
+  await page.route('**/internal/jobs?*', async route => {
+    const response = await route.fetch(); const data = await response.json();
+    for (const job of data.items) if (ids.has(job.id) && (ready === 0 || ready === 1 && job.id !== coverJobId)) { job.status = 'remote_running'; job.completedAt = null; job.outputCount = 0; }
+    await route.fulfill({ response, json: data });
+  });
+  await page.route('**/internal/assets?*', async route => {
+    const response = await route.fetch(); const data = await response.json();
+    data.items = data.items.filter((asset: { jobId: string }) => !ids.has(asset.jobId) || ready > 0);
+    for (const asset of data.items) if (ids.has(asset.jobId) && asset.series) asset.series.count = ready;
+    await route.fulfill({ response, json: data });
+  });
+  await open(page);
+  await expect(page.locator('.pending-study')).toHaveCount(1);
+  await expect(page.getByLabel('系列共 2 件作品')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.pending-study')).toHaveCount(1);
+  await page.getByRole('button', { name: '查看生成中的系列', exact: true }).click();
+  await expect(page.locator('.pending-series-viewer')).toBeVisible();
+  await expect(page.locator('.pending-series-viewer .series-job')).toHaveCount(2);
+  await page.reload();
+  await expect(page.locator('.pending-series-viewer .series-job')).toHaveCount(2);
+  await page.screenshot({ path: testInfo.outputPath('series-before-first-output.png'), animations: 'disabled' });
+  ready = 1;
+  await expect(page.locator('.study-viewer .viewer-image')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('.study-viewer .editing-result')).toHaveCount(2);
+  await expect(page.locator('.study-viewer .series-job')).toHaveCount(1);
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await page.reload();
+  await expect(page.locator('.pending-study.has-cover')).toHaveCount(1);
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  await page.screenshot({ path: testInfo.outputPath('pending-series.png'), animations: 'disabled' });
+  await page.locator('.pending-study.has-cover .study-open').click();
+  await expect(page.locator('.study-viewer .viewer-image')).toBeVisible();
+  await page.locator('.study-viewer .series-job').click();
+  await expect(page.getByLabel('编辑生成状态', { exact: true })).toBeVisible();
+  ready = 2;
+  await expect(page.locator('.study-viewer .viewer-image')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('.study-viewer .series-job')).toHaveCount(0);
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await page.reload();
+  await expect(page.locator('.pending-study')).toHaveCount(0);
+  await open(page, '/settings');
+  await expect(page.getByLabel('上传参考图加入系列', { exact: true })).not.toBeChecked();
+  await page.getByLabel('上传参考图加入系列', { exact: true }).click();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_uploaded_references']).toBe(true);
+  await page.reload();
+  await expect(page.getByLabel('上传参考图加入系列', { exact: true })).toBeChecked();
+  await page.unroute('**/internal/assets?*');
+  await page.unroute('**/internal/jobs?*');
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.getByLabel('系列共 3 件作品')).toBeVisible();
+  await page.locator('.study-open').click();
+  await expect(page.locator('.editing-result')).toHaveCount(3);
+  await open(page, '/settings');
+  await page.getByLabel('上传参考图加入系列', { exact: true }).click();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_uploaded_references']).toBe(false);
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(2);
 });

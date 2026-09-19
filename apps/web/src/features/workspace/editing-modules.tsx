@@ -1,5 +1,6 @@
 import { lazy, type ComponentType } from 'react';
 import type { MediaEditingWorkspace as WorkspaceModule } from './media-editing-workspace';
+import type { PendingSeriesViewer as PendingSeriesModule } from './pending-series-viewer';
 import type { Editor as EditorModule } from './editor';
 import { preloadAfterGallery } from './preload-after-gallery';
 
@@ -22,6 +23,8 @@ function preloadable<Props extends object>(loader: () => Promise<{ default: Comp
 
 const workspace = preloadable<Parameters<typeof WorkspaceModule>[0]>(() => import('./media-editing-workspace').then(module => ({ default: module.MediaEditingWorkspace })));
 const editor = preloadable<Parameters<typeof EditorModule>[0]>(() => import('./editor').then(module => ({ default: module.Editor })));
+const pendingSeries = preloadable<Parameters<typeof PendingSeriesModule>[0]>(() => import('./pending-series-viewer').then(module => ({ default: module.PendingSeriesViewer })));
+export const PendingSeriesViewer = pendingSeries.Component;
 export const MediaEditingWorkspace = workspace.Component;
 export const Editor = editor.Component;
 export function preloadEditingModules(root: HTMLElement) {

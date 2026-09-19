@@ -26,7 +26,7 @@ import { ModelCapabilitiesSchema } from '@imagine/shared';
 import { ReferencePicker } from './reference-picker';
 import { jobStudies, pendingStudies, type PendingStudy } from './pending-studies';
 import type { MediaEditingDrafts } from './media-editing-workspace';
-import { MediaEditingWorkspace, Editor, preloadEditingModules } from './editing-modules';
+import { PendingSeriesViewer, MediaEditingWorkspace, Editor, preloadEditingModules } from './editing-modules';
 import { Choice, Confirm, Options, Panel, Tool } from './ui';
 
 const Settings = lazy(() => import('./settings').then(module => ({ default: module.Settings })));
@@ -46,6 +46,7 @@ export function Workspace() {
   const section = location.pathname.split('/')[1] || 'imagine';
   const projectId = ['projects', 'folders'].includes(section) ? location.pathname.split('/')[2] ?? null : params.get('project');
   const viewerId = params.get('asset');
+  const pendingSeriesJobId = params.get('job');
   const editorId = section === 'edit' ? location.pathname.split('/')[2] : undefined;
   const online = useOnlineStatus();
   const refresh = useRefreshWorkspace();
@@ -114,10 +115,10 @@ export function Workspace() {
     }
   }, [mode, model?.key]);
   const excludePrivate = !projectId && ['imagine', 'library', 'projects', 'folders'].includes(section);
-  const mediaQuery = useMedia({ groupConcurrentImages: preferences.groupBySeries && preferences.groupConcurrentImages, groupBySeries: preferences.groupBySeries && !selecting, seriesCover: preferences.seriesCover, excludePrivate, publicProjectIds: projects.filter(project => !project.isPrivate).map(project => project.id).sort(), kind: filter, saved: section === 'saved', projectId, search: searchQuery });
+  const mediaQuery = useMedia({ groupUploadedReferences: preferences.groupUploadedReferences, groupConcurrentImages: preferences.groupBySeries && preferences.groupConcurrentImages, groupBySeries: preferences.groupBySeries && !selecting, seriesCover: preferences.seriesCover, excludePrivate, publicProjectIds: projects.filter(project => !project.isPrivate).map(project => project.id).sort(), kind: filter, saved: section === 'saved', projectId, search: searchQuery });
   const items = useMemo(() => [...new Map((mediaQuery.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()], [mediaQuery.data]);
   const displayedJobIds = useMemo(() => new Set(items.flatMap(item => item.asset?.jobId ? [item.asset.jobId] : [])), [items]);
-  const jobQuery = useWorkspaceJobs(undefined, excludePrivate);
+  const jobQuery = useWorkspaceJobs(undefined, excludePrivate, { groupBySeries: preferences.groupBySeries && !selecting, groupConcurrentImages: preferences.groupConcurrentImages, groupUploadedReferences: preferences.groupUploadedReferences });
   const jobs = jobQuery.data?.pages.flatMap(page => page.items) ?? [];
   const activeJobs = [...new Map(jobs.filter(job => ACTIVE_JOB_STATUSES.has(job.status)).map(job => [job.id, job])).values()];
   useEffect(() => {
@@ -152,7 +153,7 @@ export function Workspace() {
     // Update every compatible cached page immediately; never move or duplicate a series entry.
     for (const query of queryClient.getQueryCache().findAll({ queryKey: [...internalQueryKeys.assets, 'workspace'] })) {
       const filter = query.queryKey.at(-1) as MediaFilter;
-      if (!filter.groupBySeries || !!filter.groupConcurrentImages !== (preferences.groupBySeries && preferences.groupConcurrentImages) || filter.seriesCover !== 'recent' || filter.projectId !== projectId) continue;
+      if (!filter.groupBySeries || !!filter.groupConcurrentImages !== (preferences.groupBySeries && preferences.groupConcurrentImages) || !!filter.groupUploadedReferences !== preferences.groupUploadedReferences || filter.seriesCover !== 'recent' || filter.projectId !== projectId) continue;
       if (filter.kind !== 'all' && filter.kind !== viewer.kind || filter.saved && !viewer.saved || filter.projectId && !viewer.collectionIds.includes(filter.projectId)) continue;
       if (filter.excludePrivate && viewer.collectionIds.some(id => !filter.publicProjectIds?.includes(id))) continue;
       if (filter.search && ![viewer.prompt, viewer.model, viewer.asset?.originalFilename ?? ''].some(value => value.toLowerCase().includes(filter.search.toLowerCase()))) continue;
@@ -219,7 +220,7 @@ export function Workspace() {
   }, [location.pathname, section, projectId, navigate]);
 
   const go = (path: string) => { setSearch(''); setFilter('all'); setSelected([]); setSelecting(false); setMenuOpen(false); void navigate(path); mainRef.current?.scrollTo({ top: 0 }); galleryScrollRef.current?.scrollTo({ top: 0 }); };
-  const openViewer = (id: string) => { const next = new URLSearchParams(params); next.set('asset', id); setParams(next); };
+  const openViewer = (id: string) => { const next = new URLSearchParams(params); next.delete('job'); next.set('asset', id); setParams(next); };
   const selectViewerItem = (item: MediaItem) => {
     if (item.asset) queryClient.setQueryData([...internalQueryKeys.assets, 'detail', item.id], { asset: item.asset });
     openViewer(item.id);
@@ -245,7 +246,7 @@ export function Workspace() {
       const next = candidates[nextIndex];
       if (!next) return null;
       if (boundary && online) {
-        const family = await queryClient.fetchQuery({ queryKey: seriesKey(next.id, preferences.groupBySeries && preferences.groupConcurrentImages), queryFn: () => fetchSeries(queryClient, next.id, preferences.groupBySeries && preferences.groupConcurrentImages), staleTime: 30000 });
+        const family = await queryClient.fetchQuery({ queryKey: seriesKey(next.id, preferences.groupBySeries && preferences.groupConcurrentImages, preferences.groupUploadedReferences), queryFn: () => fetchSeries(queryClient, next.id, preferences.groupBySeries && preferences.groupConcurrentImages, preferences.groupUploadedReferences), staleTime: 30000 });
         if (viewerLocation.current !== locationAtStart) return null;
         const asset = delta > 0 ? family.assets[0] : family.assets.at(-1);
         if (asset) return mapMedia(asset, family.jobs.find(job => job.id === asset.jobId));
@@ -263,7 +264,7 @@ export function Workspace() {
     } catch { notify('下一件作品暂时无法读取，请重试', true); return false; }
     finally { movingViewer.current = false; }
   };
-  const closeViewer = () => { const next = new URLSearchParams(params); next.delete('asset'); setParams(next, { replace: true }); };
+  const closeViewer = () => { const next = new URLSearchParams(params); next.delete('asset'); next.delete('job'); setParams(next, { replace: true }); };
   const select = (item: MediaItem) => { setSelecting(true); setSelected(current => current.some(value => value.id === item.id) ? current.filter(value => value.id !== item.id) : [...current, item]); };
   const save = (item: MediaItem) => void run(`save:${item.id}`, async () => { await internalClient.patchAsset(item.id, !item.saved); }, item.saved ? '已取消收藏' : '已加入收藏');
   const remove = (targets: MediaItem[]) => setConfirmation({ title: `删除 ${targets.length} 件作品？`, description: '这会删除服务器上的作品及其媒体文件，此操作无法撤销。', action: async () => {
@@ -296,7 +297,7 @@ export function Workspace() {
     const submitted = creation.prompt;
     await run('create', async () => {
       const request = { ...generationRequest(creation), ...(projectId ? { collectionId: projectId } : {}) };
-      setOptimisticStudies(pendingStudies(request, { id: createBrowserId(), createdAt: new Date().toISOString(), status: 'submitting', progress: null }));
+      setOptimisticStudies(pendingStudies(request, { id: createBrowserId(), ...(preferences.groupBySeries && preferences.groupConcurrentImages && mode === 'image' ? { seriesId: `optimistic:${createBrowserId()}` } : {}), createdAt: new Date().toISOString(), status: 'submitting', progress: null }));
       const result = await internalClient.createJob(request, createBrowserId());
       for (const job of result.jobs ?? [result.job]) trackedJobs.current.add(job.id);
       if (preferences.clearPromptAfterSubmit && promptRef.current === submitted) setPrompt('');
@@ -402,13 +403,14 @@ export function Workspace() {
         {isProjects && !projectId ? <>{catalog.projects.isError && <p className="error-state">项目加载失败<button onClick={() => void catalog.projects.refetch()}>重试</button></p>}<div className="project-grid">{projects.map(project => <article className="project-tile" key={project.id}><button className="project-open" onClick={() => go(`/projects/${project.id}`)}><div className={`project-cover${project.isPrivate ? ' is-private' : ''}`} aria-label={project.isPrivate ? '隐私项目封面已模糊' : undefined}>{!project.isPrivate && items.filter(item => item.collectionIds.includes(project.id)).slice(0, 3).map(item => <img key={item.id} src={item.thumbnail} alt="" />)}<Folder size={28} strokeWidth={1.3} />{project.isPrivate && <span className="private-project-label"><LockKeyhole size={22} /><span>隐私项目</span></span>}</div><span><strong>{project.name}</strong><small>{project.itemCount} 件作品</small></span><ArrowUpRight size={18} /></button></article>)}<button className="new-project-tile" disabled={!online} onClick={() => editProject('new')}><FolderPlus size={26} /><span>新建项目</span></button></div></> : <>
           <div className="library-filter" role="group" aria-label="作品类型">{[{ key: 'all' as const, label: '全部' }, { key: 'image' as const, label: '图片' }, { key: 'video' as const, label: '视频' }].map(item => <button key={item.key} type="button" aria-pressed={filter === item.key} onClick={() => setFilter(item.key)}>{item.label}</button>)}{selecting && <button className="select-all" onClick={() => setSelected(selected.length === items.length ? [] : items)}>选择已加载作品</button>}</div>
           <div className="gallery-scroll" ref={galleryScrollRef} aria-busy={mediaQuery.isFetching}>
-            {!mediaQuery.isPending && !items.length && !(isCreate && pending.length) && !mediaQuery.isError ? <div className="empty-state"><ImageIcon size={34} strokeWidth={1.2} /><h3>{searchQuery ? '没有找到相关作品' : section === 'saved' ? '还没有收藏' : projectId ? '这个项目还没有作品' : '还没有作品'}</h3><button className="quiet-command" onClick={() => { if (searchQuery) setSearch(''); else { go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1); } }}>{searchQuery ? '清除搜索' : '开始创作'}</button></div> : <Gallery key={mediaQuery.isPending ? 'loading' : 'assets'} loading={mediaQuery.isPending} onMoveProject={setMovingItem} onNotice={notify} canEditVideo={models.some(item => item.capabilities.operations.includes('video.edit'))} canExtendVideo={models.some(item => item.capabilities.operations.includes('video.extend'))} onVideoContinue={(item, operation) => void continueVideo(item, operation)} onReference={item => void useCardReference(item)} onDeleteJob={id => { void run(`delete-job:${id}`, async () => { await internalClient.deleteJob(id); trackedJobs.current.delete(id); }); }} items={items} pending={isCreate ? pending : []} onCancelJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onCancel(job); }} onRetryJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onRetry(job); }} scrollRef={layout === 'desktop' ? galleryScrollRef : mainRef} selecting={selecting} selected={selected.map(item => item.id)} online={online && busy === 0} onPick={item => selecting ? select(item) : openViewer(item.id)} onSelect={select} onSave={save} onDelete={item => remove([item])} hasMore={!!mediaQuery.hasNextPage} fetching={mediaQuery.isFetchingNextPage} error={mediaQuery.isError} onMore={() => { if (!mediaQuery.isFetchingNextPage) void mediaQuery.fetchNextPage(); }} onRetry={() => void mediaQuery.refetch()} />}
+            {!mediaQuery.isPending && !items.length && !(isCreate && pending.length) && !mediaQuery.isError ? <div className="empty-state"><ImageIcon size={34} strokeWidth={1.2} /><h3>{searchQuery ? '没有找到相关作品' : section === 'saved' ? '还没有收藏' : projectId ? '这个项目还没有作品' : '还没有作品'}</h3><button className="quiet-command" onClick={() => { if (searchQuery) setSearch(''); else { go(projectId ? `/projects/${projectId}` : '/imagine'); setFocusToken(value => value + 1); } }}>{searchQuery ? '清除搜索' : '开始创作'}</button></div> : <Gallery onOpenPendingSeries={id => { const next = new URLSearchParams(params); next.delete('asset'); next.set('job', id); setParams(next); }} onShowJobs={() => setTaskOpen(true)} key={mediaQuery.isPending ? 'loading' : 'assets'} loading={mediaQuery.isPending} onMoveProject={setMovingItem} onNotice={notify} canEditVideo={models.some(item => item.capabilities.operations.includes('video.edit'))} canExtendVideo={models.some(item => item.capabilities.operations.includes('video.extend'))} onVideoContinue={(item, operation) => void continueVideo(item, operation)} onReference={item => void useCardReference(item)} onDeleteJob={id => { void run(`delete-job:${id}`, async () => { await internalClient.deleteJob(id); trackedJobs.current.delete(id); }); }} items={items} pending={isCreate ? pending : []} onCancelJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onCancel(job); }} onRetryJob={id => { const job = jobs.find(job => job.id === id); if (job) jobActions.onRetry(job); }} scrollRef={layout === 'desktop' ? galleryScrollRef : mainRef} selecting={selecting} selected={selected.map(item => item.id)} online={online && busy === 0} onPick={item => selecting ? select(item) : openViewer(item.id)} onSelect={select} onSave={save} onDelete={item => remove([item])} hasMore={!!mediaQuery.hasNextPage} fetching={mediaQuery.isFetchingNextPage} error={mediaQuery.isError} onMore={() => { if (!mediaQuery.isFetchingNextPage) void mediaQuery.fetchNextPage(); }} onRetry={() => void mediaQuery.refetch()} />}
           </div>
         </>}
       </section>}
     </main>
-    {hasGallery && <BackToTop key={`${location.pathname}:${layout}:${mode}:${model?.key ?? ""}:${videoMode}`} scrollRef={layout === 'desktop' ? galleryScrollRef : mainRef} galleryRef={galleryScrollRef} workspaceRef={mainRef} hasComposer={isCreate} hidden={selecting || !!viewerId || !!editorId} reduceMotion={preferences.reduceMotion} />}
+    {hasGallery && <BackToTop key={`${location.pathname}:${layout}:${mode}:${model?.key ?? ""}:${videoMode}`} scrollRef={layout === 'desktop' ? galleryScrollRef : mainRef} galleryRef={galleryScrollRef} workspaceRef={mainRef} hasComposer={isCreate} hidden={selecting || !!viewerId || !!pendingSeriesJobId || !!editorId} reduceMotion={preferences.reduceMotion} />}
     {selecting && <div className={`batch-toolbar ${isCreate ? '' : 'batch-toolbar-library'}`}><span>已选 {selected.length} 件</span><Tool label="收藏所选作品" disabled={!selected.length || !online || busy > 0} onClick={() => void run('bulk-save', async () => { for (const item of selected) await internalClient.patchAsset(item.id, true); }, '已加入收藏')}><Bookmark size={18} /></Tool><Options label="将所选作品加入项目" trigger={<FolderPlus size={18} />}><div className="option-heading">项目</div>{projects.map(project => <Choice key={project.id} active={false} onClick={() => void run('bulk-project', async () => { if (!selected.length) return; await internalClient.addCollectionAssets(project.id, selected.map(item => item.id)); setSelected([]); setSelecting(false); }, '已加入项目')}>{project.name}</Choice>)}</Options><Tool label="删除所选作品" disabled={!selected.length || !online || busy > 0} onClick={() => remove(selected)}><Trash2 size={18} /></Tool><Tool label="关闭多选" onClick={() => { setSelected([]); setSelecting(false); }}><X size={18} /></Tool></div>}
+    {pendingSeriesJobId && !viewerId && <Suspense fallback={<Panel open title="生成系列" onClose={closeViewer}><p className="loading-state">正在加载系列…</p></Panel>}><PendingSeriesViewer key={pendingSeriesJobId} jobId={pendingSeriesJobId} online={online} onClose={closeViewer} onSelectResult={selectViewerItem} /></Suspense>}
     {viewer && !viewerQuery.isError && <Suspense fallback={<Panel open title="作品编辑" onClose={closeViewer}><p className="loading-state">正在加载编辑工作区…</p></Panel>}><MediaEditingWorkspace models={models} projectId={projectId} layout={layout} drafts={editingDrafts.current} onSelectResult={selectViewerItem} onBrowseEntry={moveViewerEntry} onResolveEntry={resolveViewerEntry} item={viewer} index={Math.max(0, items.findIndex(item => item.id === viewer.id))} total={Math.max(1, items.length)} projects={projects} online={online} busy={busy > 0} providerName={catalog.providers.data?.find(provider => provider.id === viewer.providerId)?.name ?? '本地上传'} onClose={closeViewer} onMove={delta => { const index = items.findIndex(item => item.id === viewer.id); const next = items[(Math.max(0, index) + delta + items.length) % items.length]; if (next) openViewer(next.id); }} onSave={() => save(viewer)} onDelete={() => remove([viewer])} onProject={(id, included) => void run('project-membership', async () => { if (included) await internalClient.addCollectionAssets(id, [viewer.id]); else await internalClient.removeCollectionAsset(id, viewer.id); }, included ? '已加入项目' : '已移出项目')} onNotice={notify} /></Suspense>}
     {viewerId && (viewerQuery.isError || (!viewer && !online)) && <Panel open title="作品不可用" onClose={closeViewer}><p className="error-state">作品已删除或暂时无法加载。</p></Panel>}
     {editorId && <Suspense fallback={<Panel open title="局部编辑" onClose={() => go(projectId ? `/projects/${projectId}` : '/imagine')}><p className="loading-state">正在加载编辑器…</p></Panel>}><Editor assetId={editorId} onClose={() => go(projectId ? `/projects/${projectId}` : '/imagine')} onApply={(source, mask, document) => { editingDrafts.current.set(generationMemoryScope(projectId, source.id), { prompt: '', mode: 'image', references: [], mask, document, jobs: [] }); go(`${projectId ? `/projects/${projectId}` : '/imagine'}?asset=${encodeURIComponent(source.id)}`); void refresh(); }} /></Suspense>}

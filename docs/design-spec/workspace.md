@@ -95,6 +95,10 @@ changes must preserve the other layout's behavior.
   locked settings remain disabled. Changing aspect ratio retains the selected
   preset and recalculates pixel dimensions; custom width/height inputs validate
   before applying and remembered settings remain scoped to the current model.
+- Mobile Composer omits the bottom provider/model, size and count summary row.
+  Model selection remains in generation settings; image shortcuts retain ratio,
+  resolution and count controls. This applies to creation and editing, in both
+  image and video modes.
 - Mobile image mode additionally exposes aspect ratio, resolution and count as
   compact icon/value buttons alongside the image/video switch in the main
   toolbar, using the desktop button appearance without filled tiles or a
@@ -330,6 +334,24 @@ Batch links survive retries and restart, and all existing cover/filter/privacy a
 pagination rules apply. The asset-list and series-detail APIs accept the optional
 `groupConcurrentImages=true` query flag; gallery grouping still requires
 `groupBySeries=true`. Browser query keys include the effective grouping choice.
+
+Series placeholders use the same account-scoped graph roots as asset entries from
+submission onward. Queued/running jobs share one entry, including after reload;
+partially completed series keep their cover and remaining jobs in that entry.
+The count includes visible outputs and pending/failed members. Clicking a pending series card opens `?job=<id>` before any output exists.
+The account-scoped `/internal/jobs/:id/series` endpoint reconstructs the same family
+from its job anchor; SSE and polling update its task strip and completed outputs.
+The first available output opens automatically unless another pending task was
+selected; completed thumbnails remain immediately selectable. Closing the viewer
+does not cancel jobs, and reloading the job URL restores the pending series.
+The task-menu button opens task management, where cancellation/retry stays per job.
+The nested “上传参考图加入系列” preference defaults off and persists independently
+of the parent switch. When enabled, primary uploaded references join their outputs;
+when disabled, uploads remain independent gallery entries and are omitted from the
+output series. Source/first-frame lineage is unchanged. Asset pages, job pages and
+series details accept `groupUploadedReferences`; job pages optionally return a
+`seriesId` using the same graph. These flags partition frontend caches.
+
 When enabled, recent creations, All Works, favorites and project galleries merge
 each editing series into one entry with a bottom-left member-count badge and stacked-image icon, leaving the top-left video duration unobstructed. Hover captions reserve room above the badge. Grouping
 runs on the server before cursor pagination. The latest matching member anchors

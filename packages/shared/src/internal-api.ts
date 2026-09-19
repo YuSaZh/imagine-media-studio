@@ -1094,6 +1094,7 @@ export const ModelPageSchema = z.object({
 export const ModelsResponseSchema = z.object({ items: z.array(ModelDtoSchema) }).strict();
 
 export const JobDtoSchema = z.object({
+  seriesId: z.string().min(1).optional(),
   id: z.string().min(1),
   operation: MediaOperationSchema,
   providerId: z.string().min(1),

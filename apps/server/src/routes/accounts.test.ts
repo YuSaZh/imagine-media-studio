@@ -100,6 +100,11 @@ describe('account boundaries', () => {
       const created = await server.app.inject({ method: 'POST', url: '/internal/jobs', headers: admin, payload: createMockGenerationRequest({ count: 3 }) });
       expect(created.statusCode).toBe(202);
       expect(created.json().jobs).toHaveLength(3);
+      const series = await server.app.inject({ url: `/internal/jobs/${created.json().job.id}/series?groupConcurrentImages=true`, headers: admin });
+      expect(series.statusCode).toBe(200);
+      expect(series.json().jobs).toHaveLength(3);
+      expect(series.json().assets).toEqual([]);
+      expect((await server.app.inject({ url: '/internal/jobs/missing/series', headers: admin })).statusCode).toBe(404);
       for (const job of created.json().jobs) expect(server.jobs.get(job.id)?.request.count).toBe(1);
     }
     const rejected = await server.app.inject({ method: 'POST', url: '/internal/jobs', headers: admin, payload: createMockGenerationRequest({ count: 33 }) });
@@ -124,7 +129,7 @@ describe('account boundaries', () => {
       const result = await server.app.inject({ url: `/internal/${path}`, headers: alice });
       expect(result.statusCode).toBe(200); expect(result.json().items).toEqual([]);
     }
-    for (const path of [`assets/${asset.id}`, `assets/${asset.id}/content`, `assets/${asset.id}/thumbnail`, `assets/${asset.id}/series`, `jobs/${oldJob.id}`, `collections/${oldCollection.id}`]) {
+    for (const path of [`assets/${asset.id}`, `assets/${asset.id}/content`, `assets/${asset.id}/thumbnail`, `assets/${asset.id}/series`, `jobs/${oldJob.id}`, `jobs/${oldJob.id}/series?groupConcurrentImages=true`, `collections/${oldCollection.id}`]) {
       expect((await server.app.inject({ url: `/internal/${path}`, headers: alice })).statusCode).toBe(404);
       expect((await server.app.inject({ method: 'DELETE', url: `/internal/${path}`, headers: alice })).statusCode).toBe(404);
     }

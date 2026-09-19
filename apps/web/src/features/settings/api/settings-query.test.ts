@@ -17,6 +17,7 @@ describe('readGeneralSettings', () => {
     ).toEqual({
       groupBySeries: true,
       groupConcurrentImages: true,
+      groupUploadedReferences: false,
       seriesCover: 'recent',
       autoplayPreviews: true,
       clearPromptAfterSubmit: false,
@@ -35,6 +36,7 @@ describe('readGeneralSettings', () => {
     ).toEqual({
       groupBySeries: false,
       groupConcurrentImages: false,
+      groupUploadedReferences: false,
       seriesCover: 'latest',
       autoplayPreviews: false,
       clearPromptAfterSubmit: true,
