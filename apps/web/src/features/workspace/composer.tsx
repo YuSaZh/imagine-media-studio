@@ -1,6 +1,8 @@
+import { useComposerExpansion } from './use-composer-expansion';
+import { useSegmentIndicator, type SegmentMemory } from './use-segment-indicator';
 import { usePromptHeight } from './use-prompt-height';
 import { Select, SelectItem } from './select';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type RefObject } from 'react';
 import { DEFAULT_IMAGE_INPUT_POLICY, ModelCapabilitiesSchema, type JsonObject, type MediaOperation } from '@imagine/shared';
 import { ArrowUp, Check, Image as ImageIcon, LoaderCircle, Plus, Ratio, RefreshCw, SlidersHorizontal, Upload, Video, X } from 'lucide-react';
 import { COMPOSER_DRAFT_MAX_PROMPT_LENGTH } from '../composer/model/composer-draft';
@@ -23,6 +25,7 @@ import { IMAGE_RESOLUTIONS, imageResolutionLabel, imageResolutionValue } from '.
 import type { WorkspaceLayout } from './workspace-layout';
 
 interface ComposerProps {
+  stateKey: string;
   editing?: { compact: boolean; onExpand: () => void; sourceId: string; videoModes?: readonly ('edit' | 'extend')[]; busy?: boolean; sourceLabel?: string };
   operationOverride?: MediaOperation;
   layout: WorkspaceLayout;
@@ -52,6 +55,42 @@ interface ComposerProps {
 const UPLOAD_STATUS = { queued: '等待上传', preprocessing: '准备图片', uploading: '正在上传', ready: '已上传', error: '上传失败' };
 
 export function Composer(props: ComposerProps) {
+  const mediaIndicator = useRef<SegmentMemory>(null);
+  const videoIndicator = useRef<SegmentMemory>(null);
+  const [focusWithin, setFocusWithin] = useState(false);
+  const blurFrame = useRef<number | null>(null);
+  const focusTarget = useRef<string | null>(null);
+  const composer = useRef<HTMLFormElement>(null);
+  const mobileMain = props.layout === 'mobile' && !props.editing;
+  const onFocus = (event: FocusEvent<HTMLFormElement>) => {
+    if (blurFrame.current !== null) cancelAnimationFrame(blurFrame.current);
+    setFocusWithin(true);
+    const target = event.target as HTMLElement;
+    focusTarget.current = target.closest('.mode-segments') ? '.mode-segments'
+      : target.dataset.videoMode ? `[data-video-mode="${target.dataset.videoMode}"]`
+      : target.closest('.options') ? '.generation-settings-trigger' : 'textarea';
+  };
+  const onBlur = () => {
+    if (blurFrame.current !== null) cancelAnimationFrame(blurFrame.current);
+    // Portal focus events bubble through React too; allow them to cancel this collapse.
+    blurFrame.current = requestAnimationFrame(() => { setFocusWithin(false); focusTarget.current = null; });
+  };
+  useLayoutEffect(() => {
+    if (focusTarget.current && document.activeElement === document.body) composer.current?.querySelector<HTMLElement>(focusTarget.current)?.focus({ preventScroll: true });
+  }, [props.stateKey]);
+  useEffect(() => () => { if (blurFrame.current !== null) cancelAnimationFrame(blurFrame.current); }, []);
+  return <ComposerFields {...props} key={props.stateKey} composerRef={composer} mediaIndicator={mediaIndicator} videoIndicator={videoIndicator}
+    compact={props.editing?.compact ?? (mobileMain ? !focusWithin && !props.prompt.length && !props.references.length && !props.uploads.state.entries.length : undefined)} onFocusCapture={onFocus} onBlurCapture={onBlur} />;
+}
+
+function ComposerFields(props: ComposerProps & {
+  composerRef: RefObject<HTMLFormElement | null>;
+  mediaIndicator: RefObject<SegmentMemory>;
+  videoIndicator: RefObject<SegmentMemory>;
+  compact: boolean | undefined;
+  onFocusCapture: (event: FocusEvent<HTMLFormElement>) => void;
+  onBlurCapture: () => void;
+}) {
   const { model, mode, prompt, references, uploads, videoMode } = props;
   const operation = props.operationOverride ?? operationFor(mode, videoMode, references);
   const capabilities = ModelCapabilitiesSchema.safeParse(model?.raw.capabilities);
@@ -79,8 +118,13 @@ export function Composer(props: ComposerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [promptFocused, setPromptFocused] = useState(false);
-  usePromptHeight(textareaRef, prompt, props.layout === 'mobile', promptFocused, props.editing?.compact ?? false);
-  const composerRef = useRef<HTMLFormElement>(null);
+  usePromptHeight(textareaRef, prompt, props.layout === 'mobile', promptFocused, props.compact ?? false);
+  const composerRef = props.composerRef;
+  useComposerExpansion(composerRef, props.compact);
+  const mediaSegments = useRef<HTMLButtonElement>(null);
+  const videoSegments = useRef<HTMLDivElement>(null);
+  useSegmentIndicator(mediaSegments, mode, props.mediaIndicator);
+  useSegmentIndicator(videoSegments, videoMode, props.videoIndicator);
   const dragDepth = useRef(0);
   const policy = model?.capabilities.inputImagePolicy ?? DEFAULT_IMAGE_INPUT_POLICY;
   const descriptors = references.map(input => ({ fileSize: input.asset.fileSize, mimeType: input.asset.mimeType, width: input.asset.width ?? 0, height: input.asset.height ?? 0 }));
@@ -202,13 +246,10 @@ export function Composer(props: ComposerProps) {
     { key: 'edit' as const, label: '编辑视频', operation: 'video.edit' as const },
     { key: 'extend' as const, label: '续写视频', operation: 'video.extend' as const },
   ].filter(option => props.editing?.videoModes ? props.editing.videoModes.some(mode => mode === option.key) : props.models.some(candidate => candidate.capabilities.operations.includes(option.operation) && (option.key !== 'first_last_frame' || ModelCapabilitiesSchema.parse(candidate.raw.capabilities).operationPolicies?.['video.image_to_video']?.inputRoles?.includes('last_frame'))));
-  const videoInputChoices = (!props.editing || !!props.editing.videoModes) && mode === 'video' && videoModes.length > 1 ? props.layout === 'mobile' && videoModes.length > 3
-    ? <div className="video-input-choices" aria-label="视频输入方式" role="group"><Options label="选择视频输入方式" className="video-input-menu" trigger={<span>{videoModes.find(option => option.key === videoMode)?.label ?? '视频模式'}</span>}>
-      <div className="option-heading">视频输入方式</div>{videoModes.map(option => <Choice key={option.key} active={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</Choice>)}
-    </Options></div>
-    : <div className="video-input-choices segments" aria-label="视频输入方式" role="group">{videoModes.map(option => <button type="button" key={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div> : null;
+  const videoInputChoices = (!props.editing || !!props.editing.videoModes) && mode === 'video' && videoModes.length > 1
+    ? <div ref={videoSegments} className="video-input-choices segments sliding-segments" aria-label="视频输入方式" role="group"><span className="segment-indicator" aria-hidden="true" />{videoModes.map(option => <button type="button" key={option.key} data-video-mode={option.key} aria-pressed={videoMode === option.key} onClick={() => props.onVideoMode(option.key)}>{option.label}</button>)}</div> : null;
 
-  return <form className={`creation-composer composer-${props.layout} ${props.editing?.compact ? 'composer-compact' : ''} ${props.editing ? 'composer-embedded' : ''} ${dragging ? 'is-dragging' : ''}`} ref={composerRef} aria-label="生成工作区" onSubmit={event => { event.preventDefault(); submit(); }}
+  return <form className={`creation-composer composer-${props.layout} ${props.compact ? 'composer-compact' : ''} ${props.editing ? 'composer-embedded' : 'composer-main'} ${dragging ? 'is-dragging' : ''}`} ref={composerRef} aria-label="生成工作区" onFocusCapture={props.onFocusCapture} onBlurCapture={props.onBlurCapture} onSubmit={event => { event.preventDefault(); submit(); }}
     onDragEnter={event => { event.preventDefault(); dragDepth.current += 1; setDragging(true); }}
     onDragOver={event => event.preventDefault()}
     onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); }}
@@ -233,19 +274,18 @@ export function Composer(props: ComposerProps) {
     {!props.online ? <p className="composer-notice" role="status">当前离线，草稿已保留</p> : !model && !props.loading && (!props.editing || promptFocused) ? <div className="composer-notice" role="status"><span>没有支持当前创作类型的模型</span><button type="button" onClick={props.onConnections}>配置连接</button></div> : null}
     {uploads.state.rejections.length > 0 && <div className="composer-notice" role="alert"><span>{uploads.state.rejections.map(item => `${item.name}：${item.reason}`).join('；')}</span><button type="button" onClick={uploads.clearRejections}>关闭</button></div>}
     {invalidReferences && references.length > 0 && <p className="composer-notice" role="alert">{videoSourceMode ? '源视频的格式、时长或大小与当前模型不兼容，请更换素材。' : '参考图的角色、数量或大小与当前模型不兼容，请移除或切换模型。'}</p>}
-    {props.layout === 'desktop' && videoInputChoices && <div className="desktop-video-mode-row">{videoInputChoices}</div>}
+    {videoInputChoices && <div className={props.layout === 'desktop' ? 'desktop-video-mode-row' : 'mobile-video-mode-row'}>{videoInputChoices}</div>}
     <div className="creation-controls">
       <input ref={inputRef} hidden type="file" aria-label={videoSourceMode ? '上传源视频' : '上传参考图'} accept={videoSourceMode ? 'video/mp4' : 'image/*'} multiple={!videoSourceMode} onChange={event => { props.onFiles([...event.target.files ?? []]); event.target.value = ''; }} />
       {uploadAllowed ? <Options label={videoSourceMode ? '添加源视频' : '添加参考图'} className="reference-trigger" trigger={<Plus size={20} />}>
         {fileUploadAllowed && <Choice active={false} onClick={() => inputRef.current?.click()}><Upload size={16} />{videoSourceMode ? '上传新视频' : '上传新图片'}</Choice>}
         <Choice active={false} onClick={props.onLibrary}><ImageIcon size={16} />从资源库选择</Choice>
       </Options> : <Tool label="添加参考图" className="reference-trigger" disabled><Plus size={20} /></Tool>}
-      <div className="mode-switch" role="group" aria-label="创作类型"><button className="segments mode-segments" type="button" disabled={props.editing?.busy} aria-label="切换图片/视频" aria-pressed={mode === 'video'} title={mode === 'image' ? '切换到视频' : '切换到图片'} onClick={() => props.onMode(mode === 'image' ? 'video' : 'image')}><span className="mode-segment" data-mode="image" data-active={mode === 'image'} aria-hidden="true"><ImageIcon size={15} /><span>图片</span></span><span className="mode-segment" data-mode="video" data-active={mode === 'video'} aria-hidden="true"><Video size={16} /><span>视频</span></span></button></div>
+      <div className="mode-switch" role="group" aria-label="创作类型"><button ref={mediaSegments} className="segments mode-segments sliding-segments" type="button" disabled={props.editing?.busy} aria-label="切换图片/视频" aria-pressed={mode === 'video'} title={mode === 'image' ? '切换到视频' : '切换到图片'} onClick={() => props.onMode(mode === 'image' ? 'video' : 'image')}><span className="segment-indicator" aria-hidden="true" /><span className="mode-segment" data-mode="image" data-active={mode === 'image'} aria-hidden="true"><ImageIcon size={15} /><span>图片</span></span><span className="mode-segment" data-mode="video" data-active={mode === 'video'} aria-hidden="true"><Video size={16} /><span>视频</span></span></button></div>
       {props.layout === 'mobile' && mode === 'image' && <div className="mobile-image-shortcuts" role="group" aria-label="图片快捷设置">
         <Options label="选择画幅" className="ratio-trigger" disabled={!model || !ratioOptions.length || ratioRule?.locked === true} trigger={<><Ratio size={15} /><span>{selectedRatio}</span></>}><div className="option-heading">画幅</div><AspectRatioChoices options={ratioOptions} value={selectedRatio} onChange={chooseRatio} /></Options>
         <ImageGenerationOptions onUnlock={unlockImageRatio} model={model} ratio={selectedRatio} resolution={resolution === 'custom' ? `${customWidth}x${customHeight}` : resolution} count={count} parameters={parameters} onResolution={chooseImageResolution} onCount={setCount} onParameters={setParameters} />
       </div>}
-      {props.layout === 'mobile' && <div className="video-input-row">{videoInputChoices}</div>}
       <Options label="选择生成模型" className="model-trigger" trigger={<><span className="model-dot" /><span>{model?.name ?? '选择模型'}</span></>}><div className="option-heading">模型与服务</div>{modelOptions.map(option => <Choice key={option.key} active={model?.key === option.key} onClick={() => props.onModel(option.key)}><span className="choice-copy"><strong>{option.name}</strong><small>{option.providerName}</small></span>{model?.key === option.key && <Check size={15} />}</Choice>)}</Options>
       {model && ratioOptions.length > 0 && <Options label="选择画幅" className="ratio-trigger" disabled={ratioRule?.locked === true} trigger={<><Ratio size={15} /><span>{selectedRatio}</span></>}><div className="option-heading">画幅</div><AspectRatioChoices options={ratioOptions} value={selectedRatio} onChange={chooseRatio} /></Options>}
       {props.layout === 'desktop' && mode === 'image' && <ImageGenerationOptions onUnlock={unlockImageRatio} model={model} ratio={selectedRatio} resolution={resolution === 'custom' ? `${customWidth}x${customHeight}` : resolution} count={count} parameters={parameters} onResolution={chooseImageResolution} onCount={setCount} onParameters={setParameters} />}

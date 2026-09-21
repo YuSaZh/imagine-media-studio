@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ArrowLeft, Bookmark, ChevronLeft, ChevronRight, Download, Info } from 'lucide-react';
 import { VIEWER_EDGE_BACK_WIDTH, VIEWER_EDGE_BACK_THRESHOLD, createViewerGestureState, setViewerGestureTransform, transitionViewerGesture, type ViewerGestureLayout } from '../viewer/model/viewer-gestures';
@@ -6,8 +6,13 @@ import { mediaExtension, type MediaItem, type Project } from './data';
 import { Tool } from './ui';
 import type { ViewerMotion } from './viewer-motion';
 import { ViewerInfo } from './viewer-info';
+import type { ViewerEntryMotion } from './use-viewer-entry';
+import { ProgressiveViewerImage } from './progressive-viewer-image';
 
 export interface ViewerProps {
+  entryMotion?: ViewerEntryMotion;
+  entryOpening?: boolean;
+  entryReady?: boolean;
   motion?: ViewerMotion;
   editingControls?: ReactNode;
   canPrevious?: boolean;
@@ -47,6 +52,7 @@ export function Viewer(props: ViewerProps) {
   const mountStage = useCallback((node: HTMLDivElement | null) => { stageRef.current = node; setStageNode(node); props.motion?.attach(node); }, [props.motion]);
   const focusRef = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
   const lastTap = useRef(0);
+  useLayoutEffect(() => { if (stageNode && props.entryReady !== false) props.entryMotion?.attach(stageNode, item.id); }, [stageNode, item.id, props.entryMotion, props.entryReady]);
 
   useEffect(() => {
     const initial = createViewerGestureState();
@@ -131,7 +137,7 @@ export function Viewer(props: ViewerProps) {
           onLostPointerCapture={event => apply(transitionViewerGesture(gestureRef.current, { type: 'lostcapture', pointerId: event.pointerId }))}
           onPointerCancel={event => apply(transitionViewerGesture(gestureRef.current, { type: 'pointercancel', pointerId: event.pointerId }))}>
           {props.stageContent ?? (mediaError ? <p className="media-error" role="alert">原文件暂时无法加载<button className="quiet-command" onClick={() => setMediaError(false)}>重试</button></p> : <>
-            {image && <img className="viewer-image" src={props.previewSrc ?? (props.online ? item.src : item.thumbnail)} alt={item.title} draggable={false} onError={() => setMediaError(true)} style={{ transform: `translate(${gesture.position.x}px, ${gesture.position.y}px) scale(${gesture.scale})` }} />}
+            {image && <ProgressiveViewerImage key={item.id} item={item} source={props.previewSrc ?? (props.online ? item.src : item.thumbnail)} opening={props.entryOpening ?? false} style={{ transform: `translate(${gesture.position.x}px, ${gesture.position.y}px) scale(${gesture.scale})` }} />}
             {item.kind === 'video' && (props.online ? <video key={item.id} ref={props.videoRef} src={item.src} poster={item.poster ?? undefined} controls playsInline preload="auto" className="viewer-image viewer-source-video" aria-label="原视频" aria-hidden={image} style={image ? { display: 'none' } : undefined} onLoadedMetadata={event => { const video = event.currentTarget, time = props.initialVideoTime ?? 0; if (time > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration); }} onTimeUpdate={event => props.onVideoTime?.(event.currentTarget.currentTime)} onSeeked={event => props.onVideoTime?.(event.currentTarget.currentTime)} onError={() => { if (!image) setMediaError(true); }} /> : !image && <img className="viewer-image" src={item.poster ?? item.thumbnail} alt={item.title} />)}
           </>)}
 

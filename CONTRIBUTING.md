@@ -73,36 +73,40 @@ Existing explicit authorization does not need repeated confirmation.
 
 ## Verification
 
-For ordinary changes, run checks for the affected modules and behavior; complete
-CI is not required after every edit or ordinary push. Before a release, the final
-prepared source must pass complete local CI equivalent to GitHub CI. Then push
-the release commit to GitHub and the matching version tag. These requirements
-apply to this project. The remote workflow still runs its configured gates for
-pushes to `main` and pull requests, including docs-only PRs.
+Run affected-area checks locally and reuse passing evidence for unchanged source
+and scope. Preparing a release does not require repeating complete local CI.
+The final release commit must pass GitHub main CI once. The tag workflow reuses
+that exact commit's successful main-push CI, or waits for the existing run;
+it does not start another quality/browser/source Docker suite. Required CI jobs
+that fail, are cancelled, are skipped or are missing block publication.
 
 ### Local and GitHub CI parity
 
-- Keep local and GitHub validation driven by the same commands and shared scripts.
-  Match the declared Node/pnpm versions, frozen dependency lockfile, browser
-  version, system dependencies/fonts, and relevant environment flags, including
-  `CI=true` for browser acceptance. Update both execution paths together when a
-  gate changes; do not maintain a reduced local substitute.
-- Full local CI includes lint, typecheck, all unit/integration and release tests,
-  production build, the complete browser suite in all eight configured viewports,
-  and the same isolated Docker API/media/archive/restart/persistence smoke used
-  remotely. Keep task-owned data, ports, and containers isolated and clean them
-  up afterward. Registry publication and GitHub-specific execution remain remote
-  verification and must be reported separately.
-- Focused runs are the normal development workflow. Runs with `--grep`, selected
-  viewports, or custom smoke subsets are appropriate for affected areas, but do
-  not replace the complete pre-release run. Preserve workflow-defined skips and
-  report them; do not add skips or weaken assertions to make a gate pass.
-- Record the tested commit/source snapshot, commands, results, skips, and material
-  environment differences. Results for earlier source do not validate later
-  changes. During development, rerun affected checks when the source changes;
-  complete pre-release CI must cover the final release source. If a gate cannot
-  run or the user explicitly limits checks, identify the omitted validation and
-  do not claim that the complete pre-release requirement has passed.
+- Use the same commands, scripts, declared Node/pnpm versions, lockfile, browser
+  version, fonts and relevant flags when running a check locally. Use `CI=true`
+  for browser acceptance. Matching check semantics does not mean running every
+  check both locally and remotely for each release.
+- Complete CI covers lint, typecheck, all unit/integration and release tests,
+  production build, all eight browser viewports and isolated Docker smoke.
+  GitHub main CI is the release source acceptance gate. A complete local run is
+  optional unless explicitly requested or necessary to investigate a failure.
+- Focused checks are the normal local workflow. Reuse successful results when
+  neither their source inputs, assertions nor environment changed. A test-only
+  fix requires the affected test; a notes-only change requires release/document
+  checks, not another full browser/Docker run. If a shared runtime change affects
+  multiple areas, broaden checks to those areas. Never hide failures by weakening
+  assertions, adding skips or declaring an earlier snapshot tested a later change.
+- Record tested commits/source, commands, results, scope and environment. Preserve
+  workflow-defined skips and report them separately from missing required jobs.
+  Do not rerun a successful suite solely because it is time to push or tag.
+- Push the final source to main and allow its existing CI to finish. Prefer tagging
+  after success; if the tag arrives earlier, release waits up to 45 minutes for
+  the same commit's main CI without dispatching a new run. A failed/cancelled run
+  must be corrected or explicitly rerun; missing CI eventually fails closed.
+- Release still builds one multi-platform candidate and tests its exact digest.
+  This artifact check is distinct from source CI; promotion reuses the verified
+  image without rebuilding. Keep local runtime resources isolated and clean up
+  task-owned services/data. Publication and deployment remain separate actions.
 
 The current `pnpm run ci` command runs the quality gate only. Browser and Docker
 checks still require the separate invocations below; this policy does not claim
@@ -141,7 +145,7 @@ CI=true E2E_PORT=13031 pnpm test:e2e --update-snapshots=none
 The first browser command selects two representative projects for development;
 the second runs the full suite in all eight. Use `CI=true` for acceptance parity.
 During development, select scenarios and viewports affected by the change;
-the complete unfiltered eight-viewport run is required before a release.
+the complete unfiltered eight-viewport run is supplied by GitHub main CI for a release.
 Read [e2e/AGENTS.md](./e2e/AGENTS.md) for baseline and cleanup rules.
 
 For Docker smoke, follow the isolated resource setup in
@@ -166,9 +170,8 @@ does not prove physical-device PWA installation or keyboard behavior.
 - CI success, Test Image publication, stable release, and deployment are separate
   events. Use [RELEASE.md](./RELEASE.md) and [.github/AGENTS.md](./.github/AGENTS.md)
   for their current boundaries. A push to `main` alone does not update `test`.
-- A stable tag runs quality and browser CI automatically before building the
-  release candidate. Digest smoke supplies its container gate, and promotion
-  reuses that image. First pass complete local CI, then push the release source
-  and tag. No separate wait for remote branch CI is required before tagging.
+- A stable tag reuses successful main CI for its exact commit; it does not rerun
+  source checks. Prefer tagging after main CI passes; early tags wait for that
+  existing run. Digest smoke validates the release candidate before promotion.
 - Changes to shared rules should describe their reason and update affected links
   in the same PR. Contributors must not silently remove a guard to pass a check.

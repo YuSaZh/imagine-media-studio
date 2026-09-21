@@ -48,10 +48,13 @@ changes must preserve the other layout's behavior.
   and only an icon for the inactive mode. Mobile shows icons for both modes.
   The entire capsule is one toggle button: clicking either half, the selected
   label or the padding switches mode. Enter and Space operate the same control.
+  A shared selected background slides between the two options. Video input modes
+  use the same sliding highlight; on phones they occupy a separate horizontally
+  scrollable row above the toolbar so longer mode lists remain accessible.
 - Desktop retains the aspect-ratio shortcut. Its `auto` option has a dashed-square
   marker. Mobile image mode exposes aspect ratio in its shortcut row and in
   generation settings. Mobile video keeps aspect ratio in generation settings;
-  video input modes remain in the compact control area.
+  video input modes use their own scrollable row above the toolbar.
 - Model and aspect-ratio shortcut buttons have no downward chevrons on either layout.
   All former native selects use shared rounded Radix popovers, including generation
   settings, model/connection administration, preferences, adapter formats and job
@@ -397,6 +400,21 @@ search, favorites and grouping changes must not carry stale content across scope
 
 ### Floating mobile editor and media transitions
 
+Opening a loaded gallery thumbnail captures its current pixels and bounds in a
+temporary visual layer. The gallery stays visible while the editor module and
+series layout prepare; no intermediate editor-loading dialog replaces it. The
+thumbnail then expands for approximately 320ms into the editor's actual media
+bounds. During that same interval, the gallery fades out and the editor surface
+fades in over the same duration, with a steady opacity change throughout the zoom. The moving thumbnail remains fully
+opaque; the editor's underlying media stays hidden until expansion finishes so
+there is no second image behind it. There is no delayed scene switch after zoom.
+The editor retains the thumbnail until the original image has decoded, then
+replaces its pixels without changing the fitted image bounds. An original-image
+failure keeps the preview visible and offers retry. Escape, navigation and closing
+clean up the visual layer, observers and animations; resize retargets it to the
+current editor bounds. Reduced motion bypasses expansion while retaining decoded
+image replacement. Direct links and unavailable thumbnails skip the shared visual.
+
 On mobile, the editor has no full-width heading bar: a 44px circular return button
 floats at the upper left and a rounded three-action toolbar floats at the upper
 right, respecting the top safe area. The filename remains the accessible dialog
@@ -543,3 +561,47 @@ drafts, IndexedDB or Service Worker storage. On ordinary LAN HTTP, browsers may
 ignore that header; credential-dependent cache variants and the one-hour HTTP
 freshness bound still apply. Static PWA precaching and its update prompt remain
 separate from the preview cache and keep their existing behavior.
+
+## Motion
+
+Workspace panels enter and exit along their own layout direction without replacing
+positioning transforms. Popovers fade out on close; task contents remain mounted
+through the Radix exit. Toasts, reference thumbnails and batch controls currently
+animate on entry only. Composer mode changes still remount scoped parameter state;
+a persistent outer component retains only focus and indicator geometry. Media and
+video-mode highlights slide for 220ms, continuing from their visible position when
+interrupted. Reduced motion switches them immediately and cancels active slides.
+
+Preferences → Reduce motion uses the existing `ui.reduce_motion` setting:
+`always` disables CSS animations and transitions (including infinite loading
+animations), `system` follows the system preference, and `never` permits motion.
+Viewer gesture motion and smooth scrolling retain their existing preference
+handling. Motion does not delay API operations or change virtual gallery positioning.
+
+The embedded editor Composer expands from its single-line capsule and contracts
+back with a 240ms height, padding and corner-radius transition, anchored to its
+bottom edge. Series thumbnails follow the changing height. Interrupted toggles
+continue from the visible geometry; typing and restored drafts keep natural sizing.
+The account motion preference and system reduced-motion setting disable this
+transition, and changing to reduced motion settles an active transition immediately.
+
+On phones, the main Composer also uses the single-line capsule while it is empty
+and unfocused. Focusing its controls expands it; text, references and uploads keep
+it expanded after blur. Focus inside its portaled settings counts as Composer
+focus. Clearing all input and moving focus outside collapses it without discarding
+drafts or model settings. Desktop creation and the editor's explicit collapse
+behavior remain unchanged.
+
+## Series selection
+
+Selection mode follows the gallery's series grouping preferences, including
+concurrent batches and uploaded-reference grouping. It retains series cards and
+their count badges. Selecting a series resolves all existing members of that
+series, including members outside the current page or gallery filter; bulk
+favorite, project membership and deletion apply to those members. The toolbar
+and deletion confirmation show the number of actual works, not the number of
+cards. Select-all resolves every loaded card's complete series, deduplicates
+members, and does not select unloaded unrelated series. Jobs without outputs
+are not asset selections; later outputs are not silently added to a selection.
+Truncated or failed membership reads block selection instead of silently acting
+on a partial series. Exiting selection or changing its scope ignores late reads.

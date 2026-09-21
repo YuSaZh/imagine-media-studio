@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import * as Popover from '@radix-ui/react-popover';
@@ -13,7 +13,13 @@ export function Tool({ label, children, className = '', ...props }: ButtonHTMLAt
 }
 
 export function Panel({ title, open, onClose, children, className = '', onEscapeKeyDown }: { title: string; open: boolean; onClose: () => void; children: ReactNode; className?: string; onEscapeKeyDown?: (event: KeyboardEvent) => void }) {
-  return <Dialog.Root open={open} onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="panel-backdrop" /><Dialog.Content {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})} className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label="关闭面板"><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
+  const returnFocus = useRef<HTMLElement | null>(null);
+  return <Dialog.Root open={open} onOpenChange={value => !value && onClose()}><Dialog.Portal><Dialog.Overlay className="panel-backdrop" /><Dialog.Content onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }} onCloseAutoFocus={event => {
+    // Panels are opened by external controls rather than a Dialog.Trigger.
+    if (returnFocus.current?.isConnected && returnFocus.current.getClientRects().length) {
+      event.preventDefault(); returnFocus.current.focus({ preventScroll: true });
+    }
+  }} {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})} className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label="关闭面板"><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 export function Options({ label, trigger, children, className = '', contentClassName = '', disabled = false }: { label: string; trigger: ReactNode; children: ReactNode; className?: string; contentClassName?: string; disabled?: boolean }) {

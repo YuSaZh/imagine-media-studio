@@ -1,6 +1,7 @@
 import { Children, isValidElement, useId, useRef, useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { Check, ChevronDown } from 'lucide-react';
+import { useReducedMotion } from './use-reduced-motion';
 
 interface ItemProps { value?: string | number; disabled?: boolean; children?: ReactNode }
 
@@ -20,6 +21,7 @@ export function Select({ value, onChange, children, disabled, iconOnly = false, 
   'aria-label'?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const reducedMotion = useReducedMotion();
   const listId = useId();
   const content = useRef<HTMLDivElement>(null);
   const search = useRef({ value: '', time: 0 });
@@ -33,7 +35,7 @@ export function Select({ value, onChange, children, disabled, iconOnly = false, 
     <Popover.Trigger asChild><button type="button" className="select-trigger" role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? listId : undefined} aria-haspopup="listbox" disabled={disabled || !options.length} onKeyDown={event => {
       if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setOpen(true); }
     }}>{!iconOnly && <span>{selected?.label ?? '请选择'}</span>}<ChevronDown size={14} aria-hidden="true" /></button></Popover.Trigger>
-    <Popover.Portal><Popover.Content ref={content} id={listId} className="options select-options" role="listbox" aria-label={label} sideOffset={8} collisionPadding={12} onOpenAutoFocus={event => {
+    <Popover.Portal>{(open || !reducedMotion) && <Popover.Content ref={content} id={listId} className="options select-options" role="listbox" aria-label={label} sideOffset={8} collisionPadding={12} onOpenAutoFocus={event => {
       event.preventDefault(); search.current = { value: '', time: 0 };
       (buttons().find(button => button.getAttribute('aria-selected') === 'true') ?? buttons()[0])?.focus();
     }} onKeyDown={event => {
@@ -55,6 +57,6 @@ export function Select({ value, onChange, children, disabled, iconOnly = false, 
     }}>
       {label && <div className="option-heading">{label}</div>}
       {options.map(option => <button type="button" role="option" value={option.value} aria-selected={option.value === String(value)} tabIndex={-1} className={`choice ${option.value === String(value) ? 'is-active' : ''}`} key={option.value} disabled={option.disabled} onClick={() => { onChange({ target: { value: option.value } }); setOpen(false); }}><span>{option.label}</span>{option.value === String(value) && <Check size={15} aria-hidden="true" />}</button>)}
-    </Popover.Content></Popover.Portal>
+    </Popover.Content>}</Popover.Portal>
   </Popover.Root>;
 }

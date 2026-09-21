@@ -39,9 +39,14 @@ async function upload(request: APIRequestContext, name = 'coast') {
   return (await response.json()).asset as { id: string; contentUrl: string; thumbnailUrl: string };
 }
 
-async function open(page: Page, path = '/imagine') {
+async function open(page: Page, path = '/imagine', expandComposer = true) {
   await page.goto(path);
   await expect(page.locator('.workspace-header')).toBeVisible();
+  // Toolbar scenarios start with the same explicit focus that reveals it on phones.
+  if (expandComposer && page.viewportSize()!.width <= 760 && !new URL(page.url()).searchParams.has('asset')) {
+    const prompt = page.locator('.composer-main textarea');
+    if (await prompt.count()) await prompt.focus();
+  }
 }
 
 async function focusEditingPrompt(page: Page) {
@@ -58,6 +63,7 @@ async function selectValue(page: Page, label: string, value: string | { label: s
   await page.getByRole('combobox', { name: label, exact: true }).click();
   if (typeof value === 'string') await page.getByRole('listbox', { name: label, exact: true }).locator(`[role="option"][value=${JSON.stringify(value)}]`).click();
   else await page.getByRole('option', { name: value.label, exact: true }).click();
+  await expect(page.getByRole('listbox', { name: label, exact: true })).toHaveCount(0);
 }
 
 async function chooseResolution(page: Page, value: string) {
@@ -73,6 +79,7 @@ async function chooseCount(page: Page, value: string) {
     await page.getByLabel('自定义张数', { exact: true }).fill(value);
     await page.getByRole('button', { name: '应用', exact: true }).click();
   }
+  await expect(page.locator('.count-options')).toHaveCount(0);
 }
 
 async function savedModelOptions(request: APIRequestContext, providerId: string, name: string, mode: 'image' | 'video', options: object) {
@@ -105,7 +112,8 @@ test('generation memory separates projects modes and models before submission', 
     }
     await open(page, `/projects/${project.collection.id}`);
     const choose = async (id: string) => {
-      if (page.viewportSize()!.width < 600) {
+      if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
+      if (page.viewportSize()!.width <= 760) {
         await page.getByRole('button', { name: '生成设置', exact: true }).click();
         await selectValue(page, '模型与服务', { label: `${provider.name} · ${id}` });
         await page.keyboard.press('Escape');
@@ -115,6 +123,7 @@ test('generation memory separates projects modes and models before submission', 
       await page.locator('.choice').filter({ has: page.getByText(id, { exact: true }) }).click();
     };
     const count = async (value?: string) => {
+      if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
       await page.getByRole('button', { name: '生成设置', exact: true }).click();
       if (value) await chooseCount(page, value);
       const result = await page.getByRole('button', { name: '生成数量', exact: true }).innerText();
@@ -211,7 +220,6 @@ test('video edit accepts a source and omits inherited generation options', async
     expect((await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'grok-imagine-video', displayName: 'Workflow Video', enabled: true, capabilities: preset.capabilities } })).status()).toBe(201);
     await open(page);
     await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
-    if (page.viewportSize()!.width <= 760) await page.getByRole('button', { name: '选择视频输入方式', exact: true }).click();
     await page.getByRole('button', { name: '编辑视频', exact: true }).click();
     await page.getByLabel('上传源视频', { exact: true }).setInputFiles(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4'));
     await expect(page.locator('.reference-tray')).toContainText('源视频');
@@ -488,6 +496,7 @@ test('prompt focus keeps geometry and settings fields share one appearance', asy
     await expect.poll(async () => Math.abs((await composer.boundingBox())!.height - before.height - lineHeight)).toBeLessThanOrEqual(1);
     await page.getByRole('button', { name: '生成设置', exact: true }).click();
     const panel = page.locator('.composer-generation-settings');
+    await panel.evaluate(async el => { await Promise.all(el.getAnimations().map(a => a.finished)); });
     const fields = panel.locator('.setting-line > .option-trigger, .setting-line > .select-trigger, .setting-line > input:not([type="checkbox"])');
     const styles = await fields.evaluateAll(nodes => nodes.filter(node => node.getBoundingClientRect().height > 0).map(node => {
       const css = getComputedStyle(node); const box = node.getBoundingClientRect();
@@ -704,6 +713,7 @@ test('aspect ratio stays selectable with managed rules and mode controls keep st
       await ratio.click();
       const auto = page.getByRole('button', { name: 'auto', exact: true });
       await expect(auto.locator('.ratio-auto')).toBeVisible();
+      await auto.evaluate(async el => { await Promise.all(el.closest('.options')!.getAnimations().map(a => a.finished)); });
       const square = (await auto.locator('.ratio-auto').boundingBox())!;
       expect(square.width).toBe(square.height);
       await page.screenshot({ path: testInfo.outputPath('auto-ratio.png'), animations: 'disabled' });
@@ -745,11 +755,8 @@ test('aspect ratio stays selectable with managed rules and mode controls keep st
       await expect(ratio).toBeHidden();
     } else await expect(modes.locator('.mode-segment[data-mode="video"] > span')).toBeVisible();
     const videoInputs = (await page.getByRole('group', { name: '视频输入方式', exact: true }).boundingBox())!;
-    if (mobile) expect(Math.abs(videoInputs.y + videoInputs.height / 2 - before!.y - before!.height / 2)).toBeLessThan(1);
-    else {
-      expect(videoInputs.y + videoInputs.height).toBeLessThanOrEqual(before!.y);
-      expect(videoInputs.x).toBe(before!.x);
-    }
+    expect(videoInputs.y + videoInputs.height).toBeLessThanOrEqual(before!.y);
+    expect(videoInputs.x).toBe(before!.x);
     await page.screenshot({ path: testInfo.outputPath('composer-video.png'), animations: 'disabled' });
     if (page.viewportSize()!.width === 360) {
       await page.setViewportSize({ width: 320, height: 800 });
@@ -758,7 +765,7 @@ test('aspect ratio stays selectable with managed rules and mode controls keep st
       expect(smallModes.y).toBeLessThan(toolbar.y + 6);
       await page.screenshot({ path: testInfo.outputPath('composer-video-320.png'), animations: 'disabled' });
     }
-    const boxes = await page.locator('.creation-controls > button:not([hidden]), .mode-segments, .video-input-row').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).display !== 'none').map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, bottom: box.bottom }; }));
+    const boxes = await page.locator('.creation-controls > button:not([hidden]), .mode-segments').evaluateAll(nodes => nodes.filter(node => getComputedStyle(node).display !== 'none').map(node => { const box = node.getBoundingClientRect(); return { x: box.x, right: box.right, y: box.y, bottom: box.bottom }; }));
     const composer = (await page.locator('.creation-composer').boundingBox())!;
     for (const box of boxes) { expect(box.x).toBeGreaterThanOrEqual(composer.x); expect(box.right).toBeLessThanOrEqual(composer.x + composer.width); }
     for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
@@ -3403,6 +3410,13 @@ test('pending concurrent series and uploaded reference suboption survive reload'
   await page.reload();
   await expect(page.locator('.pending-study.has-cover')).toHaveCount(1);
   await expect(page.locator('.study-card')).toHaveCount(2);
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await expect(page.locator('.pending-study.has-cover')).toHaveCount(1);
+  await page.locator('.pending-study.has-cover .study-open').click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
+  await expect(page.locator('.pending-study.has-cover')).toHaveClass(/is-selected/);
+  await expect(page.getByLabel('系列共 2 件作品')).toBeVisible();
+  await page.getByRole('button', { name: '关闭多选', exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath('pending-series.png'), animations: 'disabled' });
   await page.locator('.pending-study.has-cover .study-open').click();
   await expect(page.locator('.study-viewer .viewer-image')).toBeVisible();
@@ -3432,4 +3446,446 @@ test('pending concurrent series and uploaded reference suboption survive reload'
   await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_uploaded_references']).toBe(false);
   await open(page);
   await expect(page.locator('.study-card')).toHaveCount(2);
+});
+
+test('motion preferences persist and panel exits preserve responsive positioning', async ({ page, request }) => {
+  await open(page, '/settings');
+  try {
+    for (const [preference, system, enabled] of [
+      ['never', 'reduce', true], ['always', 'no-preference', false],
+      ['system', 'reduce', false], ['system', 'no-preference', true],
+    ] as const) {
+      await page.emulateMedia({ reducedMotion: system });
+      await selectValue(page, '减少动效', preference);
+      await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['ui.reduce_motion']).toBe(preference);
+      await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', preference);
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', preference);
+      await page.getByRole('button', { name: '生成任务', exact: true }).click();
+      const panel = page.locator('.task-panel');
+      await expect(panel).toBeVisible();
+      expect(await panel.evaluate(el => getComputedStyle(el).animationName !== 'none')).toBe(enabled);
+      await panel.getByRole('button', { name: '关闭面板', exact: true }).click();
+      await expect(panel).toHaveCount(0);
+    }
+    // Sample the actual Radix exit halfway through, rather than only checking its final layout.
+    await selectValue(page, '减少动效', 'never');
+    await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', 'never');
+    const checkExit = async (selector: string, trigger: string) => {
+      await page.getByRole('button', { name: trigger, exact: true }).click();
+      const panel = page.locator(selector);
+      await expect(panel).toBeVisible();
+      await panel.evaluate(async el => { await Promise.all(el.getAnimations().map(a => a.finished)); });
+      const before = await panel.boundingBox();
+      const exit = await panel.evaluate(async el => {
+        el.querySelector<HTMLButtonElement>('[aria-label="关闭面板"]')!.click();
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const animations = el.getAnimations();
+        for (const a of animations) { a.pause(); a.currentTime = Number(a.effect!.getTiming().duration) / 2; }
+        const box = el.getBoundingClientRect();
+        const result = { x: box.x, y: box.y, width: box.width, count: animations.length, closed: el.getAttribute('data-state') };
+        for (const a of animations) a.play();
+        return result;
+      });
+      expect(exit.closed).toBe('closed');
+      expect(exit.count).toBeGreaterThan(0);
+      expect(Math.abs(exit.x - before!.x)).toBeLessThan(20);
+      expect(Math.abs(exit.y - before!.y)).toBeLessThan(20);
+      expect(exit.width).toBeCloseTo(before!.width, 0);
+      await expect(panel).toHaveCount(0);
+      await expect(page.getByRole('button', { name: trigger, exact: true })).toBeFocused();
+    };
+    await checkExit('.task-panel', '生成任务');
+    if (page.viewportSize()!.width <= 760) await checkExit('.navigation-panel', '打开导航');
+  } finally {
+    await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'system' } } });
+  }
+});
+
+test('editor composer animates expansion collapse and interruption while preserving drafts', async ({ page, request }) => {
+  const asset = await upload(request);
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await open(page, `/imagine?asset=${asset.id}`);
+  const viewer = page.locator('.study-viewer');
+  const composer = viewer.locator('.creation-composer');
+  await expect(composer).toHaveClass(/composer-compact/);
+  await viewer.evaluate(async el => { await Promise.all(el.getAnimations().map(animation => animation.finished)); });
+  const compact = (await composer.boundingBox())!;
+  const sample = async (expand: boolean) => composer.evaluate(async (el, expand) => {
+    if (expand) el.querySelector('textarea')!.focus();
+    else document.querySelector<HTMLElement>('.viewer-stage')!.click();
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const animation = el.getAnimations().find(animation => animation.id === 'editor-composer-resize');
+    if (!animation) return null;
+    animation.pause();
+    animation.currentTime = 120;
+    const frames = animation.effect!.getKeyframes();
+    const box = el.getBoundingClientRect();
+    return { from: Number.parseFloat(String(frames[0]!.height)), to: Number.parseFloat(String(frames[1]!.height)), height: box.height, bottom: box.bottom };
+  }, expand);
+  const finish = () => composer.evaluate(async el => {
+    const animations = el.getAnimations().filter(animation => animation.id === 'editor-composer-resize');
+    for (const animation of animations) animation.play();
+    await Promise.all(animations.map(animation => animation.finished.catch(() => {})));
+  });
+  const opening = (await sample(true))!;
+  expect(opening).not.toBeNull();
+  expect(opening.height).toBeGreaterThan(compact.height);
+  expect(opening.height).toBeLessThan(opening.to);
+  expect(opening.bottom).toBeCloseTo(compact.y + compact.height, 0);
+  // Reverse midway: the next transition starts at the currently visible height.
+  const reversed = (await sample(false))!;
+  expect(reversed.from).toBeCloseTo(opening.height, 0);
+  expect(reversed.height).toBeLessThan(reversed.from);
+  expect(reversed.height).toBeGreaterThan(reversed.to);
+  await finish();
+  await expect(composer).toHaveClass(/composer-compact/);
+  expect((await composer.boundingBox())!.height).toBeCloseTo(compact.height, 0);
+  await sample(true); await finish();
+  await composer.getByLabel('创作描述', { exact: true }).fill('保留编辑草稿\n第二行内容');
+  const closing = (await sample(false))!;
+  expect(closing.from).toBeGreaterThan(closing.height);
+  expect(closing.height).toBeGreaterThan(closing.to);
+  await finish();
+  await sample(true); await finish();
+  await expect(composer.getByLabel('创作描述', { exact: true })).toHaveValue('保留编辑草稿\n第二行内容');
+  for (const preference of ['always', 'system'] as const) {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': preference } } });
+    await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', preference);
+    expect(await sample(false)).toBeNull();
+    expect(await sample(true)).toBeNull();
+  }
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'system' } } });
+});
+
+test('mode indicators slide across remounted controls and respect reduced motion', async ({ page, request }) => {
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await open(page);
+  await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', 'never');
+  await page.locator('.composer-main').evaluate(async el => { await Promise.all(el.getAnimations().map(a => a.finished)); });
+  await expect.poll(() => page.locator('.mode-segments > .segment-indicator').evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThan(0);
+  const sample = async (control: string, group: string) => page.evaluate(async ({ control, group }) => {
+    document.querySelector<HTMLElement>(control)!.focus();
+    document.querySelector<HTMLElement>(control)!.click();
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const indicator = document.querySelector<HTMLElement>(`${group} > .segment-indicator`)!;
+    const animation = indicator.getAnimations().find(a => a.id === 'segment-slide');
+    if (!animation) return null;
+    animation.pause(); animation.currentTime = 90;
+    const frames = animation.effect!.getKeyframes();
+    const x = (value: unknown) => Number.parseFloat(String(value).match(/translate\(([-\d.]+)px/)![1]!);
+    const rect = indicator.getBoundingClientRect(), parent = indicator.parentElement!.getBoundingClientRect();
+    return { from: x(frames[0]!.transform), to: x(frames[1]!.transform), x: rect.x - parent.x };
+  }, { control, group });
+  const finish = async () => page.evaluate(async () => {
+    const animations = document.getAnimations().filter(a => a.id === 'segment-slide');
+    for (const animation of animations) animation.play();
+    await Promise.all(animations.map(a => a.finished.catch(() => {})));
+  });
+  const forward = (await sample('.mode-segments', '.mode-segments'))!;
+  expect(forward).not.toBeNull(); expect(forward.x).toBeGreaterThan(forward.from); expect(forward.x).toBeLessThan(forward.to);
+  const back = (await sample('.mode-segments', '.mode-segments'))!;
+  expect(back.from).toBeCloseTo(forward.x, 0); expect(back.x).toBeLessThan(back.from); expect(back.x).toBeGreaterThan(back.to);
+  await finish();
+  await sample('.mode-segments', '.mode-segments'); await finish();
+  const video = (await sample('[data-video-mode="first_frame"]', '.video-input-choices'))!;
+  expect(video).not.toBeNull(); expect(video.x).toBeGreaterThan(video.from); expect(video.x).toBeLessThan(video.to);
+  await finish();
+  await expect(page.locator('[data-video-mode="first_frame"]')).toBeFocused();
+  for (const preference of ['always', 'system'] as const) {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': preference } } });
+    await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', preference);
+    expect(await sample('[data-video-mode="text"]', '.video-input-choices')).toBeNull();
+    expect(await sample('.mode-segments', '.mode-segments')).toBeNull();
+    expect(await sample('.mode-segments', '.mode-segments')).toBeNull();
+  }
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'system' } } });
+});
+
+test('main mobile composer collapses only when empty and unfocused including portal focus', async ({ page, request }, testInfo) => {
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await open(page, '/imagine', false);
+  const composer = page.locator('.composer-main'), input = composer.getByLabel('创作描述', { exact: true });
+  const mobile = page.viewportSize()!.width <= 760;
+  if (!mobile) { await expect(composer).not.toHaveClass(/composer-compact/); return; }
+  await expect(composer).toHaveClass(/composer-compact/);
+  await expect(composer.getByRole('button', { name: '生成设置', exact: true })).toBeHidden();
+  const compact = (await composer.boundingBox())!;
+  await page.screenshot({ path: testInfo.outputPath('main-composer-compact.png'), animations: 'disabled' });
+  await input.focus(); await expect(composer).not.toHaveClass(/composer-compact/);
+  await expect.poll(async () => (await composer.boundingBox())!.height).toBeGreaterThan(compact.height);
+  await composer.getByRole('button', { name: '生成设置', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '生成设置', exact: true })).toBeVisible();
+  await expect(composer).not.toHaveClass(/composer-compact/);
+  await page.keyboard.press('Escape');
+  await expect(composer.getByRole('button', { name: '生成设置', exact: true })).toBeFocused();
+  await expect(composer).not.toHaveClass(/composer-compact/);
+  await input.fill('保留手机草稿'); await input.blur();
+  await expect(composer).not.toHaveClass(/composer-compact/);
+  await page.reload(); await expect(input).toHaveValue('保留手机草稿');
+  await expect(composer).not.toHaveClass(/composer-compact/);
+  await input.fill(''); await input.blur();
+  await expect(composer).toHaveClass(/composer-compact/);
+  await input.focus();
+  await composer.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await expect(composer).not.toHaveClass(/composer-compact/);
+  await expect(composer.getByRole('button', { name: '切换图片/视频', exact: true })).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath('main-video-modes.png'), animations: 'disabled' });
+  await composer.getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  await composer.getByLabel('上传参考图', { exact: true }).setInputFiles(resolve('e2e/media/coast.webp'));
+  await expect(composer.locator('.reference-tray')).toContainText('已上传');
+  await input.focus(); await input.blur();
+  await expect(composer).not.toHaveClass(/composer-compact/);
+  await composer.getByRole('button', { name: '移除上传图片 1', exact: true }).click();
+  await input.focus(); await input.blur();
+  await expect(composer).toHaveClass(/composer-compact/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('selection keeps series grouped and bulk actions include every member', async ({ page, request }) => {
+  const original = await upload(request), single = await upload(request, 'mountain');
+  const { job } = await (await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Whole series selection', inputs: [{ assetId: original.id, role: 'source' }] } })).json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  const project = (await (await request.post('/internal/collections', { data: { name: 'Whole series target' } })).json()).collection;
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true } } });
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  const series = page.locator('.study-card').filter({ has: page.getByLabel('系列共 2 件作品') });
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await expect(page.locator('.study-card')).toHaveCount(2); await expect(series).toBeVisible();
+  await series.locator('.study-open').click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 2 件');
+  await expect(series).toHaveClass(/is-selected/);
+  await page.getByRole('button', { name: '收藏所选作品', exact: true }).click();
+  for (const id of [original.id, result.id]) await expect.poll(async () => (await (await request.get(`/internal/assets/${id}`)).json()).asset.favorite).toBe(true);
+  expect((await (await request.get(`/internal/assets/${single.id}`)).json()).asset.favorite).toBe(false);
+  await page.getByRole('button', { name: '将所选作品加入项目', exact: true }).click();
+  await page.locator('.options').getByRole('button', { name: 'Whole series target', exact: true }).click();
+  for (const id of [original.id, result.id]) await expect.poll(async () => (await (await request.get(`/internal/assets/${id}`)).json()).asset.collectionIds).toContain(project.id);
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await page.getByRole('button', { name: '选择已加载作品', exact: true }).click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 3 件');
+  await page.getByRole('button', { name: '选择已加载作品', exact: true }).click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 0 件');
+  await series.locator('.study-open').click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 2 件');
+  await page.getByRole('button', { name: '删除所选作品', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '删除 2 件作品？', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', single.id);
+  for (const id of [original.id, result.id]) expect((await request.get(`/internal/assets/${id}`)).status()).toBe(404);
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false } } });
+  await open(page, '/library');
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await page.locator('.study-open').click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
+});
+
+test('series selection rejects incomplete membership and ignores reads after closing selection', async ({ page, request }) => {
+  const original = await upload(request);
+  const { job } = await (await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Selection loading fixture', inputs: [{ assetId: original.id, role: 'source' }] } })).json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true } } });
+  let release!: () => void, started!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const requested = new Promise<void>(resolve => { started = resolve; });
+  let truncated = false;
+  await page.route('**/internal/assets/*/series?*', async route => {
+    const response = await route.fetch(), data = await response.json();
+    started(); await waiting;
+    await route.fulfill({ response, json: { ...data, truncated } });
+  });
+  await open(page, '/library');
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await page.locator('.study-open').click(); await requested;
+  await expect(page.getByRole('button', { name: '删除所选作品', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '关闭多选', exact: true }).click();
+  release();
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await expect(page.getByRole('button', { name: '选择已加载作品', exact: true })).toBeEnabled();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 0 件');
+  truncated = true;
+  await page.locator('.study-open').click();
+  await expect(page.getByRole('alert')).toContainText('无法完整读取');
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 0 件');
+  await expect(page.getByRole('button', { name: '删除所选作品', exact: true })).toBeDisabled();
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false } } });
+  await expect(page.locator('.study-card')).toHaveCount(2);
+  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await page.locator('.study-open').first().click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
+});
+
+test('six video modes keep the selected button visible after remount on narrow phones', async ({ page, request }) => {
+  const { provider } = await (await request.post('/internal/providers', { data: { name: `Six modes ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
+  try {
+    const created = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'six-video-modes', displayName: 'Six video modes', enabled: true, capabilities: {
+      operations: ['video.generate','video.image_to_video','video.reference_to_video','video.edit','video.extend'], maxReferenceImages: 3,
+      operationPolicies: { 'video.image_to_video': { inputRoles: ['first_frame', 'last_frame'] } },
+    } } });
+    expect(created.status()).toBe(201);
+    await open(page);
+    await page.getByRole('button', { name:'切换图片/视频', exact:true }).click();
+    const modes = page.getByRole('group', { name:'视频输入方式', exact:true });
+    await expect(modes.locator('button')).toHaveCount(6);
+    for (const value of ['extend','text','first_last_frame']) {
+      const button = modes.locator(`[data-video-mode="${value}"]`);
+      await button.click();
+      await expect(button).toHaveAttribute('aria-pressed','true');
+      if (page.viewportSize()!.width <= 760) {
+        const row = (await page.locator('.mobile-video-mode-row').boundingBox())!;
+        const selected = (await button.boundingBox())!;
+        expect(selected.x).toBeGreaterThanOrEqual(row.x);
+        expect(selected.x + selected.width).toBeLessThanOrEqual(row.x + row.width + 1);
+      }
+    }
+  } finally { await request.delete(`/internal/providers/${provider.id}`); }
+});
+
+test('editor entry crossfades the gallery while expanding the thumbnail before decoded original replacement', async ({ page, request }, testInfo) => {
+  const asset = await upload(request);
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  let releaseOriginal!: () => void, releaseSeries!: () => void;
+  const originalGate = new Promise<void>(resolve => { releaseOriginal = resolve; });
+  const seriesGate = new Promise<void>(resolve => { releaseSeries = resolve; });
+  const contentPath = new URL(asset.contentUrl, 'http://fixture').pathname;
+  await page.route(url => url.pathname === contentPath, async route => { const response = await route.fetch(); await response.body(); await originalGate; await route.fulfill({ response }); });
+  await page.route(`**/internal/assets/${asset.id}/series?*`, async route => { const response = await route.fetch(); await response.body(); await seriesGate; await route.fulfill({ response }); });
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args);
+      if (this.matches('.viewer-entry-layer, .imagine-app, .study-viewer') && document.documentElement.dataset.pauseViewerEntry === 'true') animation.pause();
+      return animation;
+    };
+  });
+  try {
+    await open(page, '/imagine', false);
+    await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', 'never');
+    const thumbnail = page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+    await expect.poll(() => thumbnail.evaluate(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)).toBe(true);
+    const before = (await thumbnail.boundingBox())!;
+    await page.evaluate(() => { document.documentElement.dataset.pauseViewerEntry = 'true'; });
+    await thumbnail.click();
+    const layer = page.locator('.viewer-entry-layer');
+    await expect(layer).toHaveCount(1);
+    await expect(page.locator('html')).toHaveAttribute('data-viewer-entry','preparing');
+    const start = (await layer.boundingBox())!;
+    for (const key of ['x','y','width','height'] as const) expect(start[key]).toBeCloseTo(before[key], 0);
+    await expect(page.getByRole('dialog', { name:'作品编辑', exact:true })).toHaveCount(0);
+    releaseSeries();
+    await expect(page.locator('html')).toHaveAttribute('data-viewer-entry','expanding');
+    const halfway = await layer.evaluate(el => {
+      const animation = el.getAnimations().find(a => a.id === 'viewer-entry-expand')!;
+      for (const part of document.getAnimations().filter(a => a.id.startsWith('viewer-entry-'))) part.currentTime = Number(part.effect!.getTiming().duration) / 2;
+      const frames = animation.effect!.getKeyframes();
+      return { width: el.getBoundingClientRect().width, from: parseFloat(String(frames[0]!.width)), to: parseFloat(String(frames[1]!.width)), opacity: Number(getComputedStyle(document.querySelector('.study-viewer')!).opacity), galleryOpacity: Number(getComputedStyle(document.querySelector('.imagine-app')!).opacity), thumbnailOpacity: getComputedStyle(el).opacity };
+    });
+    expect(halfway.width).toBeGreaterThan(Math.min(halfway.from,halfway.to));
+    expect(halfway.width).toBeLessThan(Math.max(halfway.from,halfway.to));
+    expect(halfway.opacity).toBeGreaterThan(0); expect(halfway.opacity).toBeLessThan(1);
+    expect(halfway.galleryOpacity).toBeGreaterThan(0); expect(halfway.galleryOpacity).toBeLessThan(1);
+    expect(halfway.opacity + halfway.galleryOpacity).toBeCloseTo(1, 3);
+    expect(halfway.galleryOpacity).toBeCloseTo(0.5, 2);
+    expect(halfway.thumbnailOpacity).toBe('1');
+    await page.screenshot({ path:testInfo.outputPath('editor-entry-midpoint.png') });
+    await page.evaluate(() => { delete document.documentElement.dataset.pauseViewerEntry; for (const a of document.getAnimations().filter(a => a.id.startsWith('viewer-entry-'))) a.play(); });
+    await expect(layer).toHaveCount(0);
+    const image = page.locator('.viewer-stage > img.viewer-image');
+    await expect(image).toHaveAttribute('data-image-quality','thumbnail');
+    await expect(image).toHaveAttribute('src',asset.thumbnailUrl);
+    await expect.poll(() => image.evaluate(el => (el as HTMLImageElement).naturalWidth > 0)).toBe(true);
+    const previewBounds = (await image.boundingBox())!;
+    await page.screenshot({ path:testInfo.outputPath('editor-entry-thumbnail.png') });
+    releaseOriginal();
+    await expect(image).toHaveAttribute('data-image-quality','original');
+    await expect(image).toHaveAttribute('src',asset.contentUrl);
+    const fullBounds = (await image.boundingBox())!;
+    for (const key of ['x','y','width','height'] as const) expect(fullBounds[key]).toBeCloseTo(previewBounds[key], 0);
+    await page.getByRole('button', { name:'返回作品', exact:true }).click();
+    await expect(page.locator('.study-viewer')).toHaveCount(0);
+    await expect(thumbnail).toBeVisible();
+    await expect(page.locator('.imagine-app')).toHaveCSS('opacity', '1');
+    await expect(page.locator('html')).not.toHaveAttribute('data-viewer-entry');
+  } finally { releaseSeries(); releaseOriginal(); }
+});
+
+test('editor entry cancels during preparation and reduced motion retains the thumbnail on original failure', async ({ page, request }) => {
+  const asset = await upload(request);
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion':'never' } } });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const pattern = `**/internal/assets/${asset.id}/series?*`;
+  await page.route(pattern, async route => { const response=await route.fetch(); await response.body(); await gate; await route.fulfill({response}); });
+  let fail=true;
+  const contentPath=new URL(asset.contentUrl,'http://fixture').pathname;
+  await page.route(url=>url.pathname===contentPath, route=>fail ? route.fulfill({status:503,body:'unavailable'}) : route.continue());
+  await open(page, '/imagine', false);
+  const thumbnail=page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+  await expect.poll(() => thumbnail.evaluate(el => (el as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  await thumbnail.click();
+  await expect(page.locator('html')).toHaveAttribute('data-viewer-entry','preparing');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
+  await expect(thumbnail).toBeVisible();
+  release();
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion':'always' } } });
+  await expect(page.locator('html')).toHaveAttribute('data-reduce-motion','always');
+  await thumbnail.click();
+  await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toContainText('原文件暂时无法加载');
+  const image=page.locator('.viewer-stage > img.viewer-image');
+  await expect(image).toHaveAttribute('data-image-quality','thumbnail');
+  await expect.poll(() => image.evaluate(el => (el as HTMLImageElement).naturalWidth > 0)).toBe(true);
+  const before=(await image.boundingBox())!;
+  fail=false; await page.getByRole('button',{name:'重试',exact:true}).click();
+  await expect(image).toHaveAttribute('data-image-quality','original');
+  expect((await image.boundingBox())!.width).toBeCloseTo(before.width,0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByRole('button',{name:'返回作品',exact:true}).click();
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion':'system' } } });
+});
+
+test('editor entry keeps the gallery during cold module loading and retargets before reduced-motion cancellation', async ({ page, request }) => {
+  const asset=await upload(request);
+  await request.patch('/internal/settings',{data:{values:{'ui.reduce_motion':'never'}}});
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  await page.route('**/assets/media-editing-workspace-*.js',async route=>{const response=await route.fetch();await response.body();await gate;await route.fulfill({response});});
+  await page.addInitScript(()=>{
+    const animate=Element.prototype.animate;
+    Element.prototype.animate=function(...args){const animation=animate.apply(this,args);if(this.matches('.viewer-entry-layer, .imagine-app, .study-viewer'))animation.pause();return animation;};
+  });
+  try {
+    await open(page,'/imagine',false);
+    const thumbnail=page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+    await expect.poll(()=>thumbnail.evaluate(el=>(el as HTMLImageElement).naturalWidth>0)).toBe(true);
+    await thumbnail.click();
+    await expect(page.locator('.viewer-entry-status')).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.locator('.workspace-header')).toBeVisible();
+    release();
+    await expect(page.locator('html')).toHaveAttribute('data-viewer-entry','expanding');
+    const layer=page.locator('.viewer-entry-layer');
+    await layer.evaluate(el=>{const animation=el.getAnimations()[0]!;animation.currentTime=Number(animation.effect!.getTiming().duration)/3;});
+    const viewport=page.viewportSize()!;
+    await page.setViewportSize({width:Math.max(320,viewport.width-80),height:viewport.height-40});
+    await expect.poll(()=>layer.evaluate(el=>{
+      const frames=el.getAnimations()[0]!.effect!.getKeyframes();
+      const expected=document.querySelector('.viewer-stage > img')!.getBoundingClientRect();
+      return Math.abs(parseFloat(String(frames.at(-1)!.width))-expected.width);
+    })).toBeLessThan(1);
+    await request.patch('/internal/settings',{data:{values:{'ui.reduce_motion':'always'}}});
+    await expect(layer).toHaveCount(0);
+    await expect(page.locator('html')).not.toHaveAttribute('data-viewer-entry');
+    expect(await page.evaluate(()=>document.getAnimations().filter(a=>a.id.startsWith('viewer-entry')).length)).toBe(0);
+    await page.getByRole('button',{name:'返回作品',exact:true}).click();
+    await expect(thumbnail).toBeVisible();
+  } finally {release();await request.patch('/internal/settings',{data:{values:{'ui.reduce_motion':'system'}}});}
 });

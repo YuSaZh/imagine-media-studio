@@ -286,28 +286,23 @@ Prepare the description according to [.github/RELEASE_NOTES.md](./.github/RELEAS
 1. Prepare the release commit locally. Confirm the root, server, web, and app-info
    versions match the intended stable tag; ensure `CHANGELOG.md` has one non-empty
    matching version section and the working tree is clean.
-2. Run complete local CI on that final source and require it to pass before
-   pushing the release commit or tag: quality checks, all unit/integration and
-   release tests, production build, the full browser suite in all eight viewports,
-   and the same isolated Docker smoke as GitHub CI. Follow the
-   [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
-   `pnpm run ci` alone is only the quality gate; focused regressions do not meet
-   this pre-release requirement.
-3. Push the verified release commit to GitHub `main`, then create and push the
-   matching stable tag. There is no separate wait for remote branch CI before
-   tagging: the tag starts its own required verification. The workflow checks
-   that the commit is on `main`, validates all four versions and the CHANGELOG section,
-   then calls the same commit's CI workflow for lint, types, unit/release tests,
-   production build, and all eight browser viewports. A failed or cancelled
-   check prevents publication. Do not manually create the GitHub Release or
-   pre-push stable GHCR tags.
-4. After those checks pass, the workflow builds and attests one AMD64/ARM64
-   candidate, runs isolated health, restart, persistence, and full Docker smoke
-   on its exact digest, then automatically promotes the stable, minor, `latest`,
-   and full commit-SHA image tags and creates the GitHub Release. The release
-   CI call skips the separate source-image Docker build; its container gate is
-   supplied by candidate smoke. Promotion reuses the verified image without
-   rebuilding. Normal `main`/PR CI retains its own Docker smoke.
+2. Run the local checks affected by the release changes (including version/notes
+   validation). Reuse valid prior results; do not repeat complete local CI solely
+   for a release. See [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
+3. Push the final commit to main and let its normal complete CI pass once. Prefer
+   creating and pushing the matching tag after that success. If pushed together,
+   the tag workflow waits up to 45 minutes for the existing main CI of the exact
+   SHA. It never dispatches another CI run or accepts a different commit's result.
+   The latest main-push run and every required quality/browser/Docker job must
+   succeed; failure, cancellation, skipped/missing jobs or timeout block release.
+   Fix or rerun main CI as appropriate, then rerun the failed release gate.
+   Do not manually create the GitHub Release or pre-push stable GHCR tags.
+4. After source acceptance, release builds and attests one AMD64/ARM64 candidate,
+   runs isolated health, restart, persistence and full Docker smoke on its exact
+   digest, then promotes version/minor/latest/commit tags and creates the GitHub
+   Release. Digest smoke validates the delivered artifact and remains mandatory.
+   Promotion reuses that image. It does not rerun quality, browser or source-image
+   CI, and never rebuilds the candidate.
 5. Verify the Release, GHCR tags, digest attestation, SBOM, provenance, and all
    required platform manifests before announcing availability.
 

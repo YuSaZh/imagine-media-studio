@@ -58,16 +58,17 @@ Directory guides must not weaken the runtime and secret boundaries below.
   and `pnpm-workspace.yaml`. Keep dependency upgrades in dedicated changes.
 - Follow existing module boundaries, shared schemas, helpers, and test patterns.
   Avoid unrelated refactors, generated-file churn, or dependencies for small tasks.
-- Use the [verification matrix](./CONTRIBUTING.md#verification) for local checks.
-  For ordinary changes, run tests for the affected modules and behavior; full CI
-  is not required after every edit or ordinary push. Before a release, the final
-  prepared source must pass complete local CI equivalent to GitHub CI, including
-  the full eight-viewport browser suite and isolated Docker smoke. Only then push
-  the release commit to GitHub and the matching tag to start automatic release.
-  Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity) and report
-  focused runs, skips, and environment differences accurately. These testing
-  rules apply to this repository. GitHub Actions remains the remote acceptance
-  gate; fixtures do not prove live Provider acceptance.
+- Use the [verification matrix](./CONTRIBUTING.md#verification) for affected-area
+  local checks. Reuse passing results for unchanged source and scope; rerun only
+  checks invalidated by changes, failures, or environment differences. Do not
+  repeat complete local CI merely to prepare a release or tag a tested commit.
+  GitHub main CI provides full quality, eight-viewport browser and source Docker
+  acceptance once for the release commit. The tag workflow reuses that exact
+  commit's successful main CI (or waits for it), then validates the built release
+  image by digest. Failed, cancelled, skipped or missing required gates block
+  publication. Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity)
+  and report actual scope, skips and reused results; fixtures do not prove live
+  Provider acceptance.
 - Keep Chinese and English READMEs consistent when changing public behavior,
   deployment commands, configuration, or documentation links.
 - Update current specifications with behavior changes. Keep dated test results

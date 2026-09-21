@@ -1,3 +1,5 @@
+import { REQUIRED_CI_JOBS } from './require-successful-ci.mjs';
+import { testCiReuseGuard } from './require-successful-ci.test.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -40,9 +42,8 @@ const ci = ciDocument.toJS();
 assert.deepEqual(ci.on.push.branches, ['main']);
 assert.ok(Object.hasOwn(ci.on, 'pull_request'));
 assert.equal(ci.on.push.tags, undefined, 'Release must own tag runs to avoid a duplicate CI image build.');
-assert.equal(ci.on.workflow_call?.inputs?.['skip-docker-smoke']?.type, 'boolean');
-assert.equal(ci.on.workflow_call.inputs['skip-docker-smoke'].default, false);
-assert.equal(ci.jobs['docker-smoke'].if, 'inputs.skip-docker-smoke != true');
+assert.equal(ci.on.workflow_call, undefined, 'Release must reuse main CI instead of invoking another suite.');
+assert.equal(ci.jobs['docker-smoke'].if, undefined);
 assert.ok(ci.jobs['docker-smoke'].steps.some(candidate => candidate.run?.includes('docker compose build')));
 assert.equal(ci.jobs.quality.if, undefined);
 assert.equal(ci.jobs['workspace-e2e'].if, undefined);
@@ -68,10 +69,18 @@ assert.ok(smoke);
 assert.ok(promote);
 assert.ok(githubRelease);
 assert.deepEqual(validate.permissions, { contents: 'read' });
-assert.deepEqual(checks.permissions, { contents: 'read' });
+assert.deepEqual(checks.permissions, { contents: 'read', actions: 'read' });
 assert.equal(checks.needs, 'validate');
-assert.equal(checks.uses, './.github/workflows/ci.yml', 'Checks must use the tagged source, not a moving branch.');
-assert.deepEqual(checks.with, { 'skip-docker-smoke': true });
+assert.equal(checks.uses, undefined, 'Release must not rerun CI.');
+assert.equal(checks.with, undefined);
+assert.equal(checks['runs-on'], 'ubuntu-24.04');
+assert.equal(checks['timeout-minutes'], 50);
+assert.ok(checks.steps.some(step => step.uses?.startsWith('actions/checkout@') && !step.with?.ref));
+const reuseGate = checks.steps.find(step => step.run === 'node .github/scripts/require-successful-ci.mjs');
+assert.deepEqual(reuseGate.env, { GH_TOKEN: '${{ github.token }}' });
+assert.deepEqual(REQUIRED_CI_JOBS, [ci.jobs.quality.name, ...ci.jobs['workspace-e2e'].strategy.matrix.project.map(project => `Workspace browser gates: ${project}`), ci.jobs['docker-smoke'].name]);
+assert.ok(!checks.steps.some(step => /pnpm|workflow run|dispatch/.test(step.run ?? '')));
+await testCiReuseGuard();
 assert.equal(checks.secrets, undefined);
 assert.deepEqual(publish.needs, ['validate', 'checks']);
 assert.equal(publish.if, undefined, 'Failed or cancelled checks must prevent publishing.');
@@ -147,8 +156,8 @@ for (const reference of actionRefs) {
   );
   const matches = workflowText.match(pattern) ?? [];
   const expectedUses = {
-    'actions/checkout': 4,
-    'actions/setup-node': 3,
+    'actions/checkout': 5,
+    'actions/setup-node': 4,
     'docker/login-action': 3,
     'docker/setup-buildx-action': 2,
   }[reference.name] ?? 1;

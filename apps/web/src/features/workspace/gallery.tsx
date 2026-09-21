@@ -100,7 +100,7 @@ function Card({ item, props, visible, shouldLoad }: { item: MediaItem; props: Ga
       }}>
       <Thumbnail key={item.thumbnail} item={item} visible={visible} shouldLoad={shouldLoad} />
       {item.kind === 'video' && <span className="video-tag"><Play size={11} fill="currentColor" />{durationLabel(item.durationSeconds ?? 0)}</span>}
-      {item.asset?.series && item.asset.series.count > 1 && !props.selecting && <span className="series-count" aria-label={`系列共 ${item.asset.series.count} 件作品`}><Images size={14} strokeWidth={1.75} aria-hidden="true" /><span>{item.asset.series.count}</span></span>}
+      {item.asset?.series && item.asset.series.count > 1 && <span className="series-count" aria-label={`系列共 ${item.asset.series.count} 件作品`}><Images size={14} strokeWidth={1.75} aria-hidden="true" /><span>{item.asset.series.count}</span></span>}
       <span className="study-caption"><strong>{item.title}</strong><span>{item.model}{elapsed !== null ? ` · ${formatGenerationTime(elapsed)}` : ''}</span></span>
       {props.selecting && <span className="select-mark">{selected && <Check size={17} />}</span>}
     </button>
@@ -180,9 +180,10 @@ export function Gallery(props: GalleryProps) {
 
 function PendingCard({ task, props }: { task: PendingStudy; props: GalleryProps }) {
   const failed = ['failed', 'rejected', 'expired'].includes(task.status);
-  return <article className={`study-card pending-study ${task.cover ? 'has-cover' : ''} ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? '生成失败' : task.kind === 'image' ? '正在生成图片' : '正在生成视频'} aria-busy={!failed}>
-    {!task.cover && task.seriesId && task.jobId && <button className="study-open pending-series-open" aria-label="查看生成中的系列" onClick={() => props.onOpenPendingSeries?.(task.jobId!)} />}
-    {task.cover && <button className="study-open" aria-label={`查看 ${task.cover.title}`} onClick={() => props.onPick(task.cover!)}><Thumbnail item={task.cover} visible={true} shouldLoad={true} /></button>}
+  const selected = !!task.cover && props.selected.includes(task.cover.id);
+  return <article className={`study-card pending-study ${task.cover ? 'has-cover' : ''} ${selected ? 'is-selected' : ''} ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? '生成失败' : task.kind === 'image' ? '正在生成图片' : '正在生成视频'} aria-busy={!failed}>
+    {!task.cover && task.seriesId && task.jobId && <button className="study-open pending-series-open" aria-label="查看生成中的系列" disabled={props.selecting} onClick={() => props.onOpenPendingSeries?.(task.jobId!)} />}
+    {task.cover && <button className="study-open" aria-label={`查看 ${task.cover.title}`} aria-pressed={props.selecting ? selected : undefined} onClick={() => props.onPick(task.cover!)}><Thumbnail item={task.cover} visible={true} shouldLoad={true} />{props.selecting && <span className="select-mark">{selected && <Check size={17} />}</span>}</button>}
     {!!task.seriesCount && task.seriesCount > 1 && <span className="series-count" aria-label={`系列共 ${task.seriesCount} 件作品`}><Images size={14} /><span>{task.seriesCount}</span></span>}
     {!task.cover && <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div>}<div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? '生成失败'}</span> : <><LoaderCircle size={17} className="spin" /><GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />{task.progress !== null && <span>{Math.round(task.progress)}%</span>}</>}<p>{task.prompt}</p>{task.members && task.members.length > 1 && <span>{task.members.length} 个任务 · {task.members.filter(member => ['failed', 'rejected', 'expired'].includes(member.status)).length} 个失败</span>}</div>
     {task.members && task.members.length > 1 && <button type="button" className="pending-study-action" aria-label="查看系列任务" title="查看系列任务" onClick={props.onShowJobs}><MoreHorizontal size={17} /></button>}
