@@ -344,7 +344,7 @@ describe('Imagine server PR 0 skeleton', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       name: 'Imagine Media Studio',
-      version: '0.1.9',
+      version: '0.2.0',
     });
   });
 
