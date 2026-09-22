@@ -1859,7 +1859,7 @@ test('image editing workspace expands in place preserves masks and shows local r
   const prompt = controls.getByLabel('创作描述', { exact: true });
   await prompt.fill('Change the marked region into a small garden');
   await expect(controls.locator('.composer-compact')).toHaveCount(0);
-  expect((await controls.boundingBox())!.height).toBeGreaterThan(before.height);
+  await expect.poll(async () => (await controls.boundingBox())!.height).toBeGreaterThan(before.height);
   await expect.poll(async () => { const mask = (await controls.locator('.editing-mask-entry').boundingBox())!; const send = (await controls.locator('.generate-button').boundingBox())!; return Math.abs(mask.x + mask.width / 2 - send.x - send.width / 2); }).toBeLessThanOrEqual(1);
   const stage = viewer.locator('.viewer-stage');
   await stage.click({ position: { x: 10, y: 10 } });
@@ -1876,7 +1876,10 @@ test('image editing workspace expands in place preserves masks and shows local r
   await focusEditingPrompt(page);
   await controls.getByRole('button', { name: '编辑蒙版', exact: true }).click();
   const maskStage = page.locator('.mask-stage'); await expect(maskStage).toBeVisible();
-  await expect.poll(() => page.locator('.mask-source').evaluate(canvas => (canvas as HTMLCanvasElement).width)).toBeGreaterThan(0);
+  await expect.poll(() => page.locator('.mask-source').evaluate(element => {
+    const canvas = element as HTMLCanvasElement;
+    return canvas.width > 1 && canvas.getContext('2d')!.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data[3] === 255;
+  })).toBe(true);
   const bounds = (await maskStage.boundingBox())!;
   expect((await page.locator('.mask-tools').boundingBox())!.y).toBeGreaterThanOrEqual(bounds.y + bounds.height);
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2); await page.mouse.down();
@@ -2534,6 +2537,7 @@ test('recent series cover changes before the view save finishes and without a re
   await page.locator(`[data-study-id="${original.id}"] .study-open`).click();
   await (await firstSave).finished();
   await expect(page.locator('.editing-result')).toHaveCount(2);
+  await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
   await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[original.id]).toBeTruthy();
   let release!: () => void, started!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
