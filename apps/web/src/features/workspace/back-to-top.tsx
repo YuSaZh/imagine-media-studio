@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { useEffect, useState, type RefObject } from 'react';
 import { ArrowUpToLine } from 'lucide-react';
 import { Tool } from './ui';
@@ -28,7 +29,7 @@ export function BackToTop({ scrollRef, galleryRef, workspaceRef, hasComposer, hi
     return () => { observer.disconnect(); scroll.removeEventListener('scroll', measure); window.removeEventListener('resize', measure); viewport?.removeEventListener('resize', measure); viewport?.removeEventListener('scroll', measure); };
   }, [scrollRef, galleryRef, workspaceRef, hasComposer]);
   if (hidden || !position.visible) return null;
-  return <Tool label="返回顶部" className="back-to-top" style={{ right: position.right, bottom: position.bottom, transform: position.centered ? 'translateX(50%)' : undefined }} onClick={() => {
+  return <Tool label={t("返回顶部")} className="back-to-top" style={{ right: position.right, bottom: position.bottom, transform: position.centered ? 'translateX(50%)' : undefined }} onClick={() => {
     const reduced = reduceMotion === 'always' || reduceMotion === 'system' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     scrollRef.current?.scrollTo({ top: 0, behavior: reduced ? 'instant' : 'smooth' });
   }}><ArrowUpToLine size={18} strokeWidth={1.75} /></Tool>;

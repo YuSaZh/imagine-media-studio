@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -19,7 +20,7 @@ export function Panel({ title, open, onClose, children, className = '', onEscape
     if (returnFocus.current?.isConnected && returnFocus.current.getClientRects().length) {
       event.preventDefault(); returnFocus.current.focus({ preventScroll: true });
     }
-  }} {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})} className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label="关闭面板"><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
+  }} {...(onEscapeKeyDown ? { onEscapeKeyDown } : {})} className={`panel ${className}`} aria-describedby={undefined}><header className="panel-header"><Dialog.Title>{title}</Dialog.Title><Dialog.Close asChild><button type="button" className="tool" aria-label={t("关闭面板")}><X size={20} /></button></Dialog.Close></header>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
 export function Options({ label, trigger, children, className = '', contentClassName = '', disabled = false }: { label: string; trigger: ReactNode; children: ReactNode; className?: string; contentClassName?: string; disabled?: boolean }) {
@@ -32,6 +33,6 @@ export function Choice({ active, children, onClick }: { active: boolean; childre
 
 export function Confirm({ title, description, children, busy, onConfirm, onClose }: { title: string; description: string; children?: ReactNode; busy: boolean; onConfirm: () => void; onClose: () => void }) {
   return <Panel title={title} open onClose={() => !busy && onClose()} className="compact-panel">
-    <div className="confirmation-body"><p>{description}</p>{children}<div><button className="quiet-command" disabled={busy} onClick={onClose}>取消</button><button className="primary-command danger-fill" disabled={busy} onClick={onConfirm}>{busy ? '正在处理' : '确认删除'}</button></div></div>
+    <div className="confirmation-body"><p>{description}</p>{children}<div><button className="quiet-command" disabled={busy} onClick={onClose}>{t("取消")}</button><button className="primary-command danger-fill" disabled={busy} onClick={onConfirm}>{busy ? t("正在处理") : t("确认删除")}</button></div></div>
   </Panel>;
 }

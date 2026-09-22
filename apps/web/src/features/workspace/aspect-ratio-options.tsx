@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { SquareDashed } from 'lucide-react';
 import { Choice, Options, SettingValue } from './ui';
 
@@ -9,7 +10,7 @@ export function AspectRatioChoices({ options, value, onChange }: { options: stri
   </Choice>)}</div>;
 }
 
-export function AspectRatioSetting({ options, value, onChange, disabled = false, label = '画幅' }: { options: string[]; value: string; onChange: (value: string) => void; disabled?: boolean; label?: string }) {
+export function AspectRatioSetting({ options, value, onChange, disabled = false, label = t("画幅") }: { options: string[]; value: string; onChange: (value: string) => void; disabled?: boolean; label?: string }) {
   return <div className="setting-line"><span>{label}</span><Options label={label} disabled={disabled} trigger={<SettingValue>{value}</SettingValue>}>
     <div className="option-heading">{label}</div><AspectRatioChoices options={options} value={value} onChange={onChange} />
   </Options></div>;

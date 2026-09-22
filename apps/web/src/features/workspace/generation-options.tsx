@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { Select, SelectItem } from './select';
 import type { JsonObject, JsonValue } from '@imagine/shared';
 import type { WorkspaceModel } from './data';
@@ -12,7 +13,7 @@ export function allowsCustomSize(model: WorkspaceModel | undefined): boolean {
   if (model?.imageResolution) return model.imageResolution.allowCustomDimensions;
   return object(parameterFields(model).size).type === 'string';
 }
-const labels: Record<string, string> = { quality: '质量', output_format: '输出格式', output_compression: '压缩质量', background: '背景', input_fidelity: '输入保真度', moderation: '内容审核', stream: '流式返回', partial_images: '中间预览数量' };
+const labels: Record<string, string> = { get quality() { return t("质量"); }, get output_format() { return t("输出格式"); }, get output_compression() { return t("压缩质量"); }, get background() { return t("背景"); }, get input_fidelity() { return t("输入保真度"); }, get moderation() { return t("内容审核"); }, get stream() { return t("流式返回"); }, get partial_images() { return t("中间预览数量"); } };
 
 export function ExtraParameters({ model, values, onChange }: { model: WorkspaceModel | undefined; values: JsonObject; onChange: (values: JsonObject) => void }) {
   const set = (key: string, value: JsonValue | undefined) => { const next = { ...values }; if (value === undefined) delete next[key]; else next[key] = value; onChange(next); };
@@ -20,6 +21,6 @@ export function ExtraParameters({ model, values, onChange }: { model: WorkspaceM
     const field = object(value);
     const options = Array.isArray(field.enum) ? field.enum.filter(item => ['string', 'number', 'boolean'].includes(typeof item)) : null;
     const label = typeof field.title === 'string' ? field.title : labels[key] ?? key;
-    return <label className="setting-line" key={key}><span>{label}</span>{options ? <Select aria-label={label} value={values[key] === undefined ? '' : String(values[key])} onChange={event => set(key, options.find(item => String(item) === event.target.value))}><SelectItem value="">默认</SelectItem>{options.map(item => <SelectItem key={String(item)} value={String(item)}>{String(item)}</SelectItem>)}</Select> : field.type === 'boolean' ? <input type="checkbox" aria-label={label} checked={values[key] === true} onChange={event => set(key, event.target.checked || undefined)} /> : <input aria-label={label} type={field.type === 'number' || field.type === 'integer' ? 'number' : 'text'} min={typeof field.minimum === 'number' ? field.minimum : undefined} max={typeof field.maximum === 'number' ? field.maximum : undefined} step={field.type === 'integer' ? 1 : 'any'} value={typeof values[key] === 'string' || typeof values[key] === 'number' ? values[key] : ''} placeholder="默认" onChange={event => set(key, event.target.value === '' ? undefined : field.type === 'number' || field.type === 'integer' ? Number(event.target.value) : event.target.value)} />}</label>;
+    return <label className="setting-line" key={key}><span>{label}</span>{options ? <Select aria-label={label} value={values[key] === undefined ? '' : String(values[key])} onChange={event => set(key, options.find(item => String(item) === event.target.value))}><SelectItem value="">{t("默认")}</SelectItem>{options.map(item => <SelectItem key={String(item)} value={String(item)}>{String(item)}</SelectItem>)}</Select> : field.type === 'boolean' ? <input type="checkbox" aria-label={label} checked={values[key] === true} onChange={event => set(key, event.target.checked || undefined)} /> : <input aria-label={label} type={field.type === 'number' || field.type === 'integer' ? 'number' : 'text'} min={typeof field.minimum === 'number' ? field.minimum : undefined} max={typeof field.maximum === 'number' ? field.maximum : undefined} step={field.type === 'integer' ? 1 : 'any'} value={typeof values[key] === 'string' || typeof values[key] === 'number' ? values[key] : ''} placeholder={t("默认")} onChange={event => set(key, event.target.value === '' ? undefined : field.type === 'number' || field.type === 'integer' ? Number(event.target.value) : event.target.value)} />}</label>;
   })}</>;
 }

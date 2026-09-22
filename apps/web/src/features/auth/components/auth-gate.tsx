@@ -1,3 +1,4 @@
+import { t } from '../../../i18n/index';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus } from '@imagine/shared';
 import {
@@ -126,11 +127,11 @@ export function AuthPrompt({
     <AuthFrame>
       <form aria-busy={pending} className="auth-gate-form" onSubmit={onSubmit}>
         <div>
-          <h2>登录 Imagine</h2>
+          <h2>{t("登录 Imagine")}</h2>
         </div>
-        {onUsernameChange && <label><span>用户名</span><input name="username" autoComplete="username" required value={username} disabled={pending} maxLength={64} onChange={event => onUsernameChange(event.target.value)} /></label>}
+        {onUsernameChange && <label><span>{t("用户名")}</span><input name="username" autoComplete="username" required value={username} disabled={pending} maxLength={64} onChange={event => onUsernameChange(event.target.value)} /></label>}
         <label>
-          <span>密码</span>
+          <span>{t("密码")}</span>
           <span className="auth-password-field">
             <input
               aria-invalid={error !== null}
@@ -153,7 +154,7 @@ export function AuthPrompt({
         )}
         <button disabled={pending || password.length === 0 || !!onUsernameChange && !username.trim()} type="submit">
           {pending && <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />}
-          {pending ? '正在登录' : '登录'}
+          {pending ? t("正在登录") : t("登录")}
         </button>
       </form>
     </AuthFrame>
@@ -174,9 +175,9 @@ function AuthFrame({ children }: { children: ReactNode }) {
 
 function authErrorMessage(error: unknown): string {
   if (error instanceof InternalApiError && error.code === 'invalid_app_password') {
-    return '用户名或密码错误';
+    return t("用户名或密码错误");
   }
-  return '登录失败，请重试';
+  return t("登录失败，请重试");
 }
 
 export function AuthGate({
@@ -388,11 +389,11 @@ export function AuthGate({
         <div className="auth-gate-status auth-gate-security-warning" role="alert">
           <ShieldAlert aria-hidden="true" size={22} />
           <div>
-            <strong>Set an application password</strong>
-            <p>Set APP_PASSWORD and restart the server before continuing.</p>
+            <strong>{t("Set an application password")}</strong>
+            <p>{t("Set APP_PASSWORD and restart the server before continuing.")}</p>
             <button onClick={() => setPublicAccessAcknowledged(true)} type="button">
               <ArrowRight aria-hidden="true" size={15} />
-              Continue without password
+              {t("Continue without password")}
             </button>
           </div>
         </div>
@@ -405,9 +406,9 @@ export function AuthGate({
       <AuthFrame>
         <div className="auth-gate-status" role="alert">
           <AlertCircle aria-hidden="true" size={20} />
-          <strong>Access check unavailable</strong>
+          <strong>{t("Access check unavailable")}</strong>
           <button onClick={retryStatus} type="button">
-            <RotateCcw aria-hidden="true" size={15} />Retry
+            <RotateCcw aria-hidden="true" size={15} />{t("Retry")}
           </button>
         </div>
       </AuthFrame>

@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { useState } from 'react';
 import { LockKeyhole, UnlockKeyhole } from 'lucide-react';
 import { Tool } from './ui';
@@ -51,11 +52,11 @@ export function CustomDimensions({ value, ratio, accepts, onApply, onUnlock, unl
   };
   return <div className="image-custom-editor" onKeyDown={event => { if (event.key === 'Enter' && event.target instanceof HTMLInputElement) { event.preventDefault(); apply(); } }}>
     <div className="custom-dimensions">
-      <label>宽度<input autoFocus aria-label="自定义图片宽度" type="number" min={constraints.multipleOf ?? 16} max={constraints.maxWidth ?? 16384} step={constraints.multipleOf ?? 16} value={width} aria-invalid={invalid} onChange={event => change('width', event.target.value)} onBlur={() => normalize(edited)} /></label>
-      <Tool label={locked && unlockDisabled ? '模型固定画幅比例' : locked ? '解锁画幅比例' : '锁定画幅比例'} disabled={locked && unlockDisabled} aria-pressed={locked} onClick={() => { setLocked(!locked); if (locked) onUnlock(); else normalize(edited, true); }}>{locked ? <LockKeyhole size={18} /> : <UnlockKeyhole size={18} />}</Tool>
-      <label>高度<input aria-label="自定义图片高度" type="number" min={constraints.multipleOf ?? 16} max={constraints.maxHeight ?? 16384} step={constraints.multipleOf ?? 16} value={height} aria-invalid={invalid} onChange={event => change('height', event.target.value)} onBlur={() => normalize(edited)} /></label>
+      <label>{t("宽度")}<input autoFocus aria-label={t("自定义图片宽度")} type="number" min={constraints.multipleOf ?? 16} max={constraints.maxWidth ?? 16384} step={constraints.multipleOf ?? 16} value={width} aria-invalid={invalid} onChange={event => change('width', event.target.value)} onBlur={() => normalize(edited)} /></label>
+      <Tool label={locked && unlockDisabled ? t("模型固定画幅比例") : locked ? t("解锁画幅比例") : t("锁定画幅比例")} disabled={locked && unlockDisabled} aria-pressed={locked} onClick={() => { setLocked(!locked); if (locked) onUnlock(); else normalize(edited, true); }}>{locked ? <LockKeyhole size={18} /> : <UnlockKeyhole size={18} />}</Tool>
+      <label>{t("高度")}<input aria-label={t("自定义图片高度")} type="number" min={constraints.multipleOf ?? 16} max={constraints.maxHeight ?? 16384} step={constraints.multipleOf ?? 16} value={height} aria-invalid={invalid} onChange={event => change('height', event.target.value)} onBlur={() => normalize(edited)} /></label>
     </div>
-    <button type="button" className="quiet-command" onClick={apply}>应用</button>
-    {invalid && <p role="alert">图片尺寸超出当前模型允许范围</p>}
+    <button type="button" className="quiet-command" onClick={apply}>{t("应用")}</button>
+    {invalid && <p role="alert">{t("图片尺寸超出当前模型允许范围")}</p>}
   </div>;
 }

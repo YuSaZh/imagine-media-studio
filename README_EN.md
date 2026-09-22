@@ -104,6 +104,7 @@ The project menu can mark a project private: its content is excluded from the ho
 - The mobile editor uses floating return/actions and smaller series thumbnails; current and adjacent media move together throughout horizontal and vertical drags, and missing-model guidance stays hidden until the prompt is focused.
 - The mobile Composer omits the bottom model, size and count summary; model selection remains in generation settings.
 - Organize media into projects; new output generated inside a project is added to that project. Move media to another project from its menu. Deleting a project preserves media by default, with an option to delete its files too.
+- Preferences offer Light, Dark and System themes, plus 简体中文, English and 日本語. Selections are saved per account; switching preserves drafts and keeps original media colors unchanged.
 - Workspace panels, menus, and interaction feedback use subtle motion. Enable Settings → Preferences → Reduce motion to disable animations, or follow the system preference.
 - Generation preferences are remembered per account, project, image/video mode, and model.
 - Desktop and mobile layouts are maintained separately: desktop has fixed header controls and a scrolling gallery, while mobile retains compact controls and touch interactions.

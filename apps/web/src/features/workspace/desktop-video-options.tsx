@@ -1,3 +1,4 @@
+import { t, rich } from '../../i18n/index';
 import { useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { Check, Clock3, ScanLine } from 'lucide-react';
@@ -39,27 +40,27 @@ function VideoOption({ path, icon, value, disabled, accepts, onChange, presets: 
   const [draft, setDraft] = useState('');
   const [invalid, setInvalid] = useState(false);
   const resolution = path === 'resolution';
-  const label = resolution ? '视频分辨率' : '视频时长';
+  const label = resolution ? t("视频分辨率") : t("视频时长");
   const presets = configuredPresets?.length ? configuredPresets : resolution ? ['480p', '720p', '1080p'] : [6, 10, 15];
   const format = (value: string | number) => resolution ? String(value) : `${value}s`;
   const customSelected = value !== undefined && value !== '' && value !== 'auto' && !presets.includes(value);
   const commit = (value: string | number) => { onChange(value); setOpen(false); };
   const openCustom = () => { setCustom(true); setDraft(String(value ?? (resolution ? 480 : 6)).replace(/p$/, '')); setInvalid(false); };
   return <Popover.Root open={open} onOpenChange={value => { setOpen(value); setCustom(false); setInvalid(false); }}>
-    <Popover.Trigger asChild><button type="button" className="option-trigger desktop-video-option" aria-label={`选择${label}`} title={label} disabled={disabled}>{icon}<span>{value === undefined || value === '' || value === 'auto' ? '自动' : format(value)}</span></button></Popover.Trigger>
+    <Popover.Trigger asChild><button type="button" className="option-trigger desktop-video-option" aria-label={t("选择{0}", [label])} title={label} disabled={disabled}>{icon}<span>{value === undefined || value === '' || value === 'auto' ? t("自动") : format(value)}</span></button></Popover.Trigger>
     <Popover.Portal><Popover.Content className="options desktop-video-options" aria-label={label} sideOffset={10} collisionPadding={12}>
       <div className="option-heading">{label}</div>
-      {presets.map(option => <button className={`choice ${value === option ? 'is-active' : ''}`} type="button" key={option} aria-pressed={value === option} disabled={!accepts(option)} title={!accepts(option) ? '当前模型不支持这个值' : undefined} onClick={() => commit(option)}><span>{format(option)}</span>{value === option && <Check size={14} />}</button>)}
-      <button className={`choice ${custom || customSelected ? 'is-active' : ''}`} type="button" aria-pressed={custom || customSelected} onClick={openCustom}>自定义</button>
+      {presets.map(option => <button className={`choice ${value === option ? 'is-active' : ''}`} type="button" key={option} aria-pressed={value === option} disabled={!accepts(option)} title={!accepts(option) ? t("当前模型不支持这个值") : undefined} onClick={() => commit(option)}><span>{format(option)}</span>{value === option && <Check size={14} />}</button>)}
+      <button className={`choice ${custom || customSelected ? 'is-active' : ''}`} type="button" aria-pressed={custom || customSelected} onClick={openCustom}>{t("自定义")}</button>
       {custom && <div className="desktop-video-custom">
-        <label><span>{resolution ? '垂直分辨率 (px)' : '时长 (s)'}</span><input autoFocus aria-label={`自定义${label}`} type="number" min={1} step={resolution ? 1 : 'any'} value={draft} onChange={event => { setDraft(event.target.value); setInvalid(false); }} /></label>
+        <label><span>{resolution ? t("垂直分辨率 (px)") : t("时长 (s)")}</span><input autoFocus aria-label={t("自定义{0}", [label])} type="number" min={1} step={resolution ? 1 : 'any'} value={draft} onChange={event => { setDraft(event.target.value); setInvalid(false); }} /></label>
         <button type="button" className="quiet-command" onClick={() => {
           const number = Number(draft);
           const value = resolution ? `${number}p` : number;
           if (!draft || !Number.isFinite(number) || number <= 0 || resolution && !Number.isInteger(number) || !accepts(value)) { setInvalid(true); return; }
           commit(value);
-        }}>应用</button>
-        {invalid && <p role="alert">{label}超出当前模型允许范围</p>}
+        }}>{t("应用")}</button>
+        {invalid && <p role="alert">{rich("{0}超出当前模型允许范围", [label])}</p>}
       </div>}
     </Popover.Content></Popover.Portal>
   </Popover.Root>;

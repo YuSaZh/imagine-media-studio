@@ -1,17 +1,18 @@
+import { t } from '../../i18n/index';
 import { applyModelParameters, imageDimensionsPreset, imagePresetDimensions, imageResolutionAllows, inferImageResolution, type ModelParameter } from '@imagine/shared';
 import type { WorkspaceModel } from './data';
 
 export const IMAGE_RESOLUTIONS = ['1K', '2K', '4K'] as const;
 
 export function imageResolutionLabel(value: string): string {
-  if (!value || value === 'auto') return '自动';
+  if (!value || value === 'auto') return t("自动");
   if (IMAGE_RESOLUTIONS.some(preset => preset === value.toUpperCase())) return value.toUpperCase();
   const mapped = imageDimensionsPreset(value);
   if (mapped) return mapped.preset;
   const size = /^([1-9]\d*)x([1-9]\d*)$/.exec(value);
   if (!size) return value;
   const edge = size ? Math.max(Number(size[1]), Number(size[2])) : 0;
-  return edge === 3840 ? '4K' : [1024, 2048, 4096].includes(edge) ? `${edge / 1024}K` : '自定义';
+  return edge === 3840 ? '4K' : [1024, 2048, 4096].includes(edge) ? `${edge / 1024}K` : t("自定义");
 }
 
 export function acceptsImageOption(model: WorkspaceModel, rules: ModelParameter[] | undefined, path: 'count' | 'resolution', value: number | string): boolean {

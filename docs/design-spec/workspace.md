@@ -605,3 +605,22 @@ members, and does not select unloaded unrelated series. Jobs without outputs
 are not asset selections; later outputs are not silently added to a selection.
 Truncated or failed membership reads block selection instead of silently acting
 on a partial series. Exiting selection or changing its scope ignores late reads.
+
+## Appearance and language
+
+Preferences exposes `ui.theme` (`light`, `dark`, `system`) and `ui.language`
+(`zh-CN`, `en`, `ja`). Both use the existing account-owned settings API and
+restore on reload. Existing accounts default to light appearance and Simplified
+Chinese. System appearance follows live `prefers-color-scheme` changes; explicit
+light/dark preferences override the device. The document color scheme, theme-color
+metadata and all portaled controls use the active palette. Media pixels are never
+inverted or filtered to implement a dark theme.
+
+Authored interface text, accessible names, placeholders, status labels and dates
+use the selected language. English and Japanese catalogs load on demand and are
+included in PWA precaching. Translation happens in React without replacing the
+application or editing DOM text, preserving prompts, selection and open controls.
+Prompts, filenames, project/provider/model names, configured parameter labels,
+protocol values and upstream error payloads remain verbatim. Interpolation never
+translates user content. Defaults and invalid stored enum values are validated
+by the settings reader; one account's settings do not become another's defaults.

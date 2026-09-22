@@ -1,8 +1,9 @@
+import { t } from '../../i18n/index';
 import { useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { Plus } from 'lucide-react';
 
-export function GenerationCount({ value, onChange, label = '选择图片生成数量', title = '图片数量', trigger, className = '' }: {
+export function GenerationCount({ value, onChange, label = t("选择图片生成数量"), title = t("图片数量"), trigger, className = '' }: {
   value: number; onChange: (value: number) => void; label?: string; title?: string; trigger?: ReactNode; className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -15,11 +16,11 @@ export function GenerationCount({ value, onChange, label = '选择图片生成�
     <Popover.Portal><Popover.Content className="options count-options" aria-label={title} sideOffset={10} collisionPadding={12}>
       <div className="option-heading">{title}</div>
       <div className="count-segments">{[1, 2, 4, 8].map(count => <button type="button" key={count} aria-pressed={value === count && !custom} className={value === count && !custom ? 'is-active' : ''} onClick={() => commit(count)}>{count}</button>)}
-        <button type="button" aria-label="自定义生成数量" title="自定义生成数量" aria-pressed={custom || ![1, 2, 4, 8].includes(value)} className={custom || ![1, 2, 4, 8].includes(value) ? 'is-active' : ''} onClick={() => { setDraft(String(value)); setCustom(true); setInvalid(false); }}><Plus size={19} /></button>
+        <button type="button" aria-label={t("自定义生成数量")} title={t("自定义生成数量")} aria-pressed={custom || ![1, 2, 4, 8].includes(value)} className={custom || ![1, 2, 4, 8].includes(value) ? 'is-active' : ''} onClick={() => { setDraft(String(value)); setCustom(true); setInvalid(false); }}><Plus size={19} /></button>
       </div>
-      {custom && <div className="custom-count"><label>张数<input autoFocus aria-label="自定义张数" type="number" min={1} max={32} step={1} value={draft} aria-invalid={invalid} onChange={event => { setDraft(event.target.value); setInvalid(false); }} onKeyDown={event => {
+      {custom && <div className="custom-count"><label>{t("张数")}<input autoFocus aria-label={t("自定义张数")} type="number" min={1} max={32} step={1} value={draft} aria-invalid={invalid} onChange={event => { setDraft(event.target.value); setInvalid(false); }} onKeyDown={event => {
         if (event.key === 'Enter') { event.preventDefault(); const next = Number(draft); if (Number.isInteger(next) && next >= 1 && next <= 32) commit(next); else setInvalid(true); }
-      }} /></label><button type="button" className="quiet-command" onClick={() => { const next = Number(draft); if (Number.isInteger(next) && next >= 1 && next <= 32) commit(next); else setInvalid(true); }}>应用</button>{invalid && <p role="alert">生成数量应为 1 到 32</p>}</div>}
+      }} /></label><button type="button" className="quiet-command" onClick={() => { const next = Number(draft); if (Number.isInteger(next) && next >= 1 && next <= 32) commit(next); else setInvalid(true); }}>{t("应用")}</button>{invalid && <p role="alert">{t("生成数量应为 1 到 32")}</p>}</div>}
     </Popover.Content></Popover.Portal>
   </Popover.Root>;
 }

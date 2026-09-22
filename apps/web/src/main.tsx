@@ -10,8 +10,11 @@ import { AuthGate } from './features/auth/components/auth-gate';
 import { flushPromptDraft } from './features/composer/model/composer-draft';
 import { registerPwa } from './pwa-registration';
 import { usePwaViewport } from './features/workspace/mobile-interactions';
+import { Appearance } from './i18n/appearance';
+import { useLanguage } from './i18n';
 import './features/workspace/workspace.css';
 import './features/workspace/workspace-desktop.css';
+import './features/workspace/workspace-theme.css';
 
 function createAppQueryClient() {
   return new QueryClient({
@@ -43,15 +46,16 @@ function AuthenticatedApplication() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Tooltip.Provider delayDuration={450} skipDelayDuration={120}>
+      <Appearance><Tooltip.Provider delayDuration={450} skipDelayDuration={120}>
         <App />
-      </Tooltip.Provider>
+      </Tooltip.Provider></Appearance>
     </QueryClientProvider>
   );
 }
 
 const rootElement = document.getElementById('root');
 function ApplicationRoot() {
+  useLanguage();
   usePwaViewport();
   return <AuthGate><AuthenticatedApplication /></AuthGate>;
 }

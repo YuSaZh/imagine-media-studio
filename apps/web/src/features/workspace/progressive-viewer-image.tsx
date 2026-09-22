@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { MediaItem } from './data';
 import { viewerMediaBounds } from './viewer-media-geometry';
@@ -26,6 +27,6 @@ export function ProgressiveViewerImage({ item, source, opening, style }: { item:
   }, [item.width, item.height]);
   return <>
     <img ref={imageRef} className="viewer-image" src={!opening && decoded ? decoded : item.thumbnail} data-image-quality={!opening && decoded ? 'original' : 'thumbnail'} alt={item.title} draggable={false} style={style} />
-    {error && <p className="media-error viewer-image-error" role="alert">原文件暂时无法加载<button className="quiet-command" onClick={() => setAttempt(value => value + 1)}>重试</button></p>}
+    {error && <p className="media-error viewer-image-error" role="alert">{t("原文件暂时无法加载")}<button className="quiet-command" onClick={() => setAttempt(value => value + 1)}>{t("重试")}</button></p>}
   </>;
 }

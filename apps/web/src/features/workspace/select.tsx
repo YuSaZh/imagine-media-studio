@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { Children, isValidElement, useId, useRef, useState, type ReactNode } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { Check, ChevronDown } from 'lucide-react';
@@ -34,7 +35,7 @@ export function Select({ value, onChange, children, disabled, iconOnly = false, 
   return <Popover.Root modal open={open} onOpenChange={setOpen}>
     <Popover.Trigger asChild><button type="button" className="select-trigger" role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? listId : undefined} aria-haspopup="listbox" disabled={disabled || !options.length} onKeyDown={event => {
       if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setOpen(true); }
-    }}>{!iconOnly && <span>{selected?.label ?? '请选择'}</span>}<ChevronDown size={14} aria-hidden="true" /></button></Popover.Trigger>
+    }}>{!iconOnly && <span>{selected?.label ?? t("请选择")}</span>}<ChevronDown size={14} aria-hidden="true" /></button></Popover.Trigger>
     <Popover.Portal>{(open || !reducedMotion) && <Popover.Content ref={content} id={listId} className="options select-options" role="listbox" aria-label={label} sideOffset={8} collisionPadding={12} onOpenAutoFocus={event => {
       event.preventDefault(); search.current = { value: '', time: 0 };
       (buttons().find(button => button.getAttribute('aria-selected') === 'true') ?? buttons()[0])?.focus();

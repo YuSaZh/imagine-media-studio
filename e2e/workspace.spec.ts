@@ -98,7 +98,7 @@ test.beforeEach(async ({ request, page }) => {
   for (const project of (await collections.json()).items) expect((await request.delete(`/internal/collections/${project.id}`)).ok()).toBeTruthy();
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
-  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'ui.theme': 'light', 'ui.language': 'zh-CN', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
 });
 
@@ -3888,4 +3888,84 @@ test('editor entry keeps the gallery during cold module loading and retargets be
     await page.getByRole('button',{name:'返回作品',exact:true}).click();
     await expect(thumbnail).toBeVisible();
   } finally {release();await request.patch('/internal/settings',{data:{values:{'ui.reduce_motion':'system'}}});}
+});
+
+test('theme and language preferences persist and system appearance follows the device', async ({ page, request }, testInfo) => {
+  await open(page,'/settings');
+  await selectValue(page,'界面主题','dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  await selectValue(page,'界面语言','en');
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await expect(page.getByRole('link',{name:'Preferences',exact:true})).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'Theme',exact:true})).toHaveText('Dark');
+  await expect.poll(async()=>(await(await request.get('/internal/settings')).json()).settings).toMatchObject({'ui.theme':'dark','ui.language':'en'});
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  expect((await new AxeBuilder({page}).include('.workspace-settings').withTags(['wcag2a','wcag2aa']).analyze()).violations).toEqual([]);
+  await page.screenshot({path:testInfo.outputPath('preferences-dark-en.png'),animations:'disabled'});
+  await selectValue(page,'Language','ja');
+  await expect(page.locator('html')).toHaveAttribute('lang','ja');
+  await expect(page.getByRole('link',{name:'環境設定',exact:true})).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'テーマ',exact:true})).toHaveText('ダーク');
+  await selectValue(page,'テーマ','system');
+  await page.emulateMedia({colorScheme:'light'});
+  await expect(page.locator('html')).toHaveAttribute('data-theme','light');
+  await page.emulateMedia({colorScheme:'dark'});
+  await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  await selectValue(page,'テーマ','light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme','light');
+  await page.screenshot({path:testInfo.outputPath('preferences-light-ja.png'),animations:'disabled'});
+  await selectValue(page,'言語','zh-CN');
+  await expect(page.locator('html')).toHaveAttribute('lang','zh-CN');
+});
+
+test('localized dark workspace keeps prompts assets and editor state unchanged', async ({ page, request }, testInfo) => {
+  const asset=await upload(request);
+  await request.patch('/internal/settings',{data:{values:{'ui.theme':'dark','ui.language':'en'}}});
+  await open(page,'/imagine',false);
+  await expect(page.locator('html')).toHaveAttribute('lang','en');
+  const prompt=page.locator('.composer-main > textarea');
+  await prompt.fill('生成设置 — Sunrise 東京 {0}');
+  await page.getByRole('button',{name:'Generation settings',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Generation settings',exact:true})).toBeVisible();
+  expect((await new AxeBuilder({page}).include('.composer-generation-settings').withTags(['wcag2a','wcag2aa']).analyze()).violations).toEqual([]);
+  await request.patch('/internal/settings',{data:{values:{'ui.language':'ja'}}});
+  await expect(page.locator('html')).toHaveAttribute('lang','ja');
+  await expect(page.getByRole('dialog',{name:'生成設定',exact:true})).toBeVisible();
+  await expect(prompt).toHaveValue('生成设置 — Sunrise 東京 {0}');
+  await page.keyboard.press('Escape');
+  const card=page.locator(`[data-study-id="${asset.id}"]`);
+  await expect(card.locator('img')).toHaveAttribute('alt','coast.webp');
+  await card.locator('.study-open').click();
+  const image=page.locator('.viewer-stage > img.viewer-image');
+  await expect(image).toHaveAttribute('data-image-quality','original');
+  await expect(image).toHaveAttribute('src',asset.contentUrl);
+  await expect(image).toHaveCSS('filter','none');
+  await expect(page.locator('.study-viewer')).toHaveCSS('background-color','rgb(36, 47, 40)');
+  await expect(page.getByRole('button',{name:'作品に戻る',exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('editor-dark-ja.png'),animations:'disabled'});
+  await page.getByRole('button',{name:'作品に戻る',exact:true}).click();
+  await expect(prompt).toHaveValue('生成设置 — Sunrise 東京 {0}');
+  await prompt.focus();
+  await page.getByRole('button',{name:'画像・動画を切り替え',exact:true}).click();
+  await expect(page.getByRole('group',{name:'動画の入力方式',exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('composer-dark-ja.png'),animations:'disabled'});
+});
+
+test('theme and language remain account-scoped after signing in as another user', async ({ page, request }) => {
+  const username=`appearance-${randomUUID()}`;
+  expect((await request.post('/internal/accounts',{data:{username,password:'appearance-fixture-password'}})).status()).toBe(201);
+  await request.patch('/internal/settings',{data:{values:{'ui.theme':'dark','ui.language':'ja'}}});
+  await open(page,'/settings');
+  await expect(page.locator('html')).toHaveAttribute('lang','ja');
+  await page.getByRole('button',{name:'ログアウト',exact:true}).click();
+  await page.locator('input[name="username"]').fill(username);
+  await page.locator('input[name="password"]').fill('appearance-fixture-password');
+  await page.locator('.auth-gate-form button[type="submit"]').click();
+  await expect(page.locator('.workspace-header')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang','zh-CN');
+  await expect(page.locator('html')).toHaveAttribute('data-theme','light');
+  expect((await(await request.get('/internal/settings')).json()).settings).toMatchObject({'ui.theme':'dark','ui.language':'ja'});
 });

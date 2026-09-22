@@ -9,6 +9,8 @@ export const GENERAL_SETTING_DEFAULTS = {
   'gallery.initial_filter': 'all',
   'pwa.update_notifications': true,
   'ui.reduce_motion': 'system',
+  'ui.theme': 'light',
+  'ui.language': 'zh-CN',
 } as const satisfies Readonly<Record<string, JsonValue>>;
 
 export const PWA_SETTING_DEFAULTS = {
@@ -17,6 +19,8 @@ export const PWA_SETTING_DEFAULTS = {
 
 
 export interface GeneralSettingsValues {
+  theme: 'light' | 'dark' | 'system';
+  language: 'zh-CN' | 'en' | 'ja';
   groupBySeries: boolean;
   groupConcurrentImages: boolean;
   groupUploadedReferences: boolean;
@@ -39,6 +43,8 @@ function oneOf<T extends string>(value: JsonValue | undefined, allowed: readonly
 
 export function readGeneralSettings(settings: JsonObject | undefined): GeneralSettingsValues {
   return {
+    theme: oneOf(settings?.['ui.theme'], ['light', 'dark', 'system'], 'light'),
+    language: oneOf(settings?.['ui.language'], ['zh-CN', 'en', 'ja'], 'zh-CN'),
     groupBySeries: settings?.['gallery.group_by_series'] === true,
     groupConcurrentImages: settings?.['gallery.group_concurrent_images'] === true,
     groupUploadedReferences: settings?.['gallery.group_uploaded_references'] === true,

@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ArrowLeft, Bookmark, ChevronLeft, ChevronRight, Download, Info } from 'lucide-react';
@@ -106,10 +107,10 @@ export function Viewer(props: ViewerProps) {
         if ((event.target as HTMLElement).closest('input,textarea,select,video')) return;
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); props.onMove(event.key === 'ArrowLeft' ? -1 : 1); }
       }}>
-      <header className="viewer-heading"><div className="viewer-heading-main"><Dialog.Close asChild><button type="button" className="tool" aria-label="返回作品"><ArrowLeft size={20} /></button></Dialog.Close><Dialog.Title>{item.title}</Dialog.Title><span className="viewer-index">{props.index + 1} / {props.total}</span></div><div className="viewer-heading-actions">
-        <Tool label={item.saved ? '取消收藏' : '收藏作品'} disabled={writeDisabled} className={item.saved ? 'is-saved' : ''} onClick={props.onSave}><Bookmark size={18} fill={item.saved ? 'currentColor' : 'none'} /></Tool>
-        <a className="tool" aria-label="下载原文件" title="下载原文件" aria-disabled={writeDisabled} href={!writeDisabled ? item.src : undefined} download={`${item.title.slice(0, 60)}.${mediaExtension(item)}`}><Download size={19} /></a>
-        <Tool label="作品信息" className="viewer-info-trigger" disabled={!!props.stageContent} aria-pressed={info} aria-expanded={info} aria-controls={info ? infoId : undefined} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
+      <header className="viewer-heading"><div className="viewer-heading-main"><Dialog.Close asChild><button type="button" className="tool" aria-label={t("返回作品")}><ArrowLeft size={20} /></button></Dialog.Close><Dialog.Title>{item.title}</Dialog.Title><span className="viewer-index">{props.index + 1} / {props.total}</span></div><div className="viewer-heading-actions">
+        <Tool label={item.saved ? t("取消收藏") : t("收藏作品")} disabled={writeDisabled} className={item.saved ? 'is-saved' : ''} onClick={props.onSave}><Bookmark size={18} fill={item.saved ? 'currentColor' : 'none'} /></Tool>
+        <a className="tool" aria-label={t("下载原文件")} title={t("下载原文件")} aria-disabled={writeDisabled} href={!writeDisabled ? item.src : undefined} download={`${item.title.slice(0, 60)}.${mediaExtension(item)}`}><Download size={19} /></a>
+        <Tool label={t("作品信息")} className="viewer-info-trigger" disabled={!!props.stageContent} aria-pressed={info} aria-expanded={info} aria-controls={info ? infoId : undefined} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
       </div></header>
       <div className="viewer-workspace">
         <div className="viewer-stage" ref={mountStage} data-viewer-scale={gesture.scale} onClick={event => { if (!(event.target as HTMLElement).closest('button,a,video')) props.onStageClick?.(); }}
@@ -136,14 +137,14 @@ export function Viewer(props: ViewerProps) {
           }}
           onLostPointerCapture={event => apply(transitionViewerGesture(gestureRef.current, { type: 'lostcapture', pointerId: event.pointerId }))}
           onPointerCancel={event => apply(transitionViewerGesture(gestureRef.current, { type: 'pointercancel', pointerId: event.pointerId }))}>
-          {props.stageContent ?? (mediaError ? <p className="media-error" role="alert">原文件暂时无法加载<button className="quiet-command" onClick={() => setMediaError(false)}>重试</button></p> : <>
+          {props.stageContent ?? (mediaError ? <p className="media-error" role="alert">{t("原文件暂时无法加载")}<button className="quiet-command" onClick={() => setMediaError(false)}>{t("重试")}</button></p> : <>
             {image && <ProgressiveViewerImage key={item.id} item={item} source={props.previewSrc ?? (props.online ? item.src : item.thumbnail)} opening={props.entryOpening ?? false} style={{ transform: `translate(${gesture.position.x}px, ${gesture.position.y}px) scale(${gesture.scale})` }} />}
-            {item.kind === 'video' && (props.online ? <video key={item.id} ref={props.videoRef} src={item.src} poster={item.poster ?? undefined} controls playsInline preload="auto" className="viewer-image viewer-source-video" aria-label="原视频" aria-hidden={image} style={image ? { display: 'none' } : undefined} onLoadedMetadata={event => { const video = event.currentTarget, time = props.initialVideoTime ?? 0; if (time > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration); }} onTimeUpdate={event => props.onVideoTime?.(event.currentTarget.currentTime)} onSeeked={event => props.onVideoTime?.(event.currentTarget.currentTime)} onError={() => { if (!image) setMediaError(true); }} /> : !image && <img className="viewer-image" src={item.poster ?? item.thumbnail} alt={item.title} />)}
+            {item.kind === 'video' && (props.online ? <video key={item.id} ref={props.videoRef} src={item.src} poster={item.poster ?? undefined} controls playsInline preload="auto" className="viewer-image viewer-source-video" aria-label={t("原视频")} aria-hidden={image} style={image ? { display: 'none' } : undefined} onLoadedMetadata={event => { const video = event.currentTarget, time = props.initialVideoTime ?? 0; if (time > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(time, video.duration); }} onTimeUpdate={event => props.onVideoTime?.(event.currentTarget.currentTime)} onSeeked={event => props.onVideoTime?.(event.currentTarget.currentTime)} onError={() => { if (!image) setMediaError(true); }} /> : !image && <img className="viewer-image" src={item.poster ?? item.thumbnail} alt={item.title} />)}
           </>)}
 
           {gesture.mode === 'edge-back' && gesture.startPoint && gesture.lastPoint && gesture.lastPoint.x > gesture.startPoint.x && <span className="viewer-edge-back" aria-hidden="true" style={{ opacity: Math.min(1, (gesture.lastPoint.x - gesture.startPoint.x) / VIEWER_EDGE_BACK_THRESHOLD) }}><ChevronLeft size={24} /></span>}
-          <Tool label="上一张作品" className="viewer-arrow previous" disabled={!(props.canPrevious ?? props.total > 1)} onClick={() => props.onMove(-1)}><ChevronLeft size={23} /></Tool>
-          <Tool label="下一张作品" className="viewer-arrow next" disabled={!(props.canNext ?? props.total > 1)} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
+          <Tool label={t("上一张作品")} className="viewer-arrow previous" disabled={!(props.canPrevious ?? props.total > 1)} onClick={() => props.onMove(-1)}><ChevronLeft size={23} /></Tool>
+          <Tool label={t("下一张作品")} className="viewer-arrow next" disabled={!(props.canNext ?? props.total > 1)} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
 
         </div>
         {info && !props.stageContent && <ViewerInfo key={item.id} {...props} id={infoId} writeDisabled={writeDisabled} onClose={() => setInfo(false)} />}

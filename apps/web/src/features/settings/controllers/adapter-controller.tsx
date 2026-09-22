@@ -1,3 +1,4 @@
+import { t } from '../../../i18n/index';
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { LoaderCircle, X } from 'lucide-react';
@@ -828,9 +829,9 @@ function CustomAdapterWorkspaceContainerContent({
             <header className="panel-header">
               <div>
                 <Dialog.Title>{provider.name}</Dialog.Title>
-                <Dialog.Description id="custom-adapter-workspace-description">{isCustomHttp ? '声明式 HTTP 适配器' : isTrustedJs ? '受信任 JavaScript 适配器' : '不支持的适配器类型'}</Dialog.Description>
+                <Dialog.Description id="custom-adapter-workspace-description">{isCustomHttp ? t("声明式 HTTP 适配器") : isTrustedJs ? t("受信任 JavaScript 适配器") : t("不支持的适配器类型")}</Dialog.Description>
               </div>
-              <button aria-label="关闭适配器" className="tool" onClick={close} ref={closeButtonRef} title="关闭适配器" type="button"><X aria-hidden="true" size={18} /></button>
+              <button aria-label={t("关闭适配器")} className="tool" onClick={close} ref={closeButtonRef} title={t("关闭适配器")} type="button"><X aria-hidden="true" size={18} /></button>
             </header>
             <div className="panel-body">
               {effectiveQueryError && (
@@ -878,7 +879,7 @@ function CustomAdapterWorkspaceContainerContent({
               )}
               {pendingAction && <p aria-live="polite" className="custom-adapter-dialog-pending" role="status"><LoaderCircle aria-hidden="true" className="is-spinning" size={15} />{pendingAction} in progress</p>}
             </div>
-            <footer className="adapter-footer"><span aria-live="polite" role="status">{actionError ?? (dirty ? '有未保存的修改' : status === 'success' ? '已保存' : '')}</span><button aria-label="关闭适配器" className="quiet-command" onClick={close} type="button">完成</button></footer>
+            <footer className="adapter-footer"><span aria-live="polite" role="status">{actionError ?? (dirty ? t("有未保存的修改") : status === 'success' ? t("已保存") : '')}</span><button aria-label={t("关闭适配器")} className="quiet-command" onClick={close} type="button">{t("完成")}</button></footer>
           </Dialog.Content>
         </Dialog.Portal>
       )}

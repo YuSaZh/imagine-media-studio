@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 export async function copyPrompt(prompt: string, notice: (message: string) => void): Promise<void> {
   try {
     try {
@@ -12,6 +13,6 @@ export async function copyPrompt(prompt: string, notice: (message: string) => vo
       try { field.select(); if (!document.execCommand('copy')) throw new Error('Copy failed'); }
       finally { field.remove(); if (previous instanceof HTMLElement) previous.focus({ preventScroll: true }); }
     }
-    notice('已复制提示词');
-  } catch { notice('复制失败，请打开详情选择提示词复制'); }
+    notice(t("已复制提示词"));
+  } catch { notice(t("复制失败，请打开详情选择提示词复制")); }
 }

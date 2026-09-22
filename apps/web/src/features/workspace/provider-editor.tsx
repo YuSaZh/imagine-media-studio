@@ -1,3 +1,4 @@
+import { t } from '../../i18n/index';
 import { Select, SelectItem } from './select';
 import { useEffect, useRef, useState } from 'react';
 import { matchModelProtocol, MODEL_PROTOCOLS, modelDisplayName, ModelCapabilityPresetQuerySchema, ModelCapabilitiesSchema, resolveModelProfile, type ModelDto, type ProviderDto } from '@imagine/shared';
@@ -11,7 +12,7 @@ import { ModelCatalogPicker } from './model-catalog-picker';
 import { useWorkspaceCatalog } from './queries';
 
 export function ProviderApiKeyField({ hasStoredKey, onChange, value }: { hasStoredKey: boolean; onChange: (value: string) => void; value: string }) {
-  return <label><span>API Key</span><input aria-label="API Key" autoComplete="new-password" type="password" value={value} onChange={event => onChange(event.target.value)} placeholder={hasStoredKey ? '留空保留已存储的密钥' : '输入 API Key'} /></label>;
+  return <label><span>API Key</span><input aria-label="API Key" autoComplete="new-password" type="password" value={value} onChange={event => onChange(event.target.value)} placeholder={hasStoredKey ? t("留空保留已存储的密钥") : t("输入 API Key")} /></label>;
 }
 
 export function ManualModelCapabilityField({ onChange, value }: { onChange: (value: string) => void; value: string }) {
@@ -19,7 +20,7 @@ export function ManualModelCapabilityField({ onChange, value }: { onChange: (val
   try { const parsed: unknown = JSON.parse(value); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) capabilities = parsed as Record<string, unknown>; } catch { /* The JSON editor preserves incomplete input. */ }
   const update = (key: string, next: unknown) => onChange(JSON.stringify({ ...capabilities, [key]: next }, null, 2));
   const list = (key: string) => Array.isArray(capabilities[key]) ? capabilities[key].join(', ') : '';
-  return <div className="model-capabilities"><div className="form-columns"><label><span>画幅选项</span><input aria-label="模型画幅选项" placeholder="1:1, 16:9, 9:16" defaultValue={list('aspectRatios')} onBlur={event => update('aspectRatios', event.target.value.split(/[,，]/).map(item => item.trim()).filter(Boolean))} /></label><label><span>分辨率选项</span><input aria-label="模型分辨率选项" placeholder="1024x1024, 1920x1080" defaultValue={list('resolutions')} onBlur={event => update('resolutions', event.target.value.split(/[,，]/).map(item => item.trim()).filter(Boolean))} /></label></div><label><span>最大生成数量</span><input aria-label="最大生成数量" type="number" min={1} max={32} value={typeof capabilities.maxBatchCount === 'number' ? capabilities.maxBatchCount : 1} onChange={event => onChange(JSON.stringify({ ...capabilities, maxBatchCount: Number(event.target.value), supportsBatchCount: Number(event.target.value) > 1 }, null, 2))} /></label><details className="form-advanced"><summary>高级能力配置</summary><label><span>模型能力 JSON</span><textarea aria-label="模型能力 JSON" className="code-input" rows={12} spellCheck={false} value={value} onChange={event => onChange(event.target.value)} /></label></details></div>;
+  return <div className="model-capabilities"><div className="form-columns"><label><span>{t("画幅选项")}</span><input aria-label={t("模型画幅选项")} placeholder="1:1, 16:9, 9:16" defaultValue={list('aspectRatios')} onBlur={event => update('aspectRatios', event.target.value.split(/[,，]/).map(item => item.trim()).filter(Boolean))} /></label><label><span>{t("分辨率选项")}</span><input aria-label={t("模型分辨率选项")} placeholder="1024x1024, 1920x1080" defaultValue={list('resolutions')} onBlur={event => update('resolutions', event.target.value.split(/[,，]/).map(item => item.trim()).filter(Boolean))} /></label></div><label><span>{t("最大生成数量")}</span><input aria-label={t("最大生成数量")} type="number" min={1} max={32} value={typeof capabilities.maxBatchCount === 'number' ? capabilities.maxBatchCount : 1} onChange={event => onChange(JSON.stringify({ ...capabilities, maxBatchCount: Number(event.target.value), supportsBatchCount: Number(event.target.value) > 1 }, null, 2))} /></label><details className="form-advanced"><summary>{t("高级能力配置")}</summary><label><span>{t("模型能力 JSON")}</span><textarea aria-label={t("模型能力 JSON")} className="code-input" rows={12} spellCheck={false} value={value} onChange={event => onChange(event.target.value)} /></label></details></div>;
 }
 
 export function ProviderEditor({ provider, onClose, onSaved }: { provider: ProviderDto | null; onClose: () => void; onSaved: (provider: ProviderDto) => void }) {
@@ -38,19 +39,19 @@ export function ProviderEditor({ provider, onClose, onSaved }: { provider: Provi
         : await internalClient.createProvider(input);
       setForm(current => ({ ...current, apiKey: '', headersJson: '' }));
       onSaved(result.provider);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : '连接保存失败'); }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : t("连接保存失败")); }
     finally { setSaving(false); }
   };
-  return <Panel title={provider ? '编辑连接' : '添加连接'} open onClose={() => !saving && onClose()} className="connection-editor">
+  return <Panel title={provider ? t("编辑连接") : t("添加连接")} open onClose={() => !saving && onClose()} className="connection-editor">
     <form className="connection-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-      <div className="form-columns"><label><span>连接名称</span><input aria-label="连接名称" maxLength={120} required value={form.name} onChange={event => update('name', event.target.value)} /></label><label><span>接口类型</span><Select aria-label="接口类型" value={form.profile} disabled={provider?.type === 'mock'} onChange={event => setForm(current => ({ ...current, profile: event.target.value as ProviderFormState['profile'], type: event.target.value, unsupportedType: false }))}>{PROVIDER_PROFILE_OPTIONS.filter(option => ['openai', 'gemini', 'xai', 'custom-http-v1', 'custom-js-v1', ...(provider?.type === 'mock' ? ['mock'] : [])].includes(option.value)).map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</Select></label></div>
+      <div className="form-columns"><label><span>{t("连接名称")}</span><input aria-label={t("连接名称")} maxLength={120} required value={form.name} onChange={event => update('name', event.target.value)} /></label><label><span>{t("接口类型")}</span><Select aria-label={t("接口类型")} value={form.profile} disabled={provider?.type === 'mock'} onChange={event => setForm(current => ({ ...current, profile: event.target.value as ProviderFormState['profile'], type: event.target.value, unsupportedType: false }))}>{PROVIDER_PROFILE_OPTIONS.filter(option => ['openai', 'gemini', 'xai', 'custom-http-v1', 'custom-js-v1', ...(provider?.type === 'mock' ? ['mock'] : [])].includes(option.value)).map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</Select></label></div>
       <label><span>Base URL</span><input aria-label="Base URL" type="url" value={form.baseUrl} onChange={event => update('baseUrl', event.target.value)} placeholder="https://api.example.com/v1" /></label>
       <ProviderApiKeyField hasStoredKey={provider?.hasApiKey ?? false} value={form.apiKey} onChange={value => { setClearKey(false); update('apiKey', value); }} />
-      {provider?.hasApiKey && <label className="check-line"><input type="checkbox" checked={clearKey} onChange={event => setClearKey(event.target.checked)} />清除已存储的 API Key</label>}
-      <details className="form-advanced"><summary>高级配置</summary><label><span>自定义请求头 JSON</span><textarea className="code-input" aria-label="自定义请求头 JSON" value={form.headersJson} placeholder={provider?.hasCustomHeaders ? '留空保留现有请求头' : '{}'} rows={4} onChange={event => { setClearHeaders(false); update('headersJson', event.target.value); }} /></label>{provider?.hasCustomHeaders && <label className="check-line"><input type="checkbox" checked={clearHeaders} onChange={event => setClearHeaders(event.target.checked)} />清除自定义请求头</label>}<label><span>接口配置 JSON</span><textarea className="code-input" aria-label="接口配置 JSON" value={form.configJson} rows={5} onChange={event => update('configJson', event.target.value)} /></label></details>
-      <div className="form-options"><label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => update('enabled', event.target.checked)} />启用连接</label><label className="check-line"><input type="checkbox" checked={form.isDefault} onChange={event => update('isDefault', event.target.checked)} />设为默认</label></div>
+      {provider?.hasApiKey && <label className="check-line"><input type="checkbox" checked={clearKey} onChange={event => setClearKey(event.target.checked)} />{t("清除已存储的 API Key")}</label>}
+      <details className="form-advanced"><summary>{t("高级配置")}</summary><label><span>{t("自定义请求头 JSON")}</span><textarea className="code-input" aria-label={t("自定义请求头 JSON")} value={form.headersJson} placeholder={provider?.hasCustomHeaders ? t("留空保留现有请求头") : '{}'} rows={4} onChange={event => { setClearHeaders(false); update('headersJson', event.target.value); }} /></label>{provider?.hasCustomHeaders && <label className="check-line"><input type="checkbox" checked={clearHeaders} onChange={event => setClearHeaders(event.target.checked)} />{t("清除自定义请求头")}</label>}<label><span>{t("接口配置 JSON")}</span><textarea className="code-input" aria-label={t("接口配置 JSON")} value={form.configJson} rows={5} onChange={event => update('configJson', event.target.value)} /></label></details>
+      <div className="form-options"><label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => update('enabled', event.target.checked)} />{t("启用连接")}</label><label className="check-line"><input type="checkbox" checked={form.isDefault} onChange={event => update('isDefault', event.target.checked)} />{t("设为默认")}</label></div>
       {error && <p className="error-state" role="alert">{error}</p>}
-      <div className="form-footer"><button className="quiet-command" type="button" disabled={saving} onClick={onClose}>取消</button><button className="primary-command" type="submit" disabled={saving || !form.name.trim()}>{saving ? '正在保存' : '保存连接'}</button></div>
+      <div className="form-footer"><button className="quiet-command" type="button" disabled={saving} onClick={onClose}>{t("取消")}</button><button className="primary-command" type="submit" disabled={saving || !form.name.trim()}>{saving ? t("正在保存") : t("保存连接")}</button></div>
     </form>
   </Panel>;
 }
@@ -79,15 +80,15 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
     void internalClient.getModelCapabilityPreset(providerId, ModelCapabilityPresetQuerySchema.parse({ modelId: id, operation: `${matched?.kind ?? 'image'}.generate` })).then(({ capabilities }) => {
       if (revision.current !== token) return;
       setForm(current => ({ ...current, capabilitiesJson: JSON.stringify(mergeCapabilityPresets({}, capabilities, providerType, id), null, 2) }));
-      setNotice('已载入模型能力');
+      setNotice(t("已载入模型能力"));
     }).catch(failure => {
       if (revision.current !== token) return;
-      if (failure instanceof InternalApiError && failure.status === 400) setNotice('未找到内置能力');
-      else setError(failure instanceof Error ? failure.message : '模型能力载入失败');
+      if (failure instanceof InternalApiError && failure.status === 400) setNotice(t("未找到内置能力"));
+      else setError(failure instanceof Error ? failure.message : t("模型能力载入失败"));
     }).finally(() => { if (revision.current === token) setLoadingCapabilities(false); });
   };
   const sources = [
-    ...(templates.data?.models ?? []).map(item => ({ key: `builtin:${item.capabilities.profile}:${item.modelId}`, label: `内置 · ${item.displayName} · ${MODEL_PROTOCOLS.find(profile => profile.value === item.capabilities.profile)?.label ?? ''}`, capabilities: item.capabilities, modelId: item.modelId, providerType })),
+    ...(templates.data?.models ?? []).map(item => ({ key: `builtin:${item.capabilities.profile}:${item.modelId}`, label: t("内置 · {0} · {1}", [item.displayName, MODEL_PROTOCOLS.find(profile => profile.value === item.capabilities.profile)?.label ?? '']), capabilities: item.capabilities, modelId: item.modelId, providerType })),
     ...(catalog.models.data ?? []).filter(item => item.id !== model?.id && catalog.providers.data?.some(provider => provider.id === item.providerId && !provider.type.startsWith('custom-'))).map(item => {
       const provider = catalog.providers.data!.find(provider => provider.id === item.providerId)!;
       return { key: `saved:${item.id}`, label: `${provider.name} · ${item.displayName} · ${item.modelId}`, capabilities: item.capabilities, modelId: item.modelId, providerType: provider.type };
@@ -102,12 +103,12 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
       const profile = resolveModelProfile(source.providerType, capabilities.operations[0]!, source.modelId, capabilities.profile);
       const copied = { ...capabilities, ...(profile ? { profile } : {}) };
       setForm(current => ({ ...current, capabilitiesJson: JSON.stringify(capabilities.parameters === undefined ? mergeCapabilityPresets({}, copied, source.providerType, source.modelId) : copied, null, 2) }));
-      setNotice('已复制模型配置');
-    } catch (failure) { setError(failure instanceof Error ? failure.message : '模型配置复制失败'); }
+      setNotice(t("已复制模型配置"));
+    } catch (failure) { setError(failure instanceof Error ? failure.message : t("模型配置复制失败")); }
   };
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  return <Panel title={model ? '编辑模型' : '添加模型'} open onEscapeKeyDown={event => { const target = event.target; if (target instanceof HTMLElement && target.getAttribute("role") === "combobox" && target.getAttribute("aria-expanded") === "true") event.preventDefault(); }} onClose={() => !saving && onClose()} className="connection-editor model-editor"><form className="connection-form" onSubmit={event => {
+  return <Panel title={model ? t("编辑模型") : t("添加模型")} open onEscapeKeyDown={event => { const target = event.target; if (target instanceof HTMLElement && target.getAttribute("role") === "combobox" && target.getAttribute("aria-expanded") === "true") event.preventDefault(); }} onClose={() => !saving && onClose()} className="connection-editor model-editor"><form className="connection-form" onSubmit={event => {
     event.preventDefault(); if (loadingCapabilities) return; setSaving(true); setError('');
     void (async () => {
       try {
@@ -115,15 +116,15 @@ export function ModelEditor({ model, providerId, providerType = '', onClose, onS
         if (model?.capabilitySource === 'manual') await internalClient.patchModel(model.id, { modelId: input.modelId, displayName: input.displayName, capabilities: input.capabilities, enabled: input.enabled });
         else await internalClient.createModel(input);
         onSaved();
-      } catch (failure) { setError(failure instanceof Error ? failure.message : '模型保存失败'); }
+      } catch (failure) { setError(failure instanceof Error ? failure.message : t("模型保存失败")); }
       finally { setSaving(false); }
     })();
-  }}><div className="model-form-body">{!model && <div className="catalog-field"><span>远端模型目录</span><div className="catalog-model-picker"><ModelCatalogPicker models={availableModels} value={form.modelId} loading={remoteModels.isPending || catalog.models.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label="刷新远端模型目录" title="刷新远端模型目录" disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">模型目录拉取失败</span>}{remoteModels.isSuccess && !availableModels.length && !catalog.models.isPending && <span>{remoteModels.data.models.length ? '远端模型均已添加' : '没有可用的远端模型'}</span>}</div>}
-    <div className="form-columns"><label><span>模型 ID</span><input aria-label="模型 ID" required value={form.modelId} onChange={event => selectModel(event.target.value, false)} /></label><label><span>显示名称</span><input aria-label="模型显示名称" required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div>
-    <label><span>复制模型配置</span><Select aria-label="配置来源模型" value={copySource} onChange={event => setCopySource(event.target.value)}><SelectItem value="">选择来源模型</SelectItem>{sources.map(source => <SelectItem key={source.key} value={source.key}>{source.label}</SelectItem>)}</Select></label>
-    <button type="button" className="quiet-command" disabled={!copySource || saving} onClick={copyCapabilities}><Copy size={16} />复制配置</button>
-    {templates.isPending && <p role="status">正在加载内置模型…</p>}{templates.isError && <p className="error-state" role="alert">内置模型加载失败<button type="button" className="quiet-command" onClick={() => void templates.refetch()}>重试</button></p>}
-    {(loadingCapabilities || notice) && <p role="status">{loadingCapabilities ? '正在载入模型能力…' : notice}</p>}
+  }}><div className="model-form-body">{!model && <div className="catalog-field"><span>{t("远端模型目录")}</span><div className="catalog-model-picker"><ModelCatalogPicker models={availableModels} value={form.modelId} loading={remoteModels.isPending || catalog.models.isPending} onSelect={selectModel} /><button type="button" className="quiet-command" aria-label={t("刷新远端模型目录")} title={t("刷新远端模型目录")} disabled={remoteModels.isFetching} onClick={() => void remoteModels.refetch()}><RefreshCw size={16} /></button></div>{remoteModels.isError && <span role="alert" className="error-state">{t("模型目录拉取失败")}</span>}{remoteModels.isSuccess && !availableModels.length && !catalog.models.isPending && <span>{remoteModels.data.models.length ? t("远端模型均已添加") : t("没有可用的远端模型")}</span>}</div>}
+    <div className="form-columns"><label><span>{t("模型 ID")}</span><input aria-label={t("模型 ID")} required value={form.modelId} onChange={event => selectModel(event.target.value, false)} /></label><label><span>{t("显示名称")}</span><input aria-label={t("模型显示名称")} required value={form.displayName} onChange={event => setForm(current => ({ ...current, displayName: event.target.value }))} /></label></div>
+    <label><span>{t("复制模型配置")}</span><Select aria-label={t("配置来源模型")} value={copySource} onChange={event => setCopySource(event.target.value)}><SelectItem value="">{t("选择来源模型")}</SelectItem>{sources.map(source => <SelectItem key={source.key} value={source.key}>{source.label}</SelectItem>)}</Select></label>
+    <button type="button" className="quiet-command" disabled={!copySource || saving} onClick={copyCapabilities}><Copy size={16} />{t("复制配置")}</button>
+    {templates.isPending && <p role="status">{t("正在加载内置模型…")}</p>}{templates.isError && <p className="error-state" role="alert">{t("内置模型加载失败")}<button type="button" className="quiet-command" onClick={() => void templates.refetch()}>{t("重试")}</button></p>}
+    {(loadingCapabilities || notice) && <p role="status">{loadingCapabilities ? t("正在载入模型能力…") : notice}</p>}
     <ModelPolicyEditor loadCapabilities={async current => { invalidateLoad(); return (await internalClient.getModelCapabilityPreset(providerId, ModelCapabilityPresetQuerySchema.parse({ modelId: form.modelId, profile: current.profile, operation: Array.isArray(current.operations) ? current.operations[0] : 'image.generate' }))).capabilities; }} modelId={form.modelId} providerType={providerType} value={form.capabilitiesJson} onChange={value => { invalidateLoad(); setForm(current => ({ ...current, capabilitiesJson: value })); }} />
-    <label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />启用模型</label>{error && <p className="error-state" role="alert">{error}</p>}</div><div className="form-footer"><button type="button" className="quiet-command" disabled={saving} onClick={onClose}>取消</button><button className="primary-command" type="submit" disabled={saving || loadingCapabilities}>{saving ? '正在保存' : '保存模型'}</button></div></form></Panel>;
+    <label className="check-line"><input type="checkbox" checked={form.enabled} onChange={event => setForm(current => ({ ...current, enabled: event.target.checked }))} />{t("启用模型")}</label>{error && <p className="error-state" role="alert">{error}</p>}</div><div className="form-footer"><button type="button" className="quiet-command" disabled={saving} onClick={onClose}>{t("取消")}</button><button className="primary-command" type="submit" disabled={saving || loadingCapabilities}>{saving ? t("正在保存") : t("保存模型")}</button></div></form></Panel>;
 }
