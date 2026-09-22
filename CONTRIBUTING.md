@@ -1,6 +1,6 @@
 # Contributing to Imagine Media Studio
 
-[Chinese README](./README.md) | [English README](./README_EN.md) |
+[Chinese README](./README.md) | [English README](./README_EN.md) | [日本語 README](./README_JA.md) |
 [Agent rules](./AGENTS.md) | [Documentation](./docs/README.md)
 
 This guide applies to human contributions and work assisted by coding agents.
@@ -20,10 +20,23 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-Follow the [local runtime example](./README_EN.md#development) for a temporary
-Mock-backed session. Reserve an unused port, keep the temporary data directory
-separate from any existing deployment, and track the process for cleanup. The
-built server serves the UI and internal APIs on the same port.
+After building, start a temporary Mock-backed session from the repository root.
+Confirm that port `13030` is unused; the built server serves the UI and API on
+that one port. This example uses Bash and `openssl`:
+
+```bash
+IMAGINE_DEV_DATA="$(mktemp -d /tmp/imagine-media-dev.XXXXXX)"
+APP_PORT=13030 DATA_DIR="$IMAGINE_DEV_DATA" \
+  WEB_DIST_DIR="$PWD/apps/web/dist" \
+  ADMIN_USERNAME=admin ADMIN_PASSWORD=local-preview-only \
+  APP_SECRET="$(openssl rand -hex 32)" MOCK_PROVIDER_ENABLED=true \
+  pnpm --filter @imagine/server start
+```
+
+Open `http://localhost:13030` and sign in with `admin` / `local-preview-only`.
+Mock produces test outputs without calling a real model. Stop the process with
+Ctrl+C when finished, and remove only its temporary data directory. For a
+persistent deployment, use the [Docker quick start](./README_EN.md#quick-start).
 
 Never commit `.env`, credentials, application data, browser authentication state,
 private screenshots, or local tool settings. Examples use placeholders or

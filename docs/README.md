@@ -1,6 +1,6 @@
 # Documentation Map
 
-[Chinese README](../README.md) | [English README](../README_EN.md) |
+[Chinese README](../README.md) | [English README](../README_EN.md) | [日本語 README](../README_JA.md) |
 [Contributing](../CONTRIBUTING.md) | [Agent rules](../AGENTS.md)
 
 ## Current Guidance
