@@ -829,17 +829,18 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
       await page.getByRole('button', { name: '16:9', exact: true }).click();
       await page.keyboard.press('Escape');
       await expect(page.locator('.creation-controls .lucide-chevron-down')).toHaveCount(0);
+      await expect(page.locator('.options[data-state="closed"]')).toHaveCount(0);
       if (name !== 'Locked image') {
         for (const [ratio, pixels] of [['3:2', '3840x2560'], ['2:3', '2560x3840'], ['1:1', '3840x3840']]) {
           await page.getByRole('button', { name: '选择画幅', exact: true }).click();
-          await page.getByRole('button', { name: ratio, exact: true }).click();
+          await page.locator('.options[data-state="open"]').getByRole('button', { name: ratio, exact: true }).click();
           await page.keyboard.press('Escape');
           await resolution.click();
           await page.getByRole('button', { name: '4K', exact: true }).click();
           await savedModelOptions(request, provider.id, name, 'image', { parameters: { resolution: name === 'Pixel image' ? pixels : '4K' } });
         }
         await page.getByRole('button', { name: '选择画幅', exact: true }).click();
-        await page.getByRole('button', { name: 'auto', exact: true }).click();
+        await page.locator('.options[data-state="open"]').getByRole('button', { name: 'auto', exact: true }).click();
         await page.keyboard.press('Escape');
         await savedModelOptions(request, provider.id, name, 'image', { parameters: { aspectRatio: 'auto', resolution: name === 'Pixel image' ? 'auto' : '4K' } });
         await resolution.click();
@@ -899,7 +900,7 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
         await expect(resolution).toContainText('4K');
         await savedModelOptions(request, provider.id, name, 'image', { count: 2, parameters: { resolution: '2160x3840' } });
         await resolution.click();
-        await page.getByRole('button', { name: '自定义', exact: true }).click();
+        await page.locator('.options[data-state="open"]').getByRole('button', { name: '自定义', exact: true }).click();
         await page.getByLabel('自定义图片宽度').fill('0');
         await page.getByRole('button', { name: '应用', exact: true }).click();
         await expect(page.getByRole('alert').filter({ hasText: '图片尺寸超出' })).toBeVisible();
@@ -910,7 +911,7 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
         await expect(resolution).toContainText('自定义');
       } else {
         await resolution.click();
-        await expect(page.getByRole('button', { name: '自定义', exact: true })).toBeDisabled();
+        await expect(page.locator('.options[data-state="open"]').getByRole('button', { name: '自定义', exact: true })).toBeDisabled();
         await page.keyboard.press('Escape');
       }
       await page.getByLabel('创作描述', { exact: true }).fill('image shortcuts request');
@@ -975,6 +976,7 @@ test('native image protocols select tiers without forcing ratio across policies 
       const wire = scenario.profile === 'xai-imagine-image-v1' ? scenario.tier.toLowerCase() : scenario.tier;
       await savedModelOptions(request, providers[index]!, scenario.name, 'image', scenario.ruleType ? { parameters: { resolution: wire } } : { ratio: 'auto', resolution: wire });
       await page.reload();
+      if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
       await expect(resolution).toContainText(scenario.tier);
       await expect(ratio).toContainText('auto');
       await page.getByRole('button', { name: '生成设置', exact: true }).click();
@@ -1022,6 +1024,7 @@ test('custom model resolution capabilities edit, persist and expose a future nat
     await expect(page.getByRole('button', { name: '选择画幅', exact: true })).toContainText('auto');
     await savedModelOptions(request, provider.id, 'Future image', 'image', { resolution: '8K', ratio: 'auto' });
     await page.reload();
+      if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
     await expect(page.getByRole('button', { name: '选择图片分辨率', exact: true })).toContainText('8K');
     await page.screenshot({ path: testInfo.outputPath('custom-native-tier.png'), animations: 'disabled' });
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
@@ -1267,13 +1270,14 @@ test('desktop video shortcuts preserve presets custom values and model rules', a
       await expect(page.locator('.desktop-video-options > .choice')).toHaveText(['6s', '10s', '15s', '自定义']);
       await page.getByRole('button', { name: '15s', exact: true }).click();
       await expect(duration).toContainText('15s');
+      await expect(page.locator('.options[data-state="closed"]')).toHaveCount(0);
       await page.getByRole('button', { name: '生成设置', exact: true }).click();
       if (name === 'Standard video') await expect(page.getByRole('combobox', { name: '分辨率', exact: true })).toHaveText('1080p');
       else await expect(page.getByLabel('分辨率', { exact: true })).toHaveValue('1080p');
       await expect(page.getByLabel('视频时长', { exact: true })).toHaveValue('15');
       await page.keyboard.press('Escape');
       await resolution.click();
-      await page.getByRole('button', { name: '自定义', exact: true }).click();
+      await page.locator('.options[data-state="open"]').getByRole('button', { name: '自定义', exact: true }).click();
       await page.getByLabel('自定义视频分辨率', { exact: true }).fill('0');
       await page.getByRole('button', { name: '应用', exact: true }).click();
       await expect(page.getByRole('alert').filter({ hasText: '超出当前模型允许范围' })).toBeVisible();
@@ -1281,7 +1285,7 @@ test('desktop video shortcuts preserve presets custom values and model rules', a
       await page.getByRole('button', { name: '应用', exact: true }).click();
       await expect(resolution).toContainText('1440p');
       await duration.click();
-      await page.getByRole('button', { name: '自定义', exact: true }).click();
+      await page.locator('.options[data-state="open"]').getByRole('button', { name: '自定义', exact: true }).click();
       await page.getByLabel('自定义视频时长', { exact: true }).fill('12');
       await page.getByRole('button', { name: '应用', exact: true }).click();
       await expect(duration).toContainText('12s');
@@ -1535,6 +1539,7 @@ test('project selection scopes resources, references and generated outputs with 
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}`));
   await expect(page.getByRole('button', { name: '选择项目', exact: true })).toContainText(project.name);
   await expect(page.locator('.study-card')).toHaveCount(1);
+  if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
   await page.getByRole('button', { name: '添加参考图', exact: true }).click();
   await page.getByRole('button', { name: '从资源库选择', exact: true }).click();
   await expect(page.locator('.reference-option')).toHaveCount(1);
@@ -1604,14 +1609,17 @@ test('card references, video parameter memory and responsive video controls', as
   await card.locator('.card-reference').click();
   await expect(page.locator('.reference-tray img')).toHaveCount(1);
   await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
+  if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
+  await page.locator('.composer-main').evaluate(async el => { await Promise.all(el.getAnimations().map(a => a.finished)); });
   const modes = await page.getByRole('group', { name: '视频输入方式' }).boundingBox();
   const controls = await page.locator('.creation-controls').boundingBox();
   if (page.viewportSize()!.width <= 760) {
-    expect(Math.abs(modes!.y - controls!.y)).toBeLessThan(6);
+    expect(modes!.y + modes!.height).toBeLessThanOrEqual(controls!.y);
+    const mediaSwitch = (await page.getByRole('group', { name: '创作类型' }).boundingBox())!;
     const settings = await page.getByRole('button', { name: '生成设置', exact: true }).boundingBox();
     const submit = await page.getByRole('button', { name: '开始生成', exact: true }).boundingBox();
-    expect(Math.abs(modes!.y + modes!.height / 2 - settings!.y - settings!.height / 2)).toBeLessThan(1);
-    expect(modes!.x + modes!.width).toBeLessThanOrEqual(settings!.x);
+    expect(Math.abs(mediaSwitch.y + mediaSwitch.height / 2 - settings!.y - settings!.height / 2)).toBeLessThan(1);
+    expect(mediaSwitch.x + mediaSwitch.width).toBeLessThanOrEqual(settings!.x);
     expect(submit!.x - settings!.x).toBeLessThan(60);
     await expect(page.locator('.mode-segment > span').first()).toBeHidden();
     await expect(page.locator('.mode-segment > span').last()).toBeHidden();
@@ -1631,6 +1639,7 @@ test('card references, video parameter memory and responsive video controls', as
   expect((await submitted).postDataJSON()).toMatchObject({ aspectRatio: '9:16', resolution: '720p' });
   await expect.poll(async () => Object.values((await (await request.get('/internal/settings')).json()).settings['generation.default']?.video?.models ?? {}).some((value: unknown) => !!value && typeof value === 'object' && 'resolution' in value && value.resolution === '720p')).toBe(true);
   await page.reload();
+  if (page.viewportSize()!.width <= 760) await page.locator('.composer-main textarea').focus();
   await page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true }).click();
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '画幅', exact: true })).toHaveText('9:16');
@@ -1741,9 +1750,11 @@ test('mobile edge navigation, scroll boundaries and installed viewport remain st
   await expect(page.getByRole('navigation', { name: '手机导航' })).toBeVisible();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
   await page.getByRole('button', { name: '关闭面板', exact: true }).click();
+  await expect(page.getByRole('navigation', { name: '手机导航' })).toHaveCount(0);
   await swipe(8, 160, 100, 164);
   await expect(page.getByRole('navigation', { name: '手机导航' })).toBeVisible();
   await page.getByRole('button', { name: '关闭面板', exact: true }).click();
+  await expect(page.getByRole('navigation', { name: '手机导航' })).toHaveCount(0);
   await swipe(100, 160, 190, 162);
   await expect(page.getByRole('navigation', { name: '手机导航' })).toHaveCount(0);
   await page.locator('.workspace').evaluate(element => { element.scrollTop = 0; });
@@ -2241,7 +2252,7 @@ test('card project moves and optional project file deletion', async ({ page, req
   await card.hover();
   await card.getByRole('button', { name: /更多操作/ }).click();
   await expect(page.locator('.asset-options')).toBeVisible();
-  expect((await page.locator('.asset-options').boundingBox())!.width).toBe(190);
+  await expect.poll(async () => (await page.locator('.asset-options').boundingBox())?.width).toBe(190);
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('asset-menu.png') });
   await page.getByRole('button', { name: '移动到项目', exact: true }).click();
   await page.getByRole('dialog', { name: '移动到项目' }).getByRole('button', { name: 'Source project', exact: true }).click();
@@ -2570,6 +2581,7 @@ test('mobile editor uses small series thumbnails floating tools and focus-only m
   const thumbnail = (await strip.locator('button:has(img)').first().boundingBox())!;
   expect(thumbnail.width).toBe(mobile ? 59 : 88); expect(thumbnail.height).toBe(mobile ? 53 : 80);
   await viewer.getByLabel('创作描述', { exact: true }).focus();
+  await viewer.locator('.creation-composer').evaluate(async el => { await Promise.all(el.getAnimations().map(a => a.finished)); });
   const mask = (await viewer.getByRole('button', { name: '编辑蒙版', exact: true }).boundingBox())!;
   if (mobile) {
     expect(mask.y + mask.height).toBeLessThan((await strip.boundingBox())!.y - 8);
@@ -2747,12 +2759,14 @@ test('opening an uncached gallery item never displays the previously closed item
   });
   try {
     await page.locator(`[data-study-id="${target.id}"] .study-open`).click();
-    await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', target.contentUrl);
+    // Pending metadata keeps the clicked thumbnail while the entry motion prepares.
+    await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', target.thumbnailUrl);
     await expect(page.locator('.viewer-heading h2')).toHaveText('architecture.webp');
-    await expect(page.locator('html')).toHaveAttribute('data-opened-media-sources', JSON.stringify([target.contentUrl]));
+    await expect(page.locator('html')).toHaveAttribute('data-opened-media-sources', JSON.stringify([target.thumbnailUrl]));
     await expect(page.locator('.viewer-slide-overlay,.viewer-drag-neighbor')).toHaveCount(0);
     release();
     await expect(page.locator('.viewer-stage > img')).toHaveAttribute('src', target.contentUrl);
+    await expect(page.locator('html')).toHaveAttribute('data-opened-media-sources', JSON.stringify([target.thumbnailUrl, target.contentUrl]));
   } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 
@@ -3040,6 +3054,7 @@ test('concurrent image series preference groups main composer outputs and surviv
   await page.screenshot({ path: testInfo.outputPath('concurrent-series-gallery.png'), animations: 'disabled' });
   await page.locator('.study-open').click();
   await expect(page.locator('.editing-result')).toHaveCount(2);
+  await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
   if (testInfo.project.use.viewport!.width <= 760) {
     await page.getByRole('button', { name: '作品信息', exact: true }).click();
     const info = (await page.locator('.viewer-info').boundingBox())!;
