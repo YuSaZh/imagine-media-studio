@@ -13,6 +13,7 @@ import { formatGenerationTime, generationSeconds } from './generation-time';
 const GALLERY_PRELOAD_DISTANCE = 1000;
 
 interface GalleryProps {
+  revealRef?: RefObject<((id: string) => void) | null>;
   loading?: boolean;
   onShowJobs?: () => void;
   onOpenPendingSeries?: (jobId: string) => void;
@@ -140,6 +141,16 @@ export function Gallery(props: GalleryProps) {
     estimateSize: index => width * Math.max(.5, Math.min(1.8, (entries[index]?.height ?? 1) / (entries[index]?.width ?? 1))),
     lanes: columns, gap, overscan, scrollMargin: layout.margin,
   });
+  useLayoutEffect(() => {
+    const ref = props.revealRef;
+    if (!ref) return;
+    ref.current = id => {
+      const index = entries.findIndex(entry => entry.id === id);
+      if (index < 0 || !props.scrollRef.current) return;
+      virtualizer.scrollToIndex(index, { align: 'center', behavior: 'auto' });
+    };
+    return () => { ref.current = null; };
+  }, [props.revealRef, props.scrollRef, entries, virtualizer]);
   useLayoutEffect(() => {
     const measure = () => {
       const grid = gridRef.current;

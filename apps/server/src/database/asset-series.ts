@@ -58,16 +58,17 @@ export class AssetSeriesGraph {
   }
 }
 
-/** Load the account graph once. Hidden/deleted nodes still carry ancestry. */
+/** Load the account graph once. Hidden/deleted nodes still carry ancestry.
+ * Uploaded-image membership follows asset origin, even when used as source/first frame. */
 export function loadAssetSeriesGraph(database: AppDatabase, ownerId: string, groupConcurrentImages = false, groupUploadedReferences = false): AssetSeriesGraph {
   const nodes = database.all<SeriesNode>(sql`
-    WITH owned_assets AS (SELECT id, role, job_id, parent_asset_id, metadata_json FROM assets WHERE owner_id = ${ownerId}),
+    WITH owned_assets AS (SELECT id, type, role, job_id, parent_asset_id, metadata_json FROM assets WHERE owner_id = ${ownerId}),
     owned_jobs AS (
       SELECT j.id, CASE WHEN ${groupConcurrentImages ? 1 : 0} = 1 AND j.operation LIKE 'image.%' THEN b.batch_id END AS batch_id
       FROM jobs j LEFT JOIN job_generation_batches b ON b.job_id = j.id WHERE j.owner_id = ${ownerId}
     ),
     ranked_inputs AS (
-      SELECT i.job_id, i.asset_id, i.role AS input_role, (a.role IN ('upload', 'reference', 'first_frame', 'last_frame') AND a.job_id IS NULL AND coalesce(json_extract(a.metadata_json, '$.temporaryVideoFrame'), 0) != 1) AS uploaded, row_number() OVER (
+      SELECT i.job_id, i.asset_id, (a.type = 'image' AND a.role IN ('upload', 'reference', 'first_frame', 'last_frame') AND a.job_id IS NULL AND coalesce(json_extract(a.metadata_json, '$.temporaryVideoFrame'), 0) != 1) AS uploaded, row_number() OVER (
         PARTITION BY i.job_id ORDER BY CASE i.role WHEN 'source' THEN 0 WHEN 'first_frame' THEN 1 ELSE 2 END, i.sort_order, i.asset_id
       ) AS rank FROM job_inputs i JOIN owned_jobs j ON j.id = i.job_id JOIN owned_assets a ON a.id = i.asset_id
       WHERE i.role IN ('source', 'first_frame', 'reference')
@@ -80,7 +81,7 @@ export function loadAssetSeriesGraph(database: AppDatabase, ownerId: string, gro
     UNION ALL
     SELECT 'j:' || j.id AS node, coalesce('a:' || i.asset_id, 'b:' || j.batch_id) AS parent
     FROM owned_jobs j LEFT JOIN ranked_inputs i ON i.job_id = j.id AND i.rank = 1
-      AND (i.input_role != 'reference' OR ${groupUploadedReferences ? 1 : 0} = 1 OR i.uploaded = 0)
+      AND (${groupUploadedReferences ? 1 : 0} = 1 OR i.uploaded = 0)
     UNION ALL
     SELECT DISTINCT 'b:' || batch_id AS node, NULL AS parent FROM owned_jobs WHERE batch_id IS NOT NULL
   `);

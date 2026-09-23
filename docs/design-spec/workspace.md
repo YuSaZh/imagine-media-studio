@@ -351,7 +351,12 @@ The task-menu button opens task management, where cancellation/retry stays per j
 The nested “上传参考图加入系列” preference defaults off and persists independently
 of the parent switch. When enabled, primary uploaded references join their outputs;
 when disabled, uploads remain independent gallery entries and are omitted from the
-output series. Source/first-frame lineage is unchanged. Asset pages, job pages and
+output series, including when the uploaded image is used as an editing `source` or
+video `first_frame`. This decision follows asset origin, not its role in a job.
+Generated-source lineage, uploaded video sources and temporary captured video-frame
+ancestry remain intact. Completed local editor tasks must not reintroduce assets
+that the server has placed outside the selected series; active and failed local
+tasks remain available. Asset pages, job pages and
 series details accept `groupUploadedReferences`; job pages optionally return a
 `seriesId` using the same graph. These flags partition frontend caches.
 
@@ -624,3 +629,36 @@ Prompts, filenames, project/provider/model names, configured parameter labels,
 protocol values and upstream error payloads remain verbatim. Interpolation never
 translates user content. Defaults and invalid stored enum values are validated
 by the settings reader; one account's settings do not become another's defaults.
+
+### Failed series task details
+
+Selecting an unresolved task in the editor keeps the information button available.
+Task details show its prompt, model, status, creation time and failure message.
+Failed, rejected, expired and cancelled tasks can be removed after confirmation;
+active tasks and offline sessions cannot delete. The operation deletes only the
+task record and placeholder, preserving source and generated assets. A failed
+request leaves the task visible and offers retry through the confirmation dialog.
+Successful deletion clears local draft references and refreshes server series.
+For a series with no assets, deleting its anchor navigates to another surviving
+job; deleting the final task closes the viewer, including after a reload.
+
+### Editor exit transition
+
+In-app Back, Escape and the mobile edge-back gesture keep the editor mounted for
+a 320ms exit. The current decoded image (or its displayed thumbnail) is captured
+once and shrinks into the current gallery card while the gallery fades in and
+the editor fades out over the same duration. The original and destination images
+are hidden behind that snapshot to avoid double images. Zoomed images begin with
+the stage clipping preserved. Series members return to their displayed series
+cover; the virtualized gallery scrolls toward the viewport center before measuring
+the target, bounded by the existing scroll range. It adds no padding or blank space
+and does not change card positions or the gallery height. First/last cards keep
+their natural boundary positions when centering is not possible.
+Focus restoration uses `preventScroll` so it cannot undo that position.
+Without a rendered image or matching gallery card, exit uses only the scene fade.
+Reduced motion bypasses the transition; enabling it or resizing during exit
+finishes immediately. Repeated close commands cannot create multiple overlays.
+Route changes and unmounts cancel pending frames and animations and restore the
+gallery, destination image and input handling. No generation task is cancelled. The retiring editor and backdrop keep opacity
+zero through deferred portal removal; cancelling the exit animations must not
+restore their opaque base styles during the final thumbnail handoff.

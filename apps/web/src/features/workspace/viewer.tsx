@@ -7,6 +7,8 @@ import { mediaExtension, type MediaItem, type Project } from './data';
 import { Tool } from './ui';
 import type { ViewerMotion } from './viewer-motion';
 import { ViewerInfo } from './viewer-info';
+import { JobViewerInfo } from './job-viewer-info';
+import type { JobDto } from '@imagine/shared';
 import type { ViewerEntryMotion } from './use-viewer-entry';
 import { ProgressiveViewerImage } from './progressive-viewer-image';
 
@@ -20,6 +22,7 @@ export interface ViewerProps {
   canNext?: boolean;
   onMoveEntry?: (delta: number) => void;
   stageContent?: ReactNode;
+  jobInfo?: { job: JobDto; onDeleted: (id: string) => void };
   videoRef?: RefObject<HTMLVideoElement | null>;
   initialVideoTime?: number;
   onVideoTime?: (time: number) => void;
@@ -44,6 +47,7 @@ export function Viewer(props: ViewerProps) {
   const { item } = props;
   const image = !props.stageContent && (item.kind === 'image' || props.previewSrc !== undefined);
   const [info, setInfo] = useState(false);
+  useEffect(() => { setInfo(false); }, [props.jobInfo?.job.id]);
   const infoId = useId();
   const [mediaError, setMediaError] = useState(false);
   const [gesture, setGesture] = useState(createViewerGestureState);
@@ -99,10 +103,10 @@ export function Viewer(props: ViewerProps) {
     <Dialog.Overlay className="viewer-backdrop" />
     <Dialog.Content className={`study-viewer ${item.kind === 'image' ? 'image-editing-viewer' : 'video-editing-viewer'} ${info ? 'has-info' : ''}`} aria-describedby={undefined}
       onPointerDownCapture={event => {
-        if (info && matchMedia('(max-width: 760px)').matches && !(event.target as Element).closest('.viewer-info, .viewer-info-projects, .viewer-info-trigger')) setInfo(false);
+        if (info && matchMedia('(max-width: 760px)').matches && !(event.target as Element).closest('.viewer-info, .viewer-info-projects, .viewer-info-trigger, .panel')) setInfo(false);
       }}
       onEscapeKeyDown={event => { if (info) { event.preventDefault(); setInfo(false); } }}
-      onCloseAutoFocus={event => { event.preventDefault(); if (focusRef.current?.isConnected) focusRef.current.focus(); }}
+      onCloseAutoFocus={event => { event.preventDefault(); if (focusRef.current?.isConnected) focusRef.current.focus({ preventScroll: true }); }}
       onKeyDown={event => {
         if ((event.target as HTMLElement).closest('input,textarea,select,video')) return;
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); props.onMove(event.key === 'ArrowLeft' ? -1 : 1); }
@@ -110,7 +114,7 @@ export function Viewer(props: ViewerProps) {
       <header className="viewer-heading"><div className="viewer-heading-main"><Dialog.Close asChild><button type="button" className="tool" aria-label={t("返回作品")}><ArrowLeft size={20} /></button></Dialog.Close><Dialog.Title>{item.title}</Dialog.Title><span className="viewer-index">{props.index + 1} / {props.total}</span></div><div className="viewer-heading-actions">
         <Tool label={item.saved ? t("取消收藏") : t("收藏作品")} disabled={writeDisabled} className={item.saved ? 'is-saved' : ''} onClick={props.onSave}><Bookmark size={18} fill={item.saved ? 'currentColor' : 'none'} /></Tool>
         <a className="tool" aria-label={t("下载原文件")} title={t("下载原文件")} aria-disabled={writeDisabled} href={!writeDisabled ? item.src : undefined} download={`${item.title.slice(0, 60)}.${mediaExtension(item)}`}><Download size={19} /></a>
-        <Tool label={t("作品信息")} className="viewer-info-trigger" disabled={!!props.stageContent} aria-pressed={info} aria-expanded={info} aria-controls={info ? infoId : undefined} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
+        <Tool label={t("作品信息")} className="viewer-info-trigger" disabled={!!props.stageContent && !props.jobInfo} aria-pressed={info} aria-expanded={info} aria-controls={info ? infoId : undefined} onClick={() => setInfo(!info)}><Info size={19} /></Tool>
       </div></header>
       <div className="viewer-workspace">
         <div className="viewer-stage" ref={mountStage} data-viewer-scale={gesture.scale} onClick={event => { if (!(event.target as HTMLElement).closest('button,a,video')) props.onStageClick?.(); }}
@@ -147,6 +151,7 @@ export function Viewer(props: ViewerProps) {
           <Tool label={t("下一张作品")} className="viewer-arrow next" disabled={!(props.canNext ?? props.total > 1)} onClick={() => props.onMove(1)}><ChevronRight size={23} /></Tool>
 
         </div>
+        {info && props.stageContent && props.jobInfo && <JobViewerInfo key={props.jobInfo.job.id} job={props.jobInfo.job} id={infoId} online={props.online} onClose={() => setInfo(false)} onDeleted={props.jobInfo.onDeleted} />}
         {info && !props.stageContent && <ViewerInfo key={item.id} {...props} id={infoId} writeDisabled={writeDisabled} onClose={() => setInfo(false)} />}
       </div>
       {props.editingControls}

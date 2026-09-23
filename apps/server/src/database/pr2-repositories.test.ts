@@ -100,20 +100,41 @@ describe('PR 2 database repositories', () => {
     expect(database.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
-  it.each(['upload', 'reference'])('toggles uploaded %s membership without changing output lineage or account isolation', async role => {
+  it.each(['upload', 'reference', 'first_frame', 'last_frame'].flatMap(role => (['reference', 'source', 'first_frame'] as const).map(inputRole => ({ role, inputRole }))))('toggles uploaded $role used as $inputRole without changing output lineage or account isolation', async ({ role, inputRole }) => {
     const database = await createTestDatabase();
     const assets = new AssetRepository(database.orm, () => 'admin');
     const jobs = new JobRepository(database.orm);
     const provider = new ProviderRepository(database.orm).create({ name: 'Reference fixture', type: 'mock' });
     const upload = assets.create({ ...assetInput('reference.png'), role });
-    const batch = jobs.createBatch(createMockGenerationRequest({ providerId: provider.id, inputs: [{ assetId: upload.id, role: 'reference' }] }), 2);
+    const batch = jobs.createBatch(createMockGenerationRequest({ providerId: provider.id, inputs: [{ assetId: upload.id, role: inputRole }] }), 2);
+    expect(assets.seriesForJob(batch[0]!.id, true, false).assets).toEqual([]);
+    expect(assets.seriesForJob(batch[0]!.id, true, true).assets.map(asset => asset.id)).toEqual([upload.id]);
     const outputs = batch.map(job => assets.create({ ...assetInput(`${job.id}.png`), role: 'output', jobId: job.id }));
     expect(assets.page({ groupBySeries: true, groupConcurrentImages: true }).items).toHaveLength(2);
     expect(assets.series(outputs[0]!.id, true, false)?.assets).toHaveLength(2);
     expect(assets.page({ groupBySeries: true, groupConcurrentImages: true, groupUploadedReferences: true }).items).toHaveLength(1);
     expect(assets.series(outputs[0]!.id, true, true)?.assets).toHaveLength(3);
+    const edited = jobs.create(createMockGenerationRequest({ providerId: provider.id, inputs: [{ assetId: outputs[0]!.id, role: 'source' }] }));
+    const child = assets.create({ ...assetInput('child.png'), role: 'output', jobId: edited.id });
+    expect(assets.series(child.id, true, false)?.assets.map(asset => asset.id).sort()).toEqual([...outputs, child].map(asset => asset.id).sort());
+    expect(assets.series(upload.id, true, false)?.assets.map(asset => asset.id)).toEqual([upload.id]);
     expect(assets.jobSeriesRoots(true, true).get(`j:${batch[0]!.id}`)).toBe(`a:${upload.id}`);
     expect(new AssetRepository(database.orm, () => 'other-account').series(upload.id, true, true)).toBeNull();
+  });
+
+  it('retains uploaded video sources and temporary captured-frame ancestry with uploaded images excluded', async () => {
+    const database = await createTestDatabase();
+    const assets = new AssetRepository(database.orm, () => 'admin');
+    const jobs = new JobRepository(database.orm);
+    const provider = new ProviderRepository(database.orm).create({ name: 'Video lineage fixture', type: 'mock' });
+    const video = assets.create({ ...assetInput('source.mp4'), type: 'video', mimeType: 'video/mp4', durationMs: 1000 });
+    const edit = jobs.create(createMockGenerationRequest({ providerId: provider.id, inputs: [{ assetId: video.id, role: 'source' }] }));
+    const output = assets.create({ ...assetInput('edited.png'), role: 'output', jobId: edit.id });
+    const frame = assets.create({ ...assetInput('frame.png'), role: 'reference', parentAssetId: video.id, metadata: { temporaryVideoFrame: true } });
+    const frameEdit = jobs.create(createMockGenerationRequest({ providerId: provider.id, inputs: [{ assetId: frame.id, role: 'source' }] }));
+    const frameOutput = assets.create({ ...assetInput('frame-edit.png'), role: 'output', jobId: frameEdit.id });
+    expect(assets.series(frameOutput.id, false, false)?.assets.map(asset => asset.id).sort()).toEqual([video.id, output.id, frameOutput.id].sort());
+    expect(assets.page({ groupBySeries: true, groupUploadedReferences: false }).items).toHaveLength(1);
   });
 
   it('does not batch single images or videos and rolls back failed batch creation', async () => {

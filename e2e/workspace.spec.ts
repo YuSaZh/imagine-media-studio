@@ -98,7 +98,8 @@ test.beforeEach(async ({ request, page }) => {
   for (const project of (await collections.json()).items) expect((await request.delete(`/internal/collections/${project.id}`)).ok()).toBeTruthy();
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
-  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': false, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'ui.theme': 'light', 'ui.language': 'zh-CN', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  // Existing lineage fixtures include their uploaded originals explicitly.
+  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': true, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'ui.theme': 'light', 'ui.language': 'zh-CN', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
 });
 
@@ -3381,6 +3382,7 @@ test.describe('PWA thumbnail reuse', () => {
 
 
 test('pending concurrent series and uploaded reference suboption survive reload', async ({ page, request }, testInfo) => {
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_uploaded_references': false } } });
   const reference = await upload(request);
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Pending series fixture', count: 2, inputs: [{ assetId: reference.id, role: 'reference' }] } });
   expect(response.ok()).toBe(true);
@@ -3987,4 +3989,356 @@ test('theme and language remain account-scoped after signing in as another user'
   await expect(page.locator('html')).toHaveAttribute('lang','zh-CN');
   await expect(page.locator('html')).toHaveAttribute('data-theme','light');
   expect((await(await request.get('/internal/settings')).json()).settings).toMatchObject({'ui.theme':'dark','ui.language':'ja'});
+});
+
+
+test('uploaded image sources and video first frames follow the reference series preference', async ({ page, request }) => {
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.group_uploaded_references': false } } });
+  const source = await upload(request, 'coast');
+  const outputs: string[] = [];
+  for (const [operation, modelId, role] of [['image.edit', 'mock-image-v1', 'source'], ['video.image_to_video', 'mock-video-v1', 'first_frame']]) {
+    const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId, operation, prompt: 'Uploaded input series regression', inputs: [{ assetId: source.id, role }] } });
+    expect(response.status()).toBe(202);
+    const { job } = await response.json();
+    await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+    const result = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+    outputs.push(result.id);
+    const series = await request.get(`/internal/jobs/${job.id}/series?groupUploadedReferences=false`);
+    expect((await series.json()).assets.map((asset: { id: string }) => asset.id)).toEqual([result.id]);
+  }
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(3);
+  await page.locator(`[data-study-id="${outputs[0]}"] .study-open`).click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  await expect(page.locator('.editing-result')).toHaveCount(0);
+  await open(page, '/settings');
+  const toggle = page.getByLabel('上传参考图加入系列', { exact: true });
+  await expect(toggle).not.toBeChecked();
+  await toggle.click();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_uploaded_references']).toBe(true);
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(1);
+  await expect(page.getByLabel('系列共 3 件作品')).toBeVisible();
+  await page.locator('.study-open').click();
+  await expect(page.locator('.editing-result')).toHaveCount(3);
+  await open(page, '/settings');
+  await toggle.click();
+  await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.group_uploaded_references']).toBe(false);
+  await page.reload();
+  await expect(toggle).not.toBeChecked();
+  await open(page);
+  await expect(page.locator('.study-card')).toHaveCount(3);
+  await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  await expect(page.locator('.editing-result')).toHaveCount(0);
+  await page.locator('.image-editing-controls').getByLabel('创作描述', { exact: true }).fill('Edit with uploaded sources excluded');
+  const submission = await capturePost(page, '/internal/jobs');
+  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  const { job } = await (await submission.response).json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const generated = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await expect(page).toHaveURL(new RegExp(`asset=${generated.id}`));
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  await expect(page.locator('.editing-result')).toHaveCount(0);
+});
+
+
+for (const empty of [false, true]) {
+  test(`failed series details delete placeholders and preserve works (empty=${empty})`, async ({ page, request }) => {
+    await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.group_concurrent_images': true } } });
+    const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Failed series deletion fixture', count: 2, inputs: [] } });
+    expect(response.status()).toBe(202);
+    const { jobs } = await response.json();
+    const ids: string[] = jobs.map((job: { id: string }) => job.id);
+    for (const id of ids) await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+    const assets = await Promise.all(ids.map(async id => (await (await request.get(`/internal/jobs/${id}`)).json()).assets[0]));
+    const failed = new Set(empty ? ids : [ids[1]!]);
+    for (const asset of assets) if (failed.has(asset.jobId)) expect((await request.delete(`/internal/assets/${asset.id}`)).status()).toBe(204);
+    await page.route('**/series?*', async route => {
+      const response = await route.fetch();
+      if (!response.ok()) { await route.fulfill({ response }); return; }
+      const data = await response.json();
+      data.jobs = data.jobs.map((job: { id: string }) => failed.has(job.id) ? { ...job, status: 'failed', errorMessage: 'Fixture generation failure', outputCount: 0 } : job);
+      await route.fulfill({ response, json: data });
+    });
+    await open(page, empty ? `/imagine?job=${ids[0]}` : `/imagine?asset=${assets[0].id}`);
+    if (!empty) await page.getByRole('button', { name: '查看任务 Failed series deletion fixture', exact: true }).click();
+    await page.getByRole('button', { name: '作品信息', exact: true }).click();
+    const info = page.getByRole('complementary', { name: '任务信息', exact: true });
+    await expect(info).toContainText('Fixture generation failure');
+    await info.getByRole('button', { name: '删除任务', exact: true }).click();
+    await page.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(info).toBeVisible();
+    const target = empty ? ids[0]! : ids[1]!;
+    await page.route(`**/internal/jobs/${target}`, route => route.request().method() === 'DELETE' ? route.fulfill({ status: 500, json: { error: 'fixture_delete_failure', message: 'Delete failed fixture' } }) : route.continue());
+    await info.getByRole('button', { name: '删除任务', exact: true }).click();
+    await page.getByRole('button', { name: '确认删除', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '删除任务？', exact: true }).getByRole('alert')).toBeVisible();
+    expect((await request.get(`/internal/jobs/${target}`)).status()).toBe(200);
+    await page.unroute(`**/internal/jobs/${target}`);
+    await page.getByRole('button', { name: '确认删除', exact: true }).click();
+    await expect.poll(async () => (await request.get(`/internal/jobs/${target}`)).status()).toBe(404);
+    if (empty) {
+      await expect(page).toHaveURL(new RegExp(`job=${ids[1]}`));
+      await page.reload();
+      await expect(page.locator('.series-job')).toHaveCount(1);
+      await page.getByRole('button', { name: '作品信息', exact: true }).click();
+      await page.getByRole('button', { name: '删除任务', exact: true }).click();
+      await page.getByRole('button', { name: '确认删除', exact: true }).click();
+      await expect(page.locator('.study-viewer')).toHaveCount(0);
+      await expect(page).not.toHaveURL(/job=/);
+    } else {
+      await expect(page.locator('.series-job')).toHaveCount(0);
+      await expect(page.locator('.viewer-image')).toBeVisible();
+      await page.reload();
+      await expect(page.locator('.series-job')).toHaveCount(0);
+      expect((await request.get(`/internal/assets/${assets[0].id}`)).status()).toBe(200);
+    }
+  });
+}
+
+test('deleting a failed editor draft task does not restore its placeholder when reopened', async ({ page, request }, testInfo) => {
+  const source = await upload(request, 'coast');
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Failed editor draft fixture', inputs: [{ assetId: source.id, role: 'source' }] } });
+  const { job } = await response.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const detail = await (await request.get(`/internal/jobs/${job.id}`)).json();
+  for (const asset of detail.assets) await request.delete(`/internal/assets/${asset.id}`);
+  const failedJob = { ...detail.job, status: 'failed', errorMessage: 'Fixture editor failure', outputCount: 0 };
+  await page.route('**/internal/jobs', route => route.request().method() === 'POST' ? route.fulfill({ status: 202, json: { job: failedJob } }) : route.continue());
+  await page.route(`**/internal/jobs/${job.id}`, async route => {
+    if (route.request().method() !== 'GET') { await route.continue(); return; }
+    const response = await route.fetch();
+    await route.fulfill(response.ok() ? { response, json: { ...await response.json(), job: failedJob, assets: [] } } : { response });
+  });
+  await page.route('**/series?*', async route => {
+    const response = await route.fetch(), data = await response.json();
+    data.jobs = data.jobs.map((item: { id: string }) => item.id === job.id ? failedJob : item);
+    await route.fulfill({ response, json: data });
+  });
+  await open(page, `/imagine?asset=${source.id}`);
+  await focusEditingPrompt(page);
+  await page.locator('.image-editing-controls').getByLabel('创作描述', { exact: true }).fill('Failed editor draft fixture');
+  await page.getByRole('button', { name: '开始生成', exact: true }).click();
+  await expect(page.getByRole('status', { name: '编辑生成状态', exact: true })).toContainText('Fixture editor failure');
+  await page.getByRole('button', { name: '作品信息', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: '任务信息', exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('failed-task-details.png'), animations: 'disabled' });
+  await page.context().setOffline(true);
+  await expect(page.getByRole('button', { name: '删除任务', exact: true })).toBeDisabled();
+  await page.context().setOffline(false);
+  await page.getByRole('button', { name: '删除任务', exact: true }).click();
+  await page.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.locator('.series-job')).toHaveCount(0);
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await page.locator(`[data-study-id="${source.id}"] .study-open`).click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  await expect(page.locator('.series-job')).toHaveCount(0);
+  expect((await request.get(`/internal/assets/${source.id}`)).status()).toBe(200);
+  expect((await request.get(`/internal/jobs/${job.id}`)).status()).toBe(404);
+});
+
+test('editor exit shrinks the current image into its gallery card while the workspace fades in', async ({ page, request }, testInfo) => {
+  const asset = await upload(request, 'coast');
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args);
+      if (document.documentElement.dataset.pauseViewerExit === 'true') animation.pause();
+      return animation;
+    };
+  });
+  await open(page);
+  const thumbnail = page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+  await expect.poll(() => thumbnail.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  await thumbnail.click();
+  await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
+  const image = page.locator('.viewer-stage > .viewer-image');
+  await expect(image).toHaveAttribute('data-image-quality', 'original');
+  const start = (await image.boundingBox())!;
+  await page.evaluate(() => { document.documentElement.dataset.pauseViewerExit = 'true'; });
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  const layer = page.locator('.viewer-exit-layer');
+  await expect(layer).toBeVisible();
+  const from = (await layer.boundingBox())!, target = (await thumbnail.boundingBox())!;
+  expect(from.x).toBeCloseTo(start.x, 0); expect(from.y).toBeCloseTo(start.y, 0);
+  expect(from.width).toBeCloseTo(start.width, 0); expect(from.height).toBeCloseTo(start.height, 0);
+  await expect(image).toHaveCSS('visibility', 'hidden');
+  await page.evaluate(() => document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => { a.currentTime = 160; }));
+  await expect(page.locator('.imagine-app')).toHaveCSS('opacity', '0.5');
+  await expect(page.locator('.study-viewer')).toHaveCSS('opacity', '0.5');
+  expect((await layer.boundingBox())!.width).toBeGreaterThan(target.width);
+  expect((await layer.boundingBox())!.width).toBeLessThan(start.width);
+  await page.keyboard.press('Escape');
+  await expect(layer).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('editor-exit-midpoint.png') });
+  await page.evaluate(() => document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => { a.currentTime = 320; }));
+  const end = (await layer.boundingBox())!;
+  expect(end.x).toBeCloseTo(target.x, 0); expect(end.y).toBeCloseTo(target.y, 0);
+  expect(end.width).toBeCloseTo(target.width, 0); expect(end.height).toBeCloseTo(target.height, 0);
+  await page.evaluate(() => { delete document.documentElement.dataset.pauseViewerExit; document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => a.play()); });
+  await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+  await expect(thumbnail).toHaveCSS('visibility', 'visible');
+  await expect(page.locator('.imagine-app')).toHaveCSS('opacity', '1');
+  await expect(page).not.toHaveURL(/asset=/);
+});
+
+test('editor exit respects reduced motion and cleans up interrupted exits', async ({ page, request }) => {
+  const asset = await upload(request, 'coast');
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await open(page);
+  const card = page.locator(`[data-study-id="${asset.id}"]`);
+  await card.locator('.study-open').click();
+  await expect(page.locator('.viewer-stage > .viewer-image')).toHaveAttribute('data-image-quality', 'original');
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) { const animation = animate.apply(this, args); animation.pause(); return animation; };
+  });
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.viewer-exit-layer')).toBeVisible();
+  await page.evaluate(() => { document.documentElement.dataset.reduceMotion = 'always'; });
+  await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+  await expect(card.locator('img')).toHaveCSS('visibility', 'visible');
+  await card.locator('.study-open').click();
+  await expect(page.locator('.study-viewer')).toBeVisible();
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.dataset.viewerExit)).toBeUndefined();
+});
+
+test('editor exit restores an offscreen virtual card and falls back when no gallery target exists', async ({ page, request }) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  const asset = await upload(request, 'coast');
+  for (let index = 0; index < 44; index++) await upload(request, 'architecture');
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'always' } } });
+  await open(page, `/imagine?asset=${asset.id}`);
+  await expect(page.locator('.viewer-image')).toHaveAttribute('data-image-quality', 'original');
+  await expect(page.locator(`[data-study-id="${asset.id}"]`)).toHaveCount(0);
+  await page.evaluate(() => {
+    document.documentElement.dataset.reduceMotion = 'never';
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) { const animation = animate.apply(this, args); animation.pause(); return animation; };
+  });
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.viewer-exit-layer')).toBeVisible();
+  const thumbnail = page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+  const destination = (await thumbnail.boundingBox())!;
+  expect(destination.y).toBeLessThan(page.viewportSize()!.height);
+  expect(destination.y + destination.height).toBeGreaterThan(0);
+  await page.setViewportSize({ width: page.viewportSize()!.width + 1, height: page.viewportSize()!.height });
+  await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+  await expect(thumbnail).toHaveCSS('visibility', 'visible');
+  // A direct-linked image outside the active filter has no card to shrink into.
+  await request.patch('/internal/settings', { data: { values: { 'gallery.initial_filter': 'video', 'ui.reduce_motion': 'never' } } });
+  await open(page, `/imagine?asset=${asset.id}`);
+  await expect(page.locator('.viewer-image')).toHaveAttribute('data-image-quality', 'original');
+  await expect(page.locator('.study-card')).toHaveCount(0);
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) { const animation = animate.apply(this, args); animation.pause(); return animation; };
+  });
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-viewer-exit', 'fading');
+  await expect(page.locator('.viewer-exit-layer')).toHaveCount(0);
+  await page.evaluate(() => document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => { a.currentTime = 160; }));
+  await expect(page.locator('.imagine-app')).toHaveCSS('opacity', '0.5');
+  await page.evaluate(() => document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => a.play()));
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
+});
+
+test('editor exit targets the grouped series cover after switching to a generated member', async ({ page, request }) => {
+  test.skip(![1440, 390].includes(page.viewportSize()!.width));
+  const source = await upload(request, 'coast');
+  const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Series exit fixture', inputs: [{ assetId: source.id, role: 'source' }] } });
+  const { job } = await response.json();
+  await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
+  const output = (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets[0];
+  await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.series_cover': 'original', 'ui.reduce_motion': 'never' } } });
+  await open(page, `/imagine?asset=${output.id}`);
+  await expect(page.locator('.viewer-image')).toHaveAttribute('data-image-quality', 'original');
+  await expect(page.locator(`[data-study-id="${output.id}"]`)).toHaveCount(0);
+  await page.evaluate(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) { const animation = animate.apply(this, args); animation.pause(); return animation; };
+  });
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  const layer = page.locator('.viewer-exit-layer');
+  await expect(layer).toBeVisible();
+  const cover = (await page.locator(`[data-study-id="${source.id}"] .study-open > img`).boundingBox())!;
+  await page.evaluate(() => document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => { a.currentTime = 320; }));
+  expect((await layer.boundingBox())!.x).toBeCloseTo(cover.x, 0);
+  expect((await layer.boundingBox())!.width).toBeCloseTo(cover.width, 0);
+  await page.evaluate(() => document.getAnimations().filter(a => a.id.startsWith('viewer-exit-')).forEach(a => a.play()));
+  await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+});
+
+test('editor exit never reveals a faded modal again during final handoff', async ({ page, request }) => {
+  const asset = await upload(request, 'coast');
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await open(page);
+  await page.locator(`[data-study-id="${asset.id}"] .study-open`).click();
+  await expect(page.locator('.viewer-image')).toHaveAttribute('data-image-quality', 'original');
+  await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
+  await page.evaluate(() => {
+    const records: { id: string; connected: boolean; before: string; after: string }[] = [];
+    const cancel = Animation.prototype.cancel;
+    Animation.prototype.cancel = function () {
+      const target = (this.effect as KeyframeEffect | null)?.target;
+      const before = target instanceof Element ? getComputedStyle(target).opacity : '';
+      cancel.call(this);
+      if (this.id.startsWith('viewer-exit-') && target instanceof Element) records.push({ id: this.id, connected: target.isConnected, before, after: getComputedStyle(target).opacity });
+      document.documentElement.dataset.exitHandoff = JSON.stringify(records);
+    };
+  });
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
+  const records = await page.evaluate(() => JSON.parse(document.documentElement.dataset.exitHandoff ?? '[]') as { id: string; connected: boolean; before: string; after: string }[]);
+  expect(records.filter(record => ['viewer-exit-editor', 'viewer-exit-backdrop'].includes(record.id) && record.connected && Number(record.after) > Number(record.before))).toEqual([]);
+});
+
+
+test('editor exit centers within natural scroll bounds without changing gallery layout', async ({ page, request }) => {
+  const assets = [];
+  for (let index = 0; index < 25; index++) assets.push(await upload(request, 'coast'));
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'never' } } });
+  await open(page);
+  const ordered = (await (await request.get('/internal/assets?limit=60')).json()).items as { id: string }[];
+  const scroll = page.locator(page.viewportSize()!.width > 760 ? '.gallery-scroll' : '.workspace');
+  const gridHeight = await page.locator('.study-grid').evaluate(el => el.getBoundingClientRect().height);
+  for (const asset of [ordered[0]!, ordered[12]!, ordered.at(-1)!]) {
+    // Keep focus on a different card, as when browsing to a new item in the editor.
+    await page.locator('.study-open').first().focus();
+    await page.evaluate(id => { const next = new URL(location.href); next.searchParams.set('asset', id); history.pushState({}, '', next); dispatchEvent(new PopStateEvent('popstate')); }, asset.id);
+    await expect(page.locator('.viewer-image')).toHaveAttribute('data-image-quality', 'original');
+    await page.getByRole('button', { name: '返回作品', exact: true }).click();
+    await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+    const thumbnail = page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+    await expect(thumbnail).toBeVisible();
+    const viewport = (await scroll.boundingBox())!;
+    await expect.poll(async () => {
+      const box = (await thumbnail.boundingBox())!;
+      const delta = box.y + box.height / 2 - viewport.y - viewport.height / 2;
+      const position = await scroll.evaluate(el => ({ top: el.scrollTop, maximum: el.scrollHeight - el.clientHeight }));
+      return Math.min(Math.abs(delta), delta < 0 ? Math.abs(position.top) : Math.abs(position.maximum - position.top));
+    }).toBeLessThanOrEqual(2);
+    expect(await page.locator('.study-grid').evaluate(el => el.getBoundingClientRect().height)).toBeCloseTo(gridHeight, 0);
+  }
+});
+
+
+test('reduced-motion editor exit preserves a short gallery without artificial spacing', async ({ page, request }) => {
+  const asset = await upload(request, 'coast');
+  await request.patch('/internal/settings', { data: { values: { 'ui.reduce_motion': 'always' } } });
+  await open(page, `/imagine?asset=${asset.id}`);
+  await expect(page.locator('.viewer-image')).toHaveAttribute('data-image-quality', 'original');
+  const thumbnail = page.locator(`[data-study-id="${asset.id}"] .study-open > img`);
+  const before = (await thumbnail.boundingBox())!;
+  const height = await page.locator('.study-grid').evaluate(el => el.getBoundingClientRect().height);
+  await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.study-viewer,.viewer-exit-layer')).toHaveCount(0);
+  expect((await thumbnail.boundingBox())!.y).toBeCloseTo(before.y, 0);
+  expect(await page.locator('.study-grid').evaluate(el => el.getBoundingClientRect().height)).toBeCloseTo(height, 0);
 });

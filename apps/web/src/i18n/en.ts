@@ -1,4 +1,10 @@
 const messages = {
+  "任务信息": "Task details",
+  "删除任务": "Delete task",
+  "删除任务？": "Delete task?",
+  "删除任务失败": "Could not delete the task",
+  "删除此任务记录和系列占位，不会删除已生成的作品。": "Delete this task record and its series placeholder. Generated works will be kept.",
+
   " · 已停用": " · Disabled",
   " · 当前": " · Current",
   " · 管理员": " · Administrator",

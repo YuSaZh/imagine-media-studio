@@ -76,6 +76,7 @@ function EditingSession(props: ViewerProps & { motion: ViewerMotion; models: Wor
   const update = (patch: Partial<MediaEditingDraft>) => setDraft(current => ({ ...current, ...patch }));
   useEffect(() => { props.drafts.set(scope, { ...draft, ...(sourceIsVideo ? { videoTime: videoTime.current } : {}) }); while (props.drafts.size > 8) { const oldest = props.drafts.keys().next().value; if (oldest === undefined) break; props.drafts.delete(oldest); } }, [draft, scope, props.drafts, sourceIsVideo]);
   const [expanded, setExpanded] = useState(false), [maskOpen, setMaskOpen] = useState(false), [pickerOpen, setPickerOpen] = useState(false);
+  const [deletedJobs, setDeletedJobs] = useState<string[]>([]);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false), [error, setError] = useState('');
   const actionLocks = useRef(new Set<string>());
@@ -166,8 +167,12 @@ function EditingSession(props: ViewerProps & { motion: ViewerMotion; models: Wor
     } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : t("任务操作失败")); }
     finally { actionLocks.current.delete(id); if (mounted.current) setActionJobs([...actionLocks.current]); }
   };
-  const seriesJobs = [...new Map([...(series.data?.jobs ?? []), ...jobs.flatMap(query => query.data ? [query.data.job] : [])].map(job => [job.id, job])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  const seriesAssets = [...new Map([...(series.data?.assets ?? []), ...(original ? [original] : []), ...jobs.flatMap(query => query.data?.assets ?? [])].map(asset => [asset.id, asset])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  // Draft jobs keep in-flight actions available, but must not rejoin completed
+  // outputs that the account's series preferences now place in another family.
+  const familyJobIds = new Set(series.data?.jobs.map(job => job.id));
+  const localSeriesJobs = jobs.filter(query => query.data && (query.data.job.id === activeJobId || query.data.job.status !== 'completed' || !series.data || familyJobIds.has(query.data.job.id)));
+  const seriesJobs = [...new Map([...(series.data?.jobs ?? []), ...localSeriesJobs.flatMap(query => query.data ? [query.data.job] : [])].map(job => [job.id, job])).values()].filter(job => !deletedJobs.includes(job.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const seriesAssets = [...new Map([...(series.data?.assets ?? []), ...(original ? [original] : []), ...localSeriesJobs.flatMap(query => query.data?.assets ?? [])].map(asset => [asset.id, asset])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const seriesItems = seriesAssets.map(asset => mapMedia(asset, seriesJobs.find(job => job.id === asset.jobId) ?? (asset.id === props.item.id ? props.item.job : null)));
   const unresolvedJobs = seriesJobs.filter(job => job.status !== 'completed' && !seriesAssets.some(asset => asset.jobId === job.id));
   const seriesIndex = Math.max(0, seriesItems.findIndex(item => item.id === props.item.id));
@@ -225,7 +230,13 @@ function EditingSession(props: ViewerProps & { motion: ViewerMotion; models: Wor
     else if (props.layout === 'desktop') props.motion.navigate('x', delta, () => props.onBrowseEntry(delta, seriesAssets.map(asset => asset.id), true));
     else props.motion.settle();
   };
-  return <Viewer {...props} entryReady={!series.isPending || !props.online} stageContent={stageContent} index={seriesIndex} total={seriesItems.length}
+  const deletedJob = (id: string) => {
+    setDeletedJobs(current => [...current, id]);
+    for (const [key, value] of props.drafts) props.drafts.set(key, { ...value, jobs: value.jobs.filter(jobId => jobId !== id) });
+    setDraft(current => ({ ...current, jobs: current.jobs.filter(jobId => jobId !== id) }));
+    setActiveJobId(null);
+  };
+  return <Viewer {...props} {...(activeJob ? { jobInfo: { job: activeJob, onDeleted: deletedJob } } : {})} entryReady={!series.isPending || !props.online} stageContent={stageContent} index={seriesIndex} total={seriesItems.length}
     canPrevious={seriesIndex > 0 || props.layout === 'desktop' && props.total > 1}
     canNext={seriesIndex < seriesItems.length - 1 || props.layout === 'desktop' && props.total > 1}
     onMove={move} onMoveEntry={delta => props.motion.navigate('y', delta, () => props.onBrowseEntry(delta, seriesAssets.map(asset => asset.id)))} videoRef={videoRef} initialVideoTime={initialVideoTime.current} onVideoTime={time => { videoTime.current = time; }} {...(visiblePreview ? { previewSrc: visiblePreview } : {})} onStageClick={() => { setExpanded(false); (window.document.activeElement as HTMLElement | null)?.blur(); }} editingControls={controls} />;
