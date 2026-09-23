@@ -645,7 +645,7 @@ job; deleting the final task closes the viewer, including after a reload.
 ### Editor exit transition
 
 In-app Back, Escape and the mobile edge-back gesture keep the editor mounted for
-a 320ms exit. The current decoded image (or its displayed thumbnail) is captured
+a 320ms exit. The current decoded image, displayed thumbnail, or decoded video frame is captured
 once and shrinks into the current gallery card while the gallery fades in and
 the editor fades out over the same duration. The original and destination images
 are hidden behind that snapshot to avoid double images. Zoomed images begin with
@@ -662,3 +662,5 @@ Route changes and unmounts cancel pending frames and animations and restore the
 gallery, destination image and input handling. No generation task is cancelled. The retiring editor and backdrop keep opacity
 zero through deferred portal removal; cancelling the exit animations must not
 restore their opaque base styles during the final thumbnail handoff.
+
+Task management, gallery cards and editor task stages share the same explicit retry statuses: failed, rejected, expired and cancelled. Retry remains a user action. Viewer-exit browser cases live in `e2e/workspace-viewer-exit.spec.ts`, sharing setup and helpers with the main workspace suite.

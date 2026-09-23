@@ -13,7 +13,7 @@ import { createBrowserId } from '../../browser-id';
 import { useReferenceUploads } from '../media-input/hooks/use-reference-uploads';
 import { usePatchSettings, useSettingsQuery } from '../settings/api/settings-query';
 import { generationMemoryScope, readGenerationMemory, updateGenerationMemory } from './generation-memory';
-import { ACTIVE_JOB_STATUSES, generationRequest, mapMedia, modelForOperation, type Creation, type MediaKind, type MediaItem, type ReferenceInput, type WorkspaceModel } from './data';
+import { ACTIVE_JOB_STATUSES, RETRYABLE_JOB_STATUSES, generationRequest, mapMedia, modelForOperation, type Creation, type MediaKind, type MediaItem, type ReferenceInput, type WorkspaceModel } from './data';
 import { Composer } from './composer';
 import { Viewer, type ViewerProps } from './viewer';
 import { ReferencePicker } from './reference-picker';
@@ -203,7 +203,7 @@ function EditingSession(props: ViewerProps & { motion: ViewerMotion; models: Wor
     {activeJob ? <GenerationStatus status={activeJob.status} createdAt={activeJob.createdAt} completedAt={activeJob.completedAt} /> : <span>{activeQuery?.isError ? t("任务读取失败") : submitting ? t("正在提交") : t("正在读取任务")}</span>}
     {activeJob?.errorMessage && <p>{activeJob.errorMessage}</p>}
     <div>{activeQuery?.isError && <button type="button" className="quiet-command" onClick={() => void activeQuery.refetch()}>{t("重试读取")}</button>}
-    {activeJob && ['failed', 'expired', 'cancelled'].includes(activeJob.status) && <button type="button" className="quiet-command" disabled={!props.online || actionJobs.includes(activeJob.id)} onClick={() => void jobAction(activeJob.id, true)}>{t("重试生成")}</button>}
+    {activeJob && RETRYABLE_JOB_STATUSES.has(activeJob.status) && <button type="button" className="quiet-command" disabled={!props.online || actionJobs.includes(activeJob.id)} onClick={() => void jobAction(activeJob.id, true)}>{t("重试生成")}</button>}
     {activeJob && !ACTIVE_JOB_STATUSES.has(activeJob.status) && <button type="button" className="quiet-command" onClick={() => void copyPrompt(activeJob.prompt, props.onNotice)}><Copy size={16} />{t("复制提示词")}</button>}</div>
   </div> : undefined;
   const frameSource = sourceIsVideo ? draft.frame?.asset.contentUrl ?? '' : props.online ? props.item.src : props.item.thumbnail;

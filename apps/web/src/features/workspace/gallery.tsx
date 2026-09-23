@@ -1,10 +1,10 @@
 import { t, rich } from '../../i18n/index';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bookmark, FolderInput, Images, Copy, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { copyPrompt } from './copy-prompt';
 import { createSelectionGestureState, LONG_PRESS_DURATION_MS, reduceSelectionGesture } from '../gallery/model/selection-gesture';
-import type { MediaItem } from './data';
+import { RETRYABLE_JOB_STATUSES, type MediaItem } from './data';
 import { Choice, Options } from './ui';
 import { groupPendingStudies, type PendingStudy } from './pending-studies';
 import { GenerationStatus } from './generation-status';
@@ -124,8 +124,8 @@ function Card({ item, props, visible, shouldLoad }: { item: MediaItem; props: Ga
 const loadingEntries = [0.8, 1.25, 1, 1.5, 1.1, 0.85, 1.4, 1, 1.25, 0.8, 1.1, 1.4].map((height, index) => ({ type: 'loading' as const, id: `gallery-loading-${index}`, width: 1, height }));
 
 export function Gallery(props: GalleryProps) {
-  const grouped = groupPendingStudies(props.pending ?? [], props.items);
-  const entries = [...grouped.pending.map(task => ({ type: 'task' as const, task, id: task.id, width: task.width, height: task.height })), ...(props.loading ? loadingEntries : grouped.items.map(item => ({ type: 'asset' as const, item, id: item.id, width: item.width, height: item.height })))];
+  const grouped = useMemo(() => groupPendingStudies(props.pending ?? [], props.items), [props.pending, props.items]);
+  const entries = useMemo(() => [...grouped.pending.map(task => ({ type: 'task' as const, task, id: task.id, width: task.width, height: task.height })), ...(props.loading ? loadingEntries : grouped.items.map(item => ({ type: 'asset' as const, item, id: item.id, width: item.width, height: item.height })))], [grouped, props.loading]);
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState({ width: 1000, margin: 0, measured: false });
@@ -191,7 +191,7 @@ export function Gallery(props: GalleryProps) {
 }
 
 function PendingCard({ task, props }: { task: PendingStudy; props: GalleryProps }) {
-  const failed = ['failed', 'rejected', 'expired'].includes(task.status);
+  const failed = RETRYABLE_JOB_STATUSES.has(task.status);
   const selected = !!task.cover && props.selected.includes(task.cover.id);
   return <article className={`study-card pending-study ${task.cover ? 'has-cover' : ''} ${selected ? 'is-selected' : ''} ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? t("生成失败") : task.kind === 'image' ? t("正在生成图片") : t("正在生成视频")} aria-busy={!failed}>
     {!task.cover && task.seriesId && task.jobId && <button className="study-open pending-series-open" aria-label={t("查看生成中的系列")} disabled={props.selecting} onClick={() => props.onOpenPendingSeries?.(task.jobId!)} />}

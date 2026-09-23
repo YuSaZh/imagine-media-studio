@@ -4,7 +4,7 @@ import { E2E_BASE_URL, E2E_DATA_DIR, E2E_PASSWORD, E2E_PORT, E2E_STORAGE_STATE }
 
 const viewports = [[1920, 1080], [1440, 900], [1280, 800], [1024, 1366], [834, 1194], [430, 932], [390, 844], [360, 800]] as const;
 export default defineConfig({
-  testDir: './e2e', testMatch: '**/workspace.spec.ts', fullyParallel: false, workers: 1,
+  testDir: './e2e', testMatch: ['**/workspace.spec.ts', '**/workspace-*.spec.ts'], fullyParallel: false, workers: 1,
   forbidOnly: Boolean(process.env.CI), retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['html', { open: 'never' }], ['list']] : 'list',
   globalSetup: resolve('e2e/global-setup.ts'), globalTeardown: resolve('e2e/global-teardown.ts'),

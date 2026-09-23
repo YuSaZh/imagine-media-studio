@@ -15,15 +15,18 @@ export function useViewerExit(viewerId: string | null) {
     const gallery = document.querySelector<HTMLElement>('.imagine-app');
     const backdrop = document.querySelector<HTMLElement>('.viewer-backdrop');
     if (!editor || !gallery || reduced()) { revealTarget(); onClose(); return; }
-    const source = editor.querySelector<HTMLImageElement>('.viewer-stage > img.viewer-image');
+    const source = editor.querySelector<HTMLImageElement | HTMLVideoElement>('.viewer-stage > .viewer-image');
     const sourceBox = source?.getBoundingClientRect();
     let canvas: HTMLCanvasElement | null = null;
-    if (source?.complete && source.naturalWidth && sourceBox?.width && sourceBox.height) {
+    const intrinsicWidth = source instanceof HTMLVideoElement ? source.videoWidth : source?.naturalWidth ?? 0;
+    const intrinsicHeight = source instanceof HTMLVideoElement ? source.videoHeight : source?.naturalHeight ?? 0;
+    const ready = source instanceof HTMLVideoElement ? source.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA : source?.complete === true;
+    if (source && ready && intrinsicWidth > 0 && intrinsicHeight > 0 && sourceBox?.width && sourceBox.height) {
       try {
         canvas = document.createElement('canvas');
-        const scale = Math.min(1, 2048 / Math.max(source.naturalWidth, source.naturalHeight));
-        canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+        const scale = Math.min(1, 2048 / Math.max(intrinsicWidth, intrinsicHeight));
+        canvas.width = Math.max(1, Math.round(intrinsicWidth * scale));
+        canvas.height = Math.max(1, Math.round(intrinsicHeight * scale));
         const context = canvas.getContext('2d');
         if (context) context.drawImage(source, 0, 0, canvas.width, canvas.height); else canvas = null;
       } catch { canvas = null; }

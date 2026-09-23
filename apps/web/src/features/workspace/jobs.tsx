@@ -3,7 +3,7 @@ import { Select, SelectItem } from './select';
 import { useState } from 'react';
 import type { JobDto } from '@imagine/shared';
 import { ArrowUpRight, Check, Clock3, LoaderCircle, RefreshCw, X } from 'lucide-react';
-import { ACTIVE_JOB_STATUSES, JOB_LABELS } from './data';
+import { ACTIVE_JOB_STATUSES, JOB_LABELS, RETRYABLE_JOB_STATUSES } from './data';
 import { useWorkspaceJobs } from './queries';
 import { Tool } from './ui';
 
@@ -19,7 +19,7 @@ export function Jobs({ online, busy, onCancel, onRetry, onView }: { online: bool
     {jobs.map(job => <div className="task-row" key={job.id} data-job-id={job.id} data-status={job.status}>
       <span className={`task-state state-${job.status}`}>{ACTIVE_JOB_STATUSES.has(job.status) ? <LoaderCircle size={18} className="spin" /> : job.status === 'completed' ? <Check size={18} /> : <X size={18} />}</span>
       <div><strong>{JOB_LABELS[job.status]}{job.progress !== null && ACTIVE_JOB_STATUSES.has(job.status) ? ` · ${Math.round(job.progress)}%` : ''}</strong><p>{job.prompt}</p><small>{job.modelId} · {formatDateTime(job.createdAt)}</small>{job.errorMessage && <p className="task-error">{job.errorMessage}</p>}</div>
-      {ACTIVE_JOB_STATUSES.has(job.status) ? <Tool label={t("取消此任务")} disabled={!online || busy} onClick={() => onCancel(job)}><X size={17} /></Tool> : ['failed', 'expired', 'cancelled'].includes(job.status) ? <Tool label={t("重试此任务")} disabled={!online || busy} onClick={() => onRetry(job)}><RefreshCw size={17} /></Tool> : job.status === 'completed' ? <Tool label={t("查看生成结果")} onClick={() => onView(job)}><ArrowUpRight size={18} /></Tool> : null}
+      {ACTIVE_JOB_STATUSES.has(job.status) ? <Tool label={t("取消此任务")} disabled={!online || busy} onClick={() => onCancel(job)}><X size={17} /></Tool> : RETRYABLE_JOB_STATUSES.has(job.status) ? <Tool label={t("重试此任务")} disabled={!online || busy} onClick={() => onRetry(job)}><RefreshCw size={17} /></Tool> : job.status === 'completed' ? <Tool label={t("查看生成结果")} onClick={() => onView(job)}><ArrowUpRight size={18} /></Tool> : null}
     </div>)}
     {query.hasNextPage && <button className="quiet-command load-more" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>{query.isFetchingNextPage ? t("正在加载") : t("加载更多任务")}</button>}
   </div>;
