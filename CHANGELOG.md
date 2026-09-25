@@ -12,7 +12,7 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ### 重点更新
 
-- **完整 CI 入口：** `pnpm run ci` 包含质量检查、八个独立浏览器尺寸与隔离 Docker 验收；开发时可以使用明确命名的部分检查入口。Agent 与发布规则统一要求发布前完成本地验收。
+- **完整 CI 入口：** `pnpm run ci` 包含质量检查、八个独立浏览器尺寸与隔离 Docker 验收；开发时可以使用明确命名的部分检查入口。Agent 与发布规则统一要求发布前完成本地验收。([c0cea46](https://github.com/YuSaZh/imagine-media-studio/commit/c0cea46))
 - **工作区功能：** 图片与视频可以合并系列，删除可选择封面或整个系列；改进任务提示词、侧栏动画、手机搜索和蒙版入口，支持站点名称和 Logo 设置。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
 
 ### 验收与发布可靠性
