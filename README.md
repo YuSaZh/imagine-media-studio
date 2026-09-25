@@ -125,7 +125,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`latest` 跟随稳定版；需要固定版本可使用 `:0.2.0` 或发布页中的镜像 digest。备份、迁移与回滚见[部署指南](./RELEASE.md)；界面中的数据库备份不包含媒体文件。
+`latest` 跟随稳定版；需要固定版本可使用 `:0.2.1` 或发布页中的镜像 digest。备份、迁移与回滚见[部署指南](./RELEASE.md)；界面中的数据库备份不包含媒体文件。
 
 <a id="development"></a>
 <a id="documentation"></a>

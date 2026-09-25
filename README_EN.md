@@ -125,7 +125,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`latest` tracks stable releases. Pin `:0.2.0` or the release image digest for a fixed version. See the [deployment guide](./RELEASE.md) for backups, migration, and rollback; database-only backups in the UI do not include media.
+`latest` tracks stable releases. Pin `:0.2.1` or the release image digest for a fixed version. See the [deployment guide](./RELEASE.md) for backups, migration, and rollback; database-only backups in the UI do not include media.
 
 <a id="development"></a>
 <a id="documentation"></a>

@@ -4,6 +4,43 @@ All notable changes to Imagine Media Studio are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-26
+
+发布日期：2026-09-26 · 上一稳定版：v0.2.0
+
+> 图片、视频和混合选择可以手动合并为持久化系列；系列删除明确区分封面与整组，失败任务和长提示词更易管理。桌面侧栏、手机搜索与长按多选更连贯，并可在偏好中设置网站名称和 Logo。
+
+### 重点更新
+
+- **手动合并系列：** 多选图片、视频或混合内容后，可合并为一个系列，刷新和重启后保留；仍保留已有生成来源关系和账号隔离。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
+- **系列删除和失败任务：** 提供取消、仅删除封面和删除整个系列三个操作；失败系列菜单、单个任务和任务列表均可删除失败记录。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
+- **更紧凑的移动端：** 顶部搜索与标题带动画切换，保留导航按钮；空搜索点击外部收起，有内容时保持展开。长按作品进入多选，移除重复标题行。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
+- **站点外观：** 管理员可修改网站名称、上传或恢复默认 Logo；登录页、侧栏、浏览器标题和图标同步更新。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
+
+### 工作区与无障碍体验
+
+- 桌面侧栏展开/收起加入过渡动画，多选工具栏跟随输入框高度；动效遵循偏好和系统减少动效设置。
+- 任务提示词使用完整正文宽度，末尾显示省略号和“展开全部”；展开后由任务面板滚动，可在文末收起。
+- 移动端蒙版按钮直接浮在输入框上方，系列缩略图保持全宽；带未完成或失败任务的系列封面复用作品卡片，保留悬浮操作和信息。
+- 优化系列查看器的原图归属、失败任务详情与删除、重试状态，以及编辑器退出动画和回归测试。([ec1f5a1](https://github.com/YuSaZh/imagine-media-studio/commit/ec1f5a1)、[3e2ec74](https://github.com/YuSaZh/imagine-media-studio/commit/3e2ec74))
+
+### 文档
+
+- 精简项目 README，补充日文指南，统一主要部署与使用入口。([131ce13](https://github.com/YuSaZh/imagine-media-studio/commit/131ce13))
+
+### 升级说明与限制
+
+- 新增数据库迁移 `0012_manual_series.sql`，保存手动系列关联；既有账号、项目、媒体和设置继续保留。迁移只能向前应用，回退前应确认数据库兼容性。
+- 手动合并会连接所选作品已有的编辑系列；整组删除会解析完整成员，运行中的任务或截断的超大系列需先处理后再删除。
+- 网站名称和 Logo 对所有账号及未登录页面公开，只有管理员可修改；上传支持不超过 512 KB 的 PNG、JPEG、WebP，并由服务器校验、转换为 PNG。
+- 本地与浏览器夹具验证不代表真实付费 Provider、实体设备键盘或原生 PWA 安装验收。
+
+### 贡献者
+
+- [@YuSaZh](https://github.com/YuSaZh)
+
+完整变更：[v0.2.0...v0.2.1](https://github.com/YuSaZh/imagine-media-studio/compare/v0.2.0...v0.2.1)
+
 ## [0.2.0] - 2026-09-22
 
 发布日期：2026-09-22 · 上一稳定版：v0.1.9

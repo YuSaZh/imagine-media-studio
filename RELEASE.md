@@ -1,9 +1,9 @@
-# Imagine Media Studio v0.2.0 Release Guide
+# Imagine Media Studio v0.2.1 Release Guide
 
-Imagine Media Studio `v0.2.0` adds account-scoped light, dark and system themes plus Simplified Chinese, English and Japanese interfaces. It improves editor entry transitions, mode switches and compact mobile input, and keeps series grouped during bulk selection. No new database migration is introduced relative to v0.1.9.
+Imagine Media Studio `v0.2.1` adds persistent manual series for images and videos, explicit cover/whole-series deletion, compact task prompts, global site branding, and refined desktop/mobile navigation. Migration `0012_manual_series.sql` adds explicit series links while retaining existing media and generation ancestry.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.0)
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.1)
 for deployment and verification. Replace `<digest-from-release>` below with its
 64-character SHA-256 digest.
 
@@ -43,7 +43,7 @@ remains an administrator trust boundary.
 
 ## Install the released image
 
-For `v0.2.0`, take the exact digest from the GitHub Release or release workflow
+For `v0.2.1`, take the exact digest from the GitHub Release or release workflow
 summary:
 
 ```bash
@@ -120,7 +120,7 @@ external `APP_SECRET` is absent.
 
 ## Upgrade and migration
 
-Version `v0.2.0` introduces no database migration relative to v0.1.9. Existing accounts, projects, media, and settings are retained. The default appearance remains light with Simplified Chinese; choose a theme and language in Preferences to save them per account. Selecting a grouped series now applies bulk favorite, project and delete actions to the entire series. Older installations apply all intervening migrations on startup; migrations remain forward-only.
+Version `v0.2.1` adds the `asset_series_links` table through migration `0012_manual_series.sql`. Existing accounts, projects, media, and settings are retained. Manual merges can include images and videos and preserve their existing editing families; series deletion offers cover-only or whole-series removal. Site branding is administrator-managed and public on the login page, while other settings and media retain their authorization boundaries. Older installations apply all intervening migrations on startup; migrations remain forward-only.
 
 1. Record the running image digest, environment-file backup, and active data
    root. Never rely on `latest` as the rollback record.
@@ -153,11 +153,11 @@ docker run --rm \
   --entrypoint node "$IMAGE" \
   dist/maintenance/data-archive-cli.js restore \
   --bundle /recovery/live/backups/<id>.bundle \
-  --target /recovery/restored-v0.2.0
+  --target /recovery/restored-v0.2.1
 ```
 
 Inspect the restored tree, recreate the application container with
-`imagine-state/restored-v0.2.0` bound to `/data`, and keep the same
+`imagine-state/restored-v0.2.1` bound to `/data`, and keep the same
 `APP_SECRET`. A container-only rollback may reuse the live database only when
 the older application is known to support its schema. Otherwise restore the
 verified pre-upgrade archive to a new root and switch the bind mount. The CLI
@@ -165,9 +165,9 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
-Use the digest, not `0.2.0`, `0.2`, or `latest`, as the verification subject:
+Use the digest, not `0.2.1`, `0.2`, or `latest`, as the verification subject:
 
-Run these commands from a verified `v0.2.0` source checkout. GitHub CLI must be
+Run these commands from a verified `v0.2.1` source checkout. GitHub CLI must be
 authenticated with `gh auth login` or a `GH_TOKEN` that can read this repository;
 keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.
