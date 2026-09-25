@@ -86,44 +86,24 @@ Existing explicit authorization does not need repeated confirmation.
 
 ## Verification
 
-Run affected-area checks locally and reuse passing evidence for unchanged source
-and scope. Preparing a release does not require repeating complete local CI.
-The final release commit must pass GitHub main CI once. The tag workflow reuses
-that exact commit's successful main-push CI, or waits for the existing run;
-it does not start another quality/browser/source Docker suite. Required CI jobs
-that fail, are cancelled, are skipped or are missing block publication.
+Use focused checks during development. Before publishing a release, run the complete local acceptance entry:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec playwright install --with-deps chromium
+pnpm run ci
+```
+
+Install FFmpeg and Noto core/CJK fonts as in the GitHub workflow. Docker with Compose and a running daemon are required. The runner creates isolated ports, temporary databases and Compose resources; it never targets the persistent preview. Reports are retained under ignored `ci-results/`. A nonzero exit or incomplete run does not qualify as full CI.
 
 ### Local and GitHub CI parity
 
-- Use the same commands, scripts, declared Node/pnpm versions, lockfile, browser
-  version, fonts and relevant flags when running a check locally. Use `CI=true`
-  for browser acceptance. Matching check semantics does not mean running every
-  check both locally and remotely for each release.
-- Complete CI covers lint, typecheck, all unit/integration and release tests,
-  production build, all eight browser viewports and isolated Docker smoke.
-  GitHub main CI is the release source acceptance gate. A complete local run is
-  optional unless explicitly requested or necessary to investigate a failure.
-- Focused checks are the normal local workflow. Reuse successful results when
-  neither their source inputs, assertions nor environment changed. A test-only
-  fix requires the affected test; a notes-only change requires release/document
-  checks, not another full browser/Docker run. If a shared runtime change affects
-  multiple areas, broaden checks to those areas. Never hide failures by weakening
-  assertions, adding skips or declaring an earlier snapshot tested a later change.
-- Record tested commits/source, commands, results, scope and environment. Preserve
-  workflow-defined skips and report them separately from missing required jobs.
-  Do not rerun a successful suite solely because it is time to push or tag.
-- Push the final source to main and allow its existing CI to finish. Prefer tagging
-  after success; if the tag arrives earlier, release waits up to 45 minutes for
-  the same commit's main CI without dispatching a new run. A failed/cancelled run
-  must be corrected or explicitly rerun; missing CI eventually fails closed.
-- Release still builds one multi-platform candidate and tests its exact digest.
-  This artifact check is distinct from source CI; promotion reuses the verified
-  image without rebuilding. Keep local runtime resources isolated and clean up
-  task-owned services/data. Publication and deployment remain separate actions.
-
-The current `pnpm run ci` command runs the quality gate only. Browser and Docker
-checks still require the separate invocations below; this policy does not claim
-that a unified full-CI command has already been implemented.
+- `pnpm run ci` runs lint, types, all unit/integration/release tests, production build, the unfiltered eight-viewport browser suite and isolated source Docker smoke.
+- `pnpm run ci:quality`, `pnpm run ci:browser [workspace-WIDTHxHEIGHT]` and `pnpm run ci:docker` are explicit partial entries. GitHub calls these same scripts. The browser entry builds first, sets `CI=true`, disables snapshot updates and gives each viewport a fresh server/database. Both environments use `.github/ci-projects.json` as the matrix source.
+- Match the declared Node/pnpm versions, frozen dependencies, Chromium, fonts and flags. OS/container differences remain possible; report them. Workflow-defined test skips are not missing gates and must be reported separately. Mock fixtures do not prove live Provider acceptance.
+- A release requires complete local evidence. Reuse passed evidence only for unchanged source inputs, assertions and environment. A notes-only follow-up needs release validation; changed tests or scripts require their affected gates again. Never label focused tests as full CI or weaken assertions to pass.
+- GitHub main CI must independently accept the exact release commit. The tag workflow waits for the latest main-push run, validates all required jobs and never starts duplicate source CI. Failed, cancelled, skipped or absent jobs block publication. Existing success for another commit or an older attempt does not qualify.
+- The actual published candidate still receives digest smoke before promotion. It is a different artifact from the local source image. Publication and development deployment are separate actions.
 
 ### Checks during development
 
@@ -136,10 +116,10 @@ that a unified full-CI command has already been implemented.
 | Database/media/runtime/Docker | Quality checks plus relevant migration, archive, restart, persistence, and isolated Docker smoke |
 | CI or release logic | Workflow YAML validation, `pnpm test:release`, syntax checks for changed shell scripts, and affected isolated runtime smoke |
 
-The standard quality gate is:
+The partial quality gate is:
 
 ```bash
-pnpm run ci
+pnpm run ci:quality
 ```
 
 It runs lint, typecheck, unit/release tests, and production builds. Focused tests
@@ -152,17 +132,16 @@ the example port if occupied:
 ```bash
 pnpm exec playwright install chromium
 E2E_PORT=13031 pnpm test:e2e --project=workspace-1440x900 --project=workspace-390x844 --update-snapshots=none
-CI=true E2E_PORT=13031 pnpm test:e2e --update-snapshots=none
+pnpm run ci:browser
 ```
 
 The first browser command selects two representative projects for development;
-the second runs the full suite in all eight. Use `CI=true` for acceptance parity.
+the second builds and runs all eight projects with isolated data and automatically allocated ports. Use `CI=true` for acceptance parity.
 During development, select scenarios and viewports affected by the change;
-the complete unfiltered eight-viewport run is supplied by GitHub main CI for a release.
+the complete unfiltered eight-viewport run is required locally before release and repeated by GitHub main CI.
 Read [e2e/AGENTS.md](./e2e/AGENTS.md) for baseline and cleanup rules.
 
-For Docker smoke, follow the isolated resource setup in
-[ci.yml](./.github/workflows/ci.yml) before running its smoke script. All data,
+For isolated Docker smoke, run `pnpm run ci:docker`. All data,
 ports, Compose projects, containers, and cleanup targets must belong to that run.
 Do not run an unscoped `docker compose up/down` against an existing deployment.
 

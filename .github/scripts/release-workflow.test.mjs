@@ -1,3 +1,5 @@
+import { testCiEntry } from './ci.test.mjs';
+import projects from '../ci-projects.json' with { type: 'json' };
 import { REQUIRED_CI_JOBS } from './require-successful-ci.mjs';
 import { testCiReuseGuard } from './require-successful-ci.test.mjs';
 import assert from 'node:assert/strict';
@@ -44,14 +46,19 @@ assert.ok(Object.hasOwn(ci.on, 'pull_request'));
 assert.equal(ci.on.push.tags, undefined, 'Release must own tag runs to avoid a duplicate CI image build.');
 assert.equal(ci.on.workflow_call, undefined, 'Release must reuse main CI instead of invoking another suite.');
 assert.equal(ci.jobs['docker-smoke'].if, undefined);
-assert.ok(ci.jobs['docker-smoke'].steps.some(candidate => candidate.run?.includes('docker compose build')));
+assert.ok(ci.jobs['docker-smoke'].steps.some(candidate => candidate.run === 'node .github/scripts/ci.mjs docker'));
 assert.equal(ci.jobs.quality.if, undefined);
 assert.equal(ci.jobs['workspace-e2e'].if, undefined);
-for (const command of ['pnpm lint', 'pnpm typecheck', 'pnpm test', 'pnpm build']) {
-  assert.ok(ci.jobs.quality.steps.some(candidate => candidate.run === command));
-}
-assert.equal(ci.jobs['workspace-e2e'].strategy.matrix.project.length, 8);
-assert.ok(ci.jobs['workspace-e2e'].steps.some(candidate => candidate.run?.includes('--update-snapshots=none')));
+assert.ok(ci.jobs.quality.steps.some(candidate => candidate.run === 'pnpm run ci:quality'));
+assert.equal(projects.length, 8);
+assert.equal(ci.jobs['workspace-e2e'].strategy.matrix.project, '${{ fromJSON(needs.projects.outputs.projects) }}');
+assert.ok(ci.jobs.projects.steps.some(step => step.run?.includes('.github/ci-projects.json')));
+assert.ok(ci.jobs['workspace-e2e'].steps.some(candidate => candidate.run === 'pnpm run ci:browser "$CI_BROWSER_PROJECT"'));
+const runner = await readFile(new URL('./ci.mjs', import.meta.url), 'utf8');
+assert.match(runner, /--update-snapshots=none/u);
+assert.match(runner, /CI: 'true'/u);
+assert.match(runner, /mkdtemp/u);
+assert.match(runner, /ci-docker\.sh/u);
 
 assert.equal(workflow.name, 'Release');
 assert.deepEqual(workflow.permissions, {});
@@ -78,9 +85,10 @@ assert.equal(checks['timeout-minutes'], 50);
 assert.ok(checks.steps.some(step => step.uses?.startsWith('actions/checkout@') && !step.with?.ref));
 const reuseGate = checks.steps.find(step => step.run === 'node .github/scripts/require-successful-ci.mjs');
 assert.deepEqual(reuseGate.env, { GH_TOKEN: '${{ github.token }}' });
-assert.deepEqual(REQUIRED_CI_JOBS, [ci.jobs.quality.name, ...ci.jobs['workspace-e2e'].strategy.matrix.project.map(project => `Workspace browser gates: ${project}`), ci.jobs['docker-smoke'].name]);
+assert.deepEqual(REQUIRED_CI_JOBS, [ci.jobs.quality.name, ...projects.map(project => `Workspace browser gates: ${project}`), ci.jobs['docker-smoke'].name]);
 assert.ok(!checks.steps.some(step => /pnpm|workflow run|dispatch/.test(step.run ?? '')));
 await testCiReuseGuard();
+await testCiEntry();
 assert.equal(checks.secrets, undefined);
 assert.deepEqual(publish.needs, ['validate', 'checks']);
 assert.equal(publish.if, undefined, 'Failed or cancelled checks must prevent publishing.');
@@ -300,14 +308,14 @@ const packageJson = JSON.parse(await readFile(new URL('../../package.json', impo
 const serverPackageJson = JSON.parse(await readFile(new URL('../../apps/server/package.json', import.meta.url), 'utf8'));
 const webPackageJson = JSON.parse(await readFile(new URL('../../apps/web/package.json', import.meta.url), 'utf8'));
 const releaseVersions = await readReleaseVersions();
-assert.equal(packageJson.version, '0.2.1');
+assert.equal(packageJson.version, '0.2.2');
 assert.equal(serverPackageJson.version, packageJson.version);
 assert.equal(webPackageJson.version, packageJson.version);
 assert.deepEqual(releaseVersions, {
-  appInfo: '0.2.1',
-  root: '0.2.1',
-  server: '0.2.1',
-  web: '0.2.1',
+  appInfo: '0.2.2',
+  root: '0.2.2',
+  server: '0.2.2',
+  web: '0.2.2',
 });
 assert.equal(validateReleaseVersions(releaseVersions), packageJson.version);
 for (const field of ['appInfo', 'server', 'web']) {
@@ -325,16 +333,16 @@ assert.throws(() => validateReleaseTag('v0.1.1', packageJson.version), /exactly 
 assert.throws(() => validateReleaseTag('v01.2.3', '01.2.3'), /stable/);
 assert.throws(() => validateReleaseTag('v1.2.3', '1.2.3', 'refs/heads/main'), /pushed tag ref/);
 assert.deepEqual(validateReleaseTag('v1.2.3', '1.2.3'), { tag: 'v1.2.3', version: '1.2.3' });
-assert.deepEqual(validateReleaseTag('v0.2.1', packageJson.version), { tag: 'v0.2.1', version: '0.2.1' });
+assert.deepEqual(validateReleaseTag('v0.2.2', packageJson.version), { tag: 'v0.2.2', version: '0.2.2' });
 
 const releaseDigest = `sha256:${'a'.repeat(64)}`;
 const releaseNotes = formatReleaseNotes(changelogText, packageJson.version, releaseDigest);
-assert.match(releaseNotes, /手动合并系列/u);
-assert.match(releaseNotes, /### 工作区与无障碍体验/u);
+assert.match(releaseNotes, /完整 CI 入口/u);
+assert.match(releaseNotes, /### 验收与发布可靠性/u);
 assert.match(releaseNotes, /### 贡献者/u);
-assert.match(releaseNotes, /compare\/v0\.2\.0\.\.\.v0\.2\.1/u);
+assert.match(releaseNotes, /compare\/v0\.2\.0\.\.\.v0\.2\.2/u);
 assert.match(releaseNotes, new RegExp(releaseDigest, 'u'));
-assert.match(releaseNotes, /blob\/v0\.2\.1\/RELEASE\.md/u);
+assert.match(releaseNotes, /blob\/v0\.2\.2\/RELEASE\.md/u);
 assert.doesNotMatch(releaseNotes, /\[Unreleased\]/u);
 assert.throws(() => formatReleaseNotes(changelogText, '0.1.1', releaseDigest), /exactly one section/u);
 assert.throws(() => formatReleaseNotes(changelogText, packageJson.version, 'sha256:bad'), /immutable/u);
@@ -650,7 +658,7 @@ assert.deepEqual(Object.keys(testImage.on), ['workflow_dispatch']);
 assert.deepEqual(testImage.permissions, {});
 assert.equal(testImage.jobs.publish.if, "github.ref == 'refs/heads/main'");
 assert.equal(testImage.jobs.publish.permissions.actions, 'read');
-assert.ok(testImage.jobs.publish.steps.some(step => step.run?.includes('--commit "$GITHUB_SHA" --status success')));
+assert.ok(testImage.jobs.publish.steps.some(step => step.run === 'node .github/scripts/require-successful-ci.mjs'));
 const testBuild = testImage.jobs.publish.steps.find(step => step.id === 'push');
 assert.equal(testBuild.with.platforms, 'linux/amd64,linux/arm64');
 assert.equal(testBuild.with.sbom, true);

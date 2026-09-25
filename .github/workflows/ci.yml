@@ -13,25 +13,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  projects:
+    name: Browser matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      projects: ${{ steps.matrix.outputs.projects }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - id: matrix
+        run: echo "projects=$(jq -c . .github/ci-projects.json)" >> "$GITHUB_OUTPUT"
+
   quality:
     name: Lint, typecheck, unit, build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 11.23.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
+      - run: pnpm run ci:quality
 
   workspace-e2e:
+    needs: projects
     name: 'Workspace browser gates: ${{ matrix.project }}'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -39,115 +47,44 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        project: [workspace-1920x1080, workspace-1440x900, workspace-1280x800, workspace-1024x1366, workspace-834x1194, workspace-430x932, workspace-390x844, workspace-360x800]
+        project: ${{ fromJSON(needs.projects.outputs.projects) }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 11.23.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: pnpm
       - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg fonts-noto-core fonts-noto-cjk
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Prepare isolated E2E data
-        run: |
-          data_dir=$(mktemp -d /tmp/imagine-media-studio-e2e-workspace-XXXXXX)
-          chmod 0700 "$data_dir"
-          echo "IMAGINE_E2E_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
       - name: Check live workflows, accessibility and visual baseline
-        run: pnpm test:e2e --project=${{ matrix.project }} --update-snapshots=none
+        env:
+          CI_BROWSER_PROJECT: ${{ matrix.project }}
+        run: pnpm run ci:browser "$CI_BROWSER_PROJECT"
       - if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.project }}-browser-results
           path: |
-            playwright-report
-            test-results
+            ci-results
           if-no-files-found: ignore
           retention-days: 7
 
   docker-smoke:
-    name: Single-container PR 3, PR 5, PR 6 and PR 8 API, video, adapter, archive and persistence smoke
+    name: Container integration and recovery
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 11.23.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Prepare isolated runtime directory
-        run: |
-          runtime_dir=$(mktemp -d "$RUNNER_TEMP/imagine-media.XXXXXXXX")
-          chmod 0700 "$runtime_dir"
-          data_dir="$runtime_dir/live-data"
-          mkdir "$data_dir"
-          chmod 0700 "$data_dir"
-          host_port=$(node --input-type=module <<'NODE'
-          import { createServer } from 'node:net';
-          const server = createServer();
-          server.listen(0, '127.0.0.1', () => {
-            const address = server.address();
-            if (!address || typeof address === 'string') throw new Error('Unable to allocate a smoke port.');
-            process.stdout.write(String(address.port));
-            server.close();
-          });
-          NODE
-          )
-          echo "SMOKE_TASK_ROOT=$runtime_dir" >> "$GITHUB_ENV"
-          echo "DATA_HOST_DIR=$data_dir" >> "$GITHUB_ENV"
-          echo "COMPOSE_PROJECT_NAME=imagine-media-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
-          echo "APP_SECRET=github-actions-pr6-smoke-secret-not-for-production" >> "$GITHUB_ENV"
-          echo "APP_PASSWORD=github-actions-pr6-smoke-password-not-for-production" >> "$GITHUB_ENV"
-          echo "MOCK_PROVIDER_ENABLED=true" >> "$GITHUB_ENV"
-          echo "PUID=$(id -u)" >> "$GITHUB_ENV"
-          echo "PGID=$(id -g)" >> "$GITHUB_ENV"
-          echo "IMAGINE_MEDIA_HOST_PORT=$host_port" >> "$GITHUB_ENV"
-      - name: Validate and build the single service
-        run: |
-          compose_config_file="$RUNNER_TEMP/imagine-media-compose.json"
-          timeout --foreground 60 docker compose config --format json > "$compose_config_file"
-          COMPOSE_CONFIG_FILE="$compose_config_file" node --input-type=module <<'NODE'
-          import { readFile } from 'node:fs/promises';
-
-          const config = JSON.parse(await readFile(process.env.COMPOSE_CONFIG_FILE, 'utf8'));
-          const names = Object.keys(config?.services ?? {}).sort();
-          if (names.length !== 1 || names[0] !== 'imagine-media') {
-            throw new Error(`Expected exactly one imagine-media service, received ${JSON.stringify(names)}.`);
-          }
-          NODE
-          timeout --foreground 900 docker compose build
-      - name: Run upgrade, restore and persistence smoke test
-        run: bash .github/scripts/docker-smoke.sh
-      - name: Show Compose diagnostics
-        if: failure()
-        run: |
-          timeout --foreground 60 docker compose ps --all || true
-          timeout --foreground 60 docker compose logs --no-color || true
-      - name: Clean up isolated Compose resources
-        if: always()
-        run: |
-          if [ -z "${SMOKE_TASK_ROOT:-}" ]; then
-            echo "SMOKE_TASK_ROOT was not created; skipping isolated resource cleanup."
-            exit 0
-          fi
-          cleanup_status=0
-          timeout --foreground 180 docker compose down --volumes --remove-orphans || cleanup_status=$?
-          case "$SMOKE_TASK_ROOT" in
-            "$RUNNER_TEMP"/imagine-media.*)
-              find "$SMOKE_TASK_ROOT" -mindepth 1 -depth -delete || cleanup_status=$?
-              rmdir "$SMOKE_TASK_ROOT" || cleanup_status=$?
-              ;;
-            *)
-              echo "Refusing to remove unexpected SMOKE_TASK_ROOT: $SMOKE_TASK_ROOT" >&2
-              cleanup_status=1
-              ;;
-          esac
-          exit "$cleanup_status"
+      - name: Build and verify isolated source container
+        run: node .github/scripts/ci.mjs docker

@@ -58,17 +58,15 @@ Directory guides must not weaken the runtime and secret boundaries below.
   and `pnpm-workspace.yaml`. Keep dependency upgrades in dedicated changes.
 - Follow existing module boundaries, shared schemas, helpers, and test patterns.
   Avoid unrelated refactors, generated-file churn, or dependencies for small tasks.
-- Use the [verification matrix](./CONTRIBUTING.md#verification) for affected-area
-  local checks. Reuse passing results for unchanged source and scope; rerun only
-  checks invalidated by changes, failures, or environment differences. Do not
-  repeat complete local CI merely to prepare a release or tag a tested commit.
-  GitHub main CI provides full quality, eight-viewport browser and source Docker
-  acceptance once for the release commit. The tag workflow reuses that exact
-  commit's successful main CI (or waits for it), then validates the built release
-  image by digest. Failed, cancelled, skipped or missing required gates block
-  publication. Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity)
-  and report actual scope, skips and reused results; fixtures do not prove live
-  Provider acceptance.
+- Use the [verification matrix](./CONTRIBUTING.md#verification) for focused
+  development checks. Before releasing, run `pnpm run ci`: quality checks,
+  all eight isolated browser projects, and source Docker acceptance. `ci:quality`
+  alone is not complete CI. Reuse passed evidence only for unchanged inputs,
+  scope and environment; report every skip, failure and limitation explicitly.
+  GitHub calls the same gate scripts and must accept the exact release commit.
+  The tag workflow reuses its successful main CI, then tests the published
+  candidate by digest. Missing/skipped/failed/cancelled required jobs block release.
+  Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
 - Keep Chinese and English READMEs consistent when changing public behavior,
   deployment commands, configuration, or documentation links.
 - Update current specifications with behavior changes. Keep dated test results

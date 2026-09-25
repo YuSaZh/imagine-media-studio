@@ -191,6 +191,8 @@ test('editor exit centers within natural scroll bounds without changing gallery 
   await open(page);
   const ordered = (await (await request.get('/internal/assets?limit=60')).json()).items as { id: string }[];
   const scroll = page.locator(page.viewportSize()!.width > 760 ? '.gallery-scroll' : '.workspace');
+  await expect(page.locator('.study-card')).toHaveCount(assets.length);
+  await expect.poll(() => page.locator('.study-grid').evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(0);
   const gridHeight = await page.locator('.study-grid').evaluate(el => el.getBoundingClientRect().height);
   for (const asset of [ordered[0]!, ordered[12]!, ordered.at(-1)!]) {
     // Keep focus on a different card, as when browsing to a new item in the editor.

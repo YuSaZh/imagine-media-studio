@@ -8,8 +8,8 @@ workflow plus scripts before changing CI or publishing behavior.
   without production credentials. Do not weaken acceptance to work around a failure.
 - Keep check commands, versions and semantics aligned through shared scripts.
   Follow [CI parity rules](../CONTRIBUTING.md#local-and-github-ci-parity): local
-  checks target affected areas and reuse valid results; full local CI is not a
-  mandatory duplicate release gate. GitHub main CI supplies complete acceptance.
+  focused checks are for development; `pnpm run ci` must complete locally before
+  release. GitHub uses the same partial entry scripts and gates the exact SHA.
 - Test Image is manually dispatched on `main` and requires successful CI for the
   same commit. Build a unique multi-architecture candidate, smoke its immutable
   digest, then attach `test` and `test-sha-*` to that verified digest.

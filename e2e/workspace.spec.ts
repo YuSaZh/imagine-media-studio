@@ -1,4 +1,4 @@
-import { searchGallery, enterSelection, capturePost, upload, open, focusEditingPrompt, chooseRatio, selectValue, chooseResolution, chooseCount, resetWorkspace, savedModelOptions } from './workspace-helpers.js';
+import { applyMask, searchGallery, enterSelection, capturePost, upload, open, focusEditingPrompt, chooseRatio, selectValue, chooseResolution, chooseCount, resetWorkspace, savedModelOptions } from './workspace-helpers.js';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -478,7 +478,7 @@ test('reference upload, canvas mask and server-backed edit submission', async ({
   await page.getByRole('button', { name: '撤销笔画' }).click();
   await expect(page.getByRole('button', { name: '应用蒙版' })).toBeDisabled();
   await page.getByRole('button', { name: '重做笔画' }).click();
-  await page.getByRole('button', { name: '应用蒙版' }).click();
+  await applyMask(page);
   await expect(page.locator('.mask-workspace')).toHaveCount(0);
   await expect(page.locator('.image-editing-viewer')).toBeVisible();
   await focusEditingPrompt(page);
@@ -1589,6 +1589,7 @@ test('failed waterfall cards can be deleted independently', async ({ page, reque
   const card = page.locator(`[data-pending-job="${id}"]`).first();
   await expect(card.getByRole('button', { name: '重试生成' })).toBeVisible();
   await card.getByRole('button', { name: '删除失败任务' }).click();
+  await page.getByRole('dialog', { name: '删除任务？', exact: true }).getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(page.locator(`[data-pending-job="${id}"]`)).toHaveCount(0);
   expect((await request.get(`/internal/jobs/${id}`)).status()).toBe(404);
   await page.unrouteAll({ behavior: 'wait' });
@@ -1812,7 +1813,7 @@ test('image editing workspace expands in place preserves masks and shows local r
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2); await page.mouse.down();
   await page.mouse.move(bounds.x + bounds.width / 2 + 20, bounds.y + bounds.height / 2, { steps: 5 }); await page.mouse.up();
   await page.screenshot({ path: testInfo.outputPath('mask-bottom-tools.png'), animations: 'disabled' });
-  await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+  await applyMask(page);
   await focusEditingPrompt(page);
   await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', /^blob:/);
@@ -1830,7 +1831,7 @@ test('image editing workspace expands in place preserves masks and shows local r
   await expect(page.getByRole('button', { name: '清空蒙版', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '清空蒙版', exact: true }).click();
   await page.getByRole('button', { name: '确认清空', exact: true }).click();
-  await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+  await applyMask(page, false);
   await focusEditingPrompt(page);
   await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await expect(viewer.locator('.viewer-image')).toHaveAttribute('src', source.contentUrl);
@@ -1876,7 +1877,7 @@ test('image editor submits overlay masks and clean first-frame videos without na
     const box = (await stage.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2, { steps: 5 }); await page.mouse.up();
-    await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+    await applyMask(page);
     await expect(page.locator('.mask-workspace')).toHaveCount(0);
     await focusEditingPrompt(page);
   await expect(controls.getByRole('button', { name: '编辑蒙版', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -2025,7 +2026,7 @@ test('video mask entry captures lazily and its temporary mask is cleaned with th
   await page.locator('.mask-stage').click({ position: { x: stage.width / 2, y: stage.height / 2 } });
   await expect(page.getByRole('button', { name: '撤销笔画', exact: true })).toBeEnabled();
   const uploadMask = (await capturePost(page, '/internal/assets/upload')).response;
-  await page.getByRole('button', { name: '应用蒙版', exact: true }).click();
+  await applyMask(page);
   const mask = (await (await uploadMask).json()).asset;
   await expect(page.locator('.mask-workspace')).toHaveCount(0);
   await expect(viewer.locator('img.viewer-image')).toBeVisible();

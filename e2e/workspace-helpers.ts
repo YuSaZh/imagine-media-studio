@@ -46,6 +46,21 @@ export async function open(page: Page, path = '/imagine', expandComposer = true)
   }
 }
 
+/** Saving includes asynchronous PNG encoding and a real upload, not just a UI transition. */
+export async function applyMask(page: Page, uploads = true) {
+  const button = page.getByRole('button', { name: '应用蒙版', exact: true });
+  if (uploads) {
+    const [response] = await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === '/internal/assets/upload' && response.request().method() === 'POST'),
+      button.click(),
+    ]);
+    expect(response.status()).toBe(201);
+    // The UI close proves the body was consumed; CDP loadingFinished can be lost
+    // during the modal transition even after the browser has completed the save.
+  } else await button.click();
+  await expect(page.locator('.mask-workspace')).toHaveCount(0);
+}
+
 export async function focusEditingPrompt(page: Page) {
   await expect(page.locator('.mask-workspace')).toHaveCount(0);
   await page.locator('.image-editing-controls').getByLabel('创作描述', { exact: true }).click();
@@ -89,6 +104,18 @@ export async function savedModelOptions(request: APIRequestContext, providerId: 
 }
 
 export async function resetWorkspace(request: APIRequestContext, page: Page) {
+  // Jobs outlive their output assets. Remove terminal history before the next scenario.
+  for (;;) {
+    const response = await request.get('/internal/jobs?limit=100');
+    expect(response.ok()).toBeTruthy();
+    const { items } = await response.json();
+    if (!items.length) break;
+    for (const job of items) {
+      await request.post(`/internal/jobs/${job.id}/cancel`);
+      await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).job.status).toMatch(/^(completed|cancelled|failed|rejected)$/);
+      expect((await request.delete(`/internal/jobs/${job.id}`)).ok()).toBeTruthy();
+    }
+  }
   const response = await request.get('/internal/assets?limit=100');
   for (const asset of (await response.json()).items) expect((await request.delete(`/internal/assets/${asset.id}`)).ok()).toBeTruthy();
   const collections = await request.get('/internal/collections?limit=100');

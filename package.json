@@ -1,6 +1,6 @@
 {
   "name": "imagine-media-studio",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -12,14 +12,17 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "ci": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "ci": "node .github/scripts/ci.mjs full",
     "data-archive": "pnpm --filter @imagine/server data-archive",
     "dev": "pnpm --parallel --filter @imagine/web --filter @imagine/server dev",
     "lint": "eslint .",
     "test": "vitest run && pnpm test:release",
     "test:release": "node .github/scripts/release-workflow.test.mjs",
     "test:e2e": "playwright test",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "ci:quality": "node .github/scripts/ci.mjs quality",
+    "ci:browser": "node .github/scripts/ci.mjs browser",
+    "ci:docker": "node .github/scripts/ci.mjs docker"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

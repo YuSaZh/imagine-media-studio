@@ -13,6 +13,14 @@ import { apiRequestContextOptions } from './request-context-options.js';
  * against the configured test origin.
  */
 export const test = base.extend<{ request: APIRequestContext }>({
+  page: async ({ page }, use) => {
+    try { await use(page); }
+    finally {
+      // Complete in-flight interception while the page/request context is still alive.
+      // Waiting preserves handler errors instead of hiding them during context teardown.
+      await page.unrouteAll({ behavior: 'wait' });
+    }
+  },
   request: async ({ playwright }, use) => {
     const context = await playwright.request.newContext(
       apiRequestContextOptions(E2E_BASE_URL, basicAuthorizationHeader()),

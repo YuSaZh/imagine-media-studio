@@ -1,3 +1,4 @@
+import projects from '../ci-projects.json' with { type: 'json' };
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -8,9 +9,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 const execFile = promisify(execFileCallback);
 export const REQUIRED_CI_JOBS = [
   'Lint, typecheck, unit, build',
-  ...['1920x1080', '1440x900', '1280x800', '1024x1366', '834x1194', '430x932', '390x844', '360x800']
-    .map(viewport => `Workspace browser gates: workspace-${viewport}`),
-  'Single-container PR 3, PR 5, PR 6 and PR 8 API, video, adapter, archive and persistence smoke',
+  ...projects.map(project => `Workspace browser gates: ${project}`),
+  'Container integration and recovery',
 ];
 
 export function latestMainCi(runs, sha) {
