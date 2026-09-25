@@ -61,6 +61,7 @@ import {
   SERVER_BODY_LIMIT,
 } from './routes/error.js';
 import { registerProviderRoutes } from './routes/providers.js';
+import { registerBrandingRoutes } from './routes/branding.js';
 import { registerResourceRoutes } from './routes/resources.js';
 import {
   MaintenanceUnauthenticatedError,
@@ -128,6 +129,8 @@ export interface ImagineServer {
 
 const PUBLIC_INTERNAL_PATHS = new Set([
   '/internal/health',
+  '/internal/branding',
+  '/internal/branding/logo',
   '/internal/auth/status',
   '/internal/auth/login',
 ]);
@@ -622,6 +625,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
       outbox,
       providers: providerService,
     });
+    registerBrandingRoutes(app, settings);
     await registerResourceRoutes(app, {
       mockProviderEnabled: options.config.mockProviderEnabled,
       assets: routeAssets,

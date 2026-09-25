@@ -284,6 +284,16 @@ export class AssetRepository {
     return existing?.id ?? this.create(input).id;
   }
 
+  public mergeSeries(assetIds: readonly string[]): boolean {
+    return this.database.transaction(transaction => {
+      const ids = [...new Set(assetIds)];
+      if (ids.length < 2 || ids.some(id => { const asset = this.get(id); return !asset || !['image', 'video'].includes(asset.type) || asset.role === 'mask' || asset.metadata.temporaryVideoFrame === true; })) return false;
+      for (const id of ids.slice(1)) transaction.run(sql`INSERT OR IGNORE INTO asset_series_links (asset_id, linked_asset_id) VALUES (${ids[0]!}, ${id})`);
+      transaction.insert(changeEvents).values(toChangeEventValues({ aggregateType: 'asset', aggregateId: ids[0]!, eventType: 'asset.updated', payload: { id: ids[0]!, seriesMerged: true } })).run();
+      return true;
+    });
+  }
+
   public setFavorite(id: string, favorite: boolean): AssetRecord | null {
     if (!this.get(id)) return null;
     return this.database.transaction((transaction) => {

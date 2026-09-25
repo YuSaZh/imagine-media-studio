@@ -19,6 +19,10 @@ One container · No GPU required · Desktop & mobile · 中文 / English / 日�
 </div>
 
 <a id="features"></a>
+Selected images and videos, including mixed selections, can be merged into a persistent series. Series deletion offers cover-only or whole-series removal. Task lists collapse long prompts by default and support deleting failed tasks.
+
+Administrators can rename the site and upload or reset its logo in Preferences. Mobile galleries support long-press selection and expandable header search.
+
 ## Built for creating
 
 | Feature | What you can do |

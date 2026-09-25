@@ -15,6 +15,11 @@ afterEach(() => {
 });
 
 describe('internalClient', () => {
+  it('sends manual series merges as JSON and accepts an empty successful response', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+    await internalClient.mergeAssetSeries(['first', 'second']);
+    expect(fetch).toHaveBeenCalledWith('/internal/assets/series', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'Content-Type': 'application/json' }), body: JSON.stringify({ assetIds: ['first', 'second'] }) }));
+  });
   it('publishes payload-free auth-required events for protected 401 responses only', async () => {
     const listener = vi.fn();
     const deleteCache = vi.fn().mockResolvedValue(true);

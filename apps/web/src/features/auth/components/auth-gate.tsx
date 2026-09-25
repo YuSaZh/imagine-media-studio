@@ -1,9 +1,9 @@
+import { useSiteBranding } from '../../workspace/site-branding';
 import { t } from '../../../i18n/index';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { AuthStatus } from '@imagine/shared';
 import {
   AlertCircle,
-  Sparkles,
   ArrowRight,
   LoaderCircle,
   RotateCcw,
@@ -123,11 +123,12 @@ export function AuthPrompt({
   password,
   pending,
 }: AuthPromptProps) {
+  const branding = useSiteBranding();
   return (
     <AuthFrame>
       <form aria-busy={pending} className="auth-gate-form" onSubmit={onSubmit}>
         <div>
-          <h2>{t("登录 Imagine")}</h2>
+          <h2>{t("登录 {0}", [branding.name])}</h2>
         </div>
         {onUsernameChange && <label><span>{t("用户名")}</span><input name="username" autoComplete="username" required value={username} disabled={pending} maxLength={64} onChange={event => onUsernameChange(event.target.value)} /></label>}
         <label>
@@ -162,11 +163,12 @@ export function AuthPrompt({
 }
 
 function AuthFrame({ children }: { children: ReactNode }) {
+  const branding = useSiteBranding();
   return (
     <main className="auth-gate">
       <header className="auth-gate-brand">
-        <span aria-hidden="true"><Sparkles size={22} /></span>
-        <h1>Imagine Media Studio</h1>
+        <img src={branding.logoUrl} width={36} height={36} alt="" />
+        <h1>{branding.name}</h1>
       </header>
       {children}
     </main>

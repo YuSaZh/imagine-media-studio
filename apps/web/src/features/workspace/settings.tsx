@@ -1,3 +1,4 @@
+import { BrandingSettings } from './branding-settings';
 import { t, rich } from '../../i18n/index';
 import { Select, SelectItem } from './select';
 import { lazy, Suspense, useRef, useState, useSyncExternalStore } from 'react';
@@ -100,6 +101,7 @@ function Preferences({ online }: { online: boolean }) {
   const values = readGeneralSettings(query.data?.settings);
   const disabled = !online || query.isPending || patch.isPending;
   return <div className="preferences">
+    {account.data?.user?.role === 'admin' && <BrandingSettings disabled={disabled || query.isError} />}
     <label className="setting-line"><span>{t("界面主题")}</span><Select aria-label={t("界面主题")} value={values.theme} disabled={disabled} onChange={event => patch.mutate({ 'ui.theme': event.target.value })}><SelectItem value="light">{t("浅色")}</SelectItem><SelectItem value="dark">{t("深色")}</SelectItem><SelectItem value="system">{t("跟随系统")}</SelectItem></Select></label>
     <label className="setting-line"><span>{t("界面语言")}</span><Select aria-label={t("界面语言")} value={values.language} disabled={disabled} onChange={event => patch.mutate({ 'ui.language': event.target.value })}><SelectItem value="zh-CN">{"简体中文"}</SelectItem><SelectItem value="en">English</SelectItem><SelectItem value="ja">{"日本語"}</SelectItem></Select></label>
     {(query.isError || patch.isError) && <p className="error-state" role="alert">{t("设置保存或读取失败，请重试。")}</p>}

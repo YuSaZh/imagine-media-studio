@@ -42,3 +42,24 @@
   .rail-project-list button:hover, .rail-project-list [aria-current='page'] { background: var(--theme-soft, #edf3ee); color: var(--theme-accent, #386c46); }
   .has-expanded-rail .creation-area { left: calc(50% + 130px); width: min(780px, calc(100% - 308px)); }
 }
+
+@media (min-width: 761px) {
+  .batch-toolbar-desktop:not(.batch-toolbar-library) { bottom: calc(var(--composer-size) + var(--keyboard-lift) + 36px); }
+  .has-expanded-rail .batch-toolbar-desktop { left: calc(50% + 130px); }
+}
+
+@media (min-width: 761px) {
+  .side-rail { transition: width 280ms cubic-bezier(.22,.7,.22,1), flex-basis 280ms cubic-bezier(.22,.7,.22,1); overflow: hidden; }
+  .rail-navigation, .side-rail > .rail-bottom { min-width: 231px; }
+  .side-rail .tool { justify-content: flex-start; padding-left: 10.5px; gap: 14px; }
+  .side-rail .tool > svg { flex-shrink: 0; }
+  .side-rail .rail-label { opacity: 0; transform: translateX(-8px); transition: opacity 180ms ease, transform 280ms cubic-bezier(.22,.7,.22,1); pointer-events: none; }
+  .side-rail.is-expanded .rail-label { opacity: 1; transform: none; pointer-events: auto; }
+  .creation-area { transition: left 280ms cubic-bezier(.22,.7,.22,1), width 280ms cubic-bezier(.22,.7,.22,1); }
+  .batch-toolbar-desktop { transition: left 280ms cubic-bezier(.22,.7,.22,1); }
+}
+
+@media (min-width: 761px) {
+  .side-rail > .rail-bottom { align-items: flex-start; }
+  .side-rail .avatar { margin-left: 6px; }
+}

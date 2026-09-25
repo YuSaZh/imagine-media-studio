@@ -96,6 +96,31 @@ export async function resetWorkspace(request: APIRequestContext, page: Page) {
   const providers = await request.get('/internal/providers?limit=100');
   for (const provider of (await providers.json()).items) if (provider.name === 'Workspace adapter') expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy();
   // Existing lineage fixtures include their uploaded originals explicitly.
-  expect((await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': true, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'ui.theme': 'light', 'ui.language': 'zh-CN', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
+  expect((await request.patch('/internal/settings', { data: { values: { 'branding.name': 'Imagine.', 'branding.logo': '', 'gallery.group_by_series': false, 'gallery.group_concurrent_images': false, 'gallery.group_uploaded_references': true, 'gallery.series_cover': 'latest', 'gallery.series_last_viewed': {}, 'generation.default': {}, 'composer.default_mode': 'image', 'ui.theme': 'light', 'ui.language': 'zh-CN', 'gallery.initial_filter': 'all', 'composer.clear_prompt_after_submit': true } } })).ok()).toBeTruthy();
   page.on('pageerror', error => { throw error; });
+}
+
+/** A real touch hold consumes its release click, then leaves selection empty for callers. */
+export async function enterSelection(page: Page) {
+  if (page.viewportSize()!.width >= 761) {
+    await page.getByRole('button', { name: '选择作品', exact: true }).click();
+    return;
+  }
+  const target = page.locator('.study-open').filter({ has: page.locator('img') }).first();
+  await target.scrollIntoViewIfNeeded();
+  const box = (await target.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+  await expect(page.locator('.batch-toolbar')).toBeVisible();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+  await target.click();
+  await expect(page.locator('.batch-toolbar')).toContainText('已选 0 件');
+}
+
+export async function searchGallery(page: Page, value: string) {
+  if (page.viewportSize()!.width < 761 && !await page.locator('.workspace-header').evaluate(element => element.classList.contains('is-searching'))) {
+    await page.getByRole('button', { name: '搜索作品', exact: true }).click();
+  }
+  await page.getByRole('textbox', { name: '搜索作品', exact: true }).fill(value);
 }

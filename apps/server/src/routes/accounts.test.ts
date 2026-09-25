@@ -20,6 +20,55 @@ describe('account boundaries', () => {
     expect(result.statusCode).toBe(200);
     return { cookie: String(result.headers['set-cookie']).split(';')[0]!, origin: 'http://localhost:80' };
   }
+  it('publishes only validated administrator branding and persists it across restart', async () => {
+    await setup();
+    const admin = await login('admin');
+    expect((await server.app.inject({ url: '/internal/branding' })).json()).toEqual({ name: 'Imagine.', logoUrl: '/icons/app-icon-192.png' });
+    await server.app.inject({ method: 'POST', url: '/internal/accounts', headers: admin, payload: { username: 'brand-user', password: 'fixture-password' } });
+    const user = await login('brand-user', 'fixture-password');
+    const patch = (values: Record<string, unknown>, headers = admin) => server.app.inject({ method: 'PATCH', url: '/internal/settings', headers, payload: { values } });
+    expect((await patch({ 'branding.name': 'Not allowed' }, user)).statusCode).toBe(403);
+    expect((await patch({ 'branding.name': '  ' })).statusCode).toBe(400);
+    expect((await patch({ 'branding.logo': 'data:image/svg+xml;base64,PHN2Zz4=' })).statusCode).toBe(400);
+    expect((await patch({ 'branding.logo': 'data:image/png;base64,bm90LWFuLWltYWdl' })).statusCode).toBe(400);
+    expect((await patch({ 'branding.name': 'Invalid update', 'branding.logo': `data:image/png;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>').toString('base64')}` })).statusCode).toBe(400);
+    expect((await server.app.inject({ url: '/internal/branding' })).json().name).toBe('Imagine.');
+    const png = await readFile(new URL('../../../web/public/icons/app-icon-192.png', import.meta.url));
+    expect((await patch({ 'branding.name': '  My Studio  ', 'branding.logo': `data:image/png;base64,${png.toString('base64')}`, 'personal.private': 'not-public' })).statusCode).toBe(200);
+    const branding = (await server.app.inject({ url: '/internal/branding' })).json();
+    expect(Object.keys(branding).sort()).toEqual(['logoUrl', 'name']);
+    expect(branding.name).toBe('My Studio');
+    const image = await server.app.inject({ url: branding.logoUrl });
+    expect(image.statusCode).toBe(200); expect(image.headers['content-type']).toBe('image/png');
+    expect(image.rawPayload.subarray(1, 4).toString()).toBe('PNG');
+    expect((await server.app.inject({ url: '/internal/settings', headers: user })).json().settings['branding.name']).toBe('My Studio');
+    await server.app.close();
+    server = await createServer({ config: loadConfig({ DATA_DIR: root, NODE_ENV: 'test', MOCK_PROVIDER_ENABLED: 'true' }), startRunner: false, logger: false });
+    expect((await server.app.inject({ url: '/internal/branding' })).json().name).toBe('My Studio');
+    expect((await patch({ 'branding.logo': '' })).statusCode).toBe(200);
+    expect((await server.app.inject({ url: '/internal/branding' })).json().logoUrl).toBe('/icons/app-icon-192.png');
+  });
+  it('merges owned images and videos atomically and retains links across restart and soft deletion', async () => {
+    await setup();
+    const admin = await login('admin');
+    const make = (name: string, type: 'image' | 'video' = 'image') => server.assets.create({ type, role: 'upload', filePath: `media/${name}`, mimeType: type === 'image' ? 'image/png' : 'video/mp4', fileSize: 10, sha256: name.repeat(64) });
+    const first = make('a', 'video'), second = make('b', 'video'), third = make('c');
+    const merge = (ids: string[], headers = admin) => server.app.inject({ method: 'POST', url: '/internal/assets/series', headers, payload: { assetIds: ids } });
+    expect((await merge([first.id, first.id])).statusCode).toBe(400);
+    expect((await merge([first.id, second.id, 'missing'])).statusCode).toBe(400);
+    expect(server.assets.series(first.id)?.assets).toHaveLength(1);
+    expect((await merge([first.id, second.id])).statusCode).toBe(204);
+    expect((await merge([second.id, third.id])).statusCode).toBe(204);
+    expect(server.assets.series(first.id)?.assets).toHaveLength(3);
+    await server.app.inject({ method: 'POST', url: '/internal/accounts', headers: admin, payload: { username: 'series-user', password: 'password123' } });
+    const other = await login('series-user', 'password123');
+    expect((await merge([first.id, second.id], other)).statusCode).toBe(400);
+    expect((await server.app.inject({ url: `/internal/assets/${first.id}/series`, headers: other })).statusCode).toBe(404);
+    server.assets.softDelete(second.id);
+    await server.app.close();
+    server = await createServer({ config: loadConfig({ DATA_DIR: root, NODE_ENV: 'test', MOCK_PROVIDER_ENABLED: 'true' }), startRunner: false, logger: false });
+    expect(server.assets.series(first.id)?.assets.map(asset => asset.id).sort()).toEqual([first.id, third.id].sort());
+  });
   it('caches private previews while enforcing ownership before conditional responses', async () => {
     await setup();
     const admin = await login('admin');
@@ -194,6 +243,7 @@ describe('account boundaries', () => {
     delete manifest.migrations['0009_video_sources.sql'];
     delete manifest.migrations['0010_collection_privacy.sql'];
     delete manifest.migrations['0011_generation_batches.sql'];
+    delete manifest.migrations['0012_manual_series.sql'];
     for (const name of Object.keys(manifest.migrations)) await copyFile(new URL(name, source), join(legacy, name));
     await writeFile(join(legacy, 'manifest.json'), JSON.stringify(manifest));
     const db = createDatabase(join(root, 'app.db'), legacy);

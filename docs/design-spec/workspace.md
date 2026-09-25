@@ -296,7 +296,7 @@ Opening an image or video shows its original content and a compact floating Comp
 
 The editor binds the current source implicitly. Image mode prefers `image.edit`, or an explicitly declared reference-image generation operation. Video mode uses the clean original as a single first frame, temporarily hiding the mask. Task creation remains in the viewer, with progress, explicit retry/cancel actions and output thumbnails above the Composer. Clicking an image result starts a new source draft; videos play inline. Closing the viewer never cancels submitted jobs. Drafts are isolated by account/workspace mount, project and source, with eight recent in-memory source sessions retained. Model settings use a separate editing memory scope, retaining the same per-mode/per-model structure without overwriting the main Composer draft.
 
-The mask button is hidden while the prompt is unfocused, including when the viewer is idle or settings are open. Focusing the prompt reveals it; activating it preserves focus long enough for mouse/touch clicks, and keyboard focus on the entry remains supported. On desktop and mobile single works, the mask button sits 12px above the Composer; mobile series place it 12px above the thumbnail strip. It remains horizontally centered on the send button, matching the return-to-top circle size (40px desktop, 44px mobile). Applying a mask returns to the same image, displaying its tinted coverage. Reopening preserves the applied document, including undo history; clearing and applying removes coverage. Dirty-state confirmation compares coverage with the last applied document. Brush, eraser, diameter, undo/redo, clear and visibility controls sit below the canvas, respecting bottom safe areas.
+The mask button is hidden while the prompt is unfocused, including when the viewer is idle or settings are open. Focusing the prompt reveals it; activating it preserves focus long enough for mouse/touch clicks, and keyboard focus on the entry remains supported. On desktop and mobile, including series, the mask button sits 12px above the Composer. On mobile the thumbnail strip stays full-width; the mask button floats over it without reserving a slot. It remains horizontally centered on the send button, matching the return-to-top circle size (40px desktop, 44px mobile). Applying a mask returns to the same image, displaying its tinted coverage. Reopening preserves the applied document, including undo history; clearing and applying removes coverage. Dirty-state confirmation compares coverage with the last applied document. Brush, eraser, diameter, undo/redo, clear and visibility controls sit below the canvas, respecting bottom safe areas.
 
 Mobile generation settings value fields use the same 12px font as row labels, overriding only the Composer settings panel's enlarged controls. Desktop typography and option-card styling are unchanged.
 
@@ -425,9 +425,9 @@ floats at the upper left and a rounded three-action toolbar floats at the upper
 right, respecting the top safe area. The filename remains the accessible dialog
 title but is visually hidden on mobile. Desktop heading layout is unchanged.
 Mobile series thumbnails are 59x53px (roughly two thirds of desktop's 88x80px),
-with touch targets above 44px. When a series strip exists, the focused mask button
-floats 12px above the strip, aligned with Send; without a series it stays above
-the Composer. Desktop thumbnail size and mask-button placement are unchanged.
+with touch targets above 44px. The focused mask button floats 12px above the Composer, aligned with Send,
+whether or not a series strip exists. The strip stays full-width; the floating
+button does not reserve space or move above the strip. Desktop thumbnail size and mask-button placement are unchanged.
 
 Unzoomed drags move the media with the pointer. Horizontal member navigation and
 desktop arrows/keys slide the old media out and the next media in; mobile vertical
@@ -664,3 +664,60 @@ zero through deferred portal removal; cancelling the exit animations must not
 restore their opaque base styles during the final thumbnail handoff.
 
 Task management, gallery cards and editor task stages share the same explicit retry statuses: failed, rejected, expired and cancelled. Retry remains a user action. Viewer-exit browser cases live in `e2e/workspace-viewer-exit.spec.ts`, sharing setup and helpers with the main workspace suite.
+
+### Manual series and compact tasks
+
+The selection toolbar can merge 2–1000 selected images and videos (including mixed selections) into a durable series and
+turn on series display. Explicit links merge their existing editing families,
+independently of the concurrent-image and uploaded-reference preferences. They do
+not change generation inputs or project membership. Only owned, existing images and videos
+are accepted; invalid or foreign members reject the whole operation. Deleted
+members remain ancestry bridges. Reload and restart preserve the links.
+
+The grouped card's delete action opens three choices: Cancel, Delete cover image,
+and Delete entire series. Both delete actions use red danger buttons; a video
+cover is labeled Delete cover video. On desktop, the selection toolbar stays
+12px above the measured Composer, including after prompt growth or sidebar expansion.
+Whole-series deletion resolves all current members,
+including those outside the gallery filter/page, and removes terminal failed tasks.
+Truncated series and series with running tasks are rejected before deletion.
+Partial request failures are reported and surviving members remain available.
+The editor's single-work delete still deletes the selected work only.
+
+Failed multi-job cards open an options menu containing task-list access and
+confirmed removal of failed tasks. Single failures and task-list failures expose
+the same deletion capability. Task rows initially show a two-line prompt summary;
+an inline Expand all action after the ellipsis reveals the full prompt in the
+full-width task body, with no nested text scrollbar. Collapse returns to two lines. Retry, cancel, delete and result controls remain available while collapsed.
+
+### Sidebar, mobile search and site identity
+
+Desktop sidebar width and labels transition smoothly in both directions; the
+Composer and selection toolbar follow its position. Motion obeys the existing
+reduced-motion preference and system setting.
+
+Mobile galleries omit the duplicate heading/count/search/selection row. Search
+sits immediately before the top task-history button. Opening it fades/slides out
+the title and reveals a focused search field; closing reverses the transition and
+clears the filter. Clicking outside an empty mobile search field dismisses it without stealing
+focus from the clicked control. A nonempty search stays expanded until explicitly
+closed. The navigation button remains visible and usable while searching. Mobile gallery headers are 56px
+plus the safe-area inset, with no extra top padding before the filter tabs. Long-press (520ms) on an image/video or series cover enters
+selection, including partially completed series. Scrolling, pointer cancellation
+and movement beyond 10px cancel the hold. A completed hold consumes the release
+click so it does not open the viewer or toggle the new selection away. Project
+management remains available from project controls.
+
+Administrators can change the global site name and upload/reset a logo in
+Preferences. Defaults are Imagine. and the existing project app icon. Uploads
+accept PNG/JPEG/WebP up to 512 KB; the server bounds decoding and normalizes to
+PNG within 256x256. Only the explicit site name and normalized logo are public;
+other settings, assets and credentials remain authenticated. Header, sidebar,
+login screen, browser title, favicon and Apple touch icon use the saved identity.
+Changes persist in global settings and refresh other sessions through SSE.
+
+Series with completed covers and unfinished/failed tasks reuse the normal media
+card, preserving hover/focus captions and bookmark/reference/more/prompt-copy
+controls on desktop. A compact task-status badge and task menu entries retain
+access to the unresolved jobs. Selection hides normal action controls and leaving
+selection restores them for every card, including these mixed-state series.

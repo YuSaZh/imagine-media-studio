@@ -1,4 +1,4 @@
-import { capturePost, upload, open, focusEditingPrompt, chooseRatio, selectValue, chooseResolution, chooseCount, resetWorkspace, savedModelOptions } from './workspace-helpers.js';
+import { searchGallery, enterSelection, capturePost, upload, open, focusEditingPrompt, chooseRatio, selectValue, chooseResolution, chooseCount, resetWorkspace, savedModelOptions } from './workspace-helpers.js';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -261,7 +261,7 @@ test('deleting freshly generated results never restores completed placeholders',
   const remaining = await page.locator('.study-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-study-id')!));
   const blocked = remaining[0]!;
   await page.route(`**/internal/assets/${blocked}`, route => route.request().method() === 'DELETE' ? route.fulfill({ status: 500, json: { error: 'fixture_failure' } }) : route.continue());
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   for (const id of remaining) await page.locator(`[data-study-id="${id}"] .study-open`).click();
   await page.getByRole('button', { name: '删除所选作品', exact: true }).click();
   await page.getByRole('button', { name: '确认删除', exact: true }).click();
@@ -286,7 +286,7 @@ test('login presents a conventional form and supports authentication', async ({ 
   try {
     const page = await context.newPage();
     await page.goto('/imagine');
-    await expect(page.getByRole('heading', { name: '登录 Imagine', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '登录 Imagine.', exact: true })).toBeVisible();
     await expect(page.getByText('受保护的工作区', { exact: true })).toHaveCount(0);
     await expect(page.locator('.auth-password-field svg')).toHaveCount(0);
     const usernameInput = page.getByLabel('用户名', { exact: true });
@@ -329,12 +329,12 @@ test('private projects hide recent results and obscure project covers', async ({
   await page.reload();
   await expect(page.locator(`[data-study-id="${publicAsset.id}"]`)).toBeVisible();
   await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toHaveCount(0);
-  await page.getByLabel('搜索作品', { exact: true }).fill('coast');
+  await searchGallery(page, 'coast');
   await expect(page.locator('.study-card')).toHaveCount(0);
   await open(page, '/library');
   await expect(page.locator(`[data-study-id="${publicAsset.id}"]`)).toBeVisible();
   await expect(page.locator(`[data-study-id="${privateAsset.id}"]`)).toHaveCount(0);
-  await page.getByLabel('搜索作品', { exact: true }).fill('coast');
+  await searchGallery(page, 'coast');
   await expect(page.locator('.study-card')).toHaveCount(0);
   await open(page, '/projects');
   const cover = page.getByLabel('隐私项目封面已模糊');
@@ -444,9 +444,9 @@ test('project creation, membership, search, reload and deletion confirmation', a
   await page.getByRole('button', { name: '旅行创作', exact: true }).click();
   await open(page, path);
   await expect(page.locator('.study-card')).toHaveCount(1);
-  await page.getByLabel('搜索作品', { exact: true }).fill('missing');
+  await searchGallery(page, 'missing');
   await expect(page.locator('.study-card')).toHaveCount(0);
-  await page.getByLabel('搜索作品', { exact: true }).fill('coast');
+  await searchGallery(page, 'coast');
   await expect(page.locator('.study-card')).toHaveCount(1);
   await page.reload();
   await expect(page.locator('.study-card')).toHaveCount(1);
@@ -1743,7 +1743,7 @@ test('back to top follows the active gallery viewport and avoids composer select
     await button.click();
     await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(0);
     await expect(button).toHaveCount(0);
-    await page.getByRole('button', { name: '选择作品', exact: true }).click();
+    await enterSelection(page);
     await scroll.evaluate(element => { element.scrollTop = 700; });
     await expect(button).toHaveCount(0);
     await page.getByRole('button', { name: '关闭多选', exact: true }).click();
@@ -2515,7 +2515,10 @@ test('mobile editor uses small series thumbnails floating tools and focus-only m
   await viewer.locator('.creation-composer').evaluate(async el => { await Promise.all(el.getAnimations().map(a => a.finished)); });
   const mask = (await viewer.getByRole('button', { name: '编辑蒙版', exact: true }).boundingBox())!;
   if (mobile) {
-    expect(mask.y + mask.height).toBeLessThan((await strip.boundingBox())!.y - 8);
+    const composer = (await viewer.locator('.creation-composer').boundingBox())!;
+    expect(composer.y - mask.y - mask.height).toBeCloseTo(12, 0);
+    const thumbnails = (await strip.boundingBox())!;
+    expect(thumbnails.width).toBeCloseTo(composer.width, 0);
     const back = (await viewer.getByRole('button', { name: '返回作品', exact: true }).boundingBox())!;
     const actions = (await viewer.locator('.viewer-heading-actions').boundingBox())!;
     expect(back.width).toBe(44); expect(back.height).toBe(44);
@@ -3354,10 +3357,11 @@ test('pending concurrent series and uploaded reference suboption survive reload'
   await expect(page.locator('.study-viewer .editing-result')).toHaveCount(2);
   await expect(page.locator('.study-viewer .series-job')).toHaveCount(1);
   await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
   await page.reload();
   await expect(page.locator('.pending-study.has-cover')).toHaveCount(1);
   await expect(page.locator('.study-card')).toHaveCount(2);
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await expect(page.locator('.pending-study.has-cover')).toHaveCount(1);
   await page.locator('.pending-study.has-cover .study-open').click();
   await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
@@ -3373,6 +3377,7 @@ test('pending concurrent series and uploaded reference suboption survive reload'
   await expect(page.locator('.study-viewer .viewer-image')).toBeVisible({ timeout: 10000 });
   await expect(page.locator('.study-viewer .series-job')).toHaveCount(0);
   await page.getByRole('button', { name: '返回作品', exact: true }).click();
+  await expect(page.locator('.study-viewer')).toHaveCount(0);
   await page.reload();
   await expect(page.locator('.pending-study')).toHaveCount(0);
   await open(page, '/settings');
@@ -3601,7 +3606,7 @@ test('selection keeps series grouped and bulk actions include every member', asy
   await open(page, '/library');
   await expect(page.locator('.study-card')).toHaveCount(2);
   const series = page.locator('.study-card').filter({ has: page.getByLabel('系列共 2 件作品') });
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await expect(page.locator('.study-card')).toHaveCount(2); await expect(series).toBeVisible();
   await series.locator('.study-open').click();
   await expect(page.locator('.batch-toolbar')).toContainText('已选 2 件');
@@ -3612,7 +3617,7 @@ test('selection keeps series grouped and bulk actions include every member', asy
   await page.getByRole('button', { name: '将所选作品加入项目', exact: true }).click();
   await page.locator('.options').getByRole('button', { name: 'Whole series target', exact: true }).click();
   for (const id of [original.id, result.id]) await expect.poll(async () => (await (await request.get(`/internal/assets/${id}`)).json()).asset.collectionIds).toContain(project.id);
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await page.getByRole('button', { name: '选择已加载作品', exact: true }).click();
   await expect(page.locator('.batch-toolbar')).toContainText('已选 3 件');
   await page.getByRole('button', { name: '选择已加载作品', exact: true }).click();
@@ -3627,7 +3632,7 @@ test('selection keeps series grouped and bulk actions include every member', asy
   for (const id of [original.id, result.id]) expect((await request.get(`/internal/assets/${id}`)).status()).toBe(404);
   await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false } } });
   await open(page, '/library');
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await page.locator('.study-open').click();
   await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
 });
@@ -3648,12 +3653,12 @@ test('series selection rejects incomplete membership and ignores reads after clo
   });
   await open(page, '/library');
   await expect(page.locator('.study-card')).toHaveCount(1);
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await page.locator('.study-open').click(); await requested;
   await expect(page.getByRole('button', { name: '删除所选作品', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '关闭多选', exact: true }).click();
   release();
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await expect(page.getByRole('button', { name: '选择已加载作品', exact: true })).toBeEnabled();
   await expect(page.locator('.batch-toolbar')).toContainText('已选 0 件');
   truncated = true;
@@ -3663,7 +3668,7 @@ test('series selection rejects incomplete membership and ignores reads after clo
   await expect(page.getByRole('button', { name: '删除所选作品', exact: true })).toBeDisabled();
   await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': false } } });
   await expect(page.locator('.study-card')).toHaveCount(2);
-  await page.getByRole('button', { name: '选择作品', exact: true }).click();
+  await enterSelection(page);
   await page.locator('.study-open').first().click();
   await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
 });

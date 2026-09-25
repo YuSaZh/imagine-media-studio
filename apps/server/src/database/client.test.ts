@@ -63,13 +63,35 @@ afterEach(async () => {
 });
 
 describe('SQLite initialization', () => {
-  it('upgrades existing jobs without inventing batches and retains new batches after restart', async () => {
-    const fixture = await databaseFixture('imagine-generation-batch-upgrade-');
-    const migration = '0011_generation_batches.sql';
+  it('upgrades an existing database with manual series links and reopens it', async () => {
+    const fixture = await databaseFixture('imagine-manual-series-');
+    const migration = '0012_manual_series.sql';
     await rm(resolve(fixture.migrations, migration));
     const manifestPath = resolve(fixture.migrations, 'manifest.json');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { migrations: Record<string, string> };
     delete manifest.migrations[migration];
+    delete manifest.migrations['0012_manual_series.sql'];
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const legacy = createDatabase(fixture.databasePath, fixture.migrations);
+    legacy.sqlite.close();
+    await copyFile(resolve(migrationsDirectory, migration), resolve(fixture.migrations, migration));
+    await addManifestEntry(fixture.migrations, migration);
+    const upgraded = createDatabase(fixture.databasePath, fixture.migrations);
+    expect(upgraded.sqlite.prepare('SELECT count(*) AS count FROM asset_series_links').get()).toEqual({ count: 0 });
+    upgraded.sqlite.close();
+    const reopened = createDatabase(fixture.databasePath, fixture.migrations);
+    expect(reopened.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    reopened.sqlite.close();
+  });
+  it('upgrades existing jobs without inventing batches and retains new batches after restart', async () => {
+    const fixture = await databaseFixture('imagine-generation-batch-upgrade-');
+    const migration = '0011_generation_batches.sql';
+    await rm(resolve(fixture.migrations, '0012_manual_series.sql'));
+    await rm(resolve(fixture.migrations, migration));
+    const manifestPath = resolve(fixture.migrations, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { migrations: Record<string, string> };
+    delete manifest.migrations[migration];
+    delete manifest.migrations['0012_manual_series.sql'];
     await writeFile(manifestPath, JSON.stringify(manifest));
     const legacy = createDatabase(fixture.databasePath, fixture.migrations);
     const provider = new ProviderRepository(legacy.orm).create({ name: 'Batch fixture', type: 'mock' });
@@ -96,9 +118,11 @@ describe('SQLite initialization', () => {
     const migration = '0010_collection_privacy.sql';
     await rm(resolve(fixture.migrations, migration));
     await rm(resolve(fixture.migrations, '0011_generation_batches.sql'));
+    await rm(resolve(fixture.migrations, '0012_manual_series.sql'));
     const manifestPath = resolve(fixture.migrations, 'manifest.json');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { migrations: Record<string, string> };
     delete manifest.migrations[migration];
+    delete manifest.migrations['0012_manual_series.sql'];
     delete manifest.migrations['0011_generation_batches.sql'];
     await writeFile(manifestPath, JSON.stringify(manifest));
     const legacy = createDatabase(fixture.databasePath, fixture.migrations);
@@ -121,10 +145,12 @@ describe('SQLite initialization', () => {
     const migration = '0009_video_sources.sql';
     await rm(resolve(fixture.migrations, migration));
     await rm(resolve(fixture.migrations, '0011_generation_batches.sql'));
+    await rm(resolve(fixture.migrations, '0012_manual_series.sql'));
     await rm(resolve(fixture.migrations, '0010_collection_privacy.sql'));
     const manifestPath = resolve(fixture.migrations, 'manifest.json');
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { migrations: Record<string, string> };
     delete manifest.migrations[migration];
+    delete manifest.migrations['0012_manual_series.sql'];
     delete manifest.migrations['0011_generation_batches.sql'];
     delete manifest.migrations['0010_collection_privacy.sql'];
     await writeFile(manifestPath, JSON.stringify(manifest));
@@ -171,6 +197,7 @@ describe('SQLite initialization', () => {
       { version: '0009_video_sources.sql' },
       { version: '0010_collection_privacy.sql' },
       { version: '0011_generation_batches.sql' },
+      { version: '0012_manual_series.sql' },
     ]);
     expect(first.sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
     expect(first.sqlite.pragma('journal_mode', { simple: true })).toBe('wal');
@@ -181,7 +208,7 @@ describe('SQLite initialization', () => {
     const second = createDatabase(databasePath, migrationsDirectory);
     expect(
       second.sqlite.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get(),
-    ).toEqual({ count: 12 });
+    ).toEqual({ count: 13 });
     expect(
       second.sqlite
         .prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE checksum_sha256 IS NULL')
@@ -291,6 +318,7 @@ describe('SQLite initialization', () => {
       { version: '0009_video_sources.sql' },
       { version: '0010_collection_privacy.sql' },
       { version: '0011_generation_batches.sql' },
+      { version: '0012_manual_series.sql' },
     ]);
     expect(
       upgraded.sqlite
@@ -449,7 +477,7 @@ describe('SQLite initialization', () => {
     const fixture = await databaseFixture('imagine-database-missing-0006-test-');
     await rm(resolve(fixture.migrations, '0006_pr8_migration_checksums.sql'));
     await writeFile(
-      resolve(fixture.migrations, '0012_after_missing-0006.sql'),
+      resolve(fixture.migrations, '0013_after_missing-0006.sql'),
       'CREATE TABLE must_not_be_applied_after_missing_0006 (id INTEGER PRIMARY KEY);\n',
     );
 
@@ -482,10 +510,10 @@ describe('SQLite initialization', () => {
     await writeFile(migrationPath, `${original}\n-- drift before pending migration\n`);
     await addManifestEntry(fixture.migrations, '0005_pr6_trusted_adapter_tombstones.sql');
     await writeFile(
-      resolve(fixture.migrations, '0012_after_drift.sql'),
+      resolve(fixture.migrations, '0013_after_drift.sql'),
       'CREATE TABLE must_not_be_applied (id INTEGER PRIMARY KEY);\n',
     );
-    await addManifestEntry(fixture.migrations, '0012_after_drift.sql');
+    await addManifestEntry(fixture.migrations, '0013_after_drift.sql');
 
     expect(() => createDatabase(fixture.databasePath, fixture.migrations)).toThrow(
       'checksum mismatch',
@@ -600,10 +628,10 @@ describe('SQLite initialization', () => {
     first.sqlite.exec('DROP TABLE schema_migration_integrity');
     first.sqlite.close();
     await writeFile(
-      resolve(fixture.migrations, '0012_after_missing_lock.sql'),
+      resolve(fixture.migrations, '0013_after_missing_lock.sql'),
       'CREATE TABLE must_not_be_applied_without_lock (id INTEGER PRIMARY KEY);\n',
     );
-    await addManifestEntry(fixture.migrations, '0012_after_missing_lock.sql');
+    await addManifestEntry(fixture.migrations, '0013_after_missing_lock.sql');
 
     expect(() => createDatabase(fixture.databasePath, fixture.migrations)).toThrow(
       'checksum state is missing',
@@ -620,13 +648,13 @@ describe('SQLite initialization', () => {
     const first = createDatabase(fixture.databasePath, fixture.migrations);
     first.sqlite.close();
     await writeFile(
-      resolve(fixture.migrations, '0012_drop_checksum.sql'),
+      resolve(fixture.migrations, '0013_drop_checksum.sql'),
       `DROP TRIGGER schema_migrations_checksum_immutable;
        DROP TRIGGER schema_migrations_row_immutable;
        ALTER TABLE schema_migrations DROP COLUMN checksum_sha256;
        CREATE TABLE must_not_be_applied_after_drop (id INTEGER PRIMARY KEY);\n`,
     );
-    await addManifestEntry(fixture.migrations, '0012_drop_checksum.sql');
+    await addManifestEntry(fixture.migrations, '0013_drop_checksum.sql');
 
     expect(() => createDatabase(fixture.databasePath, fixture.migrations)).toThrow(
       'removed the checksum column',
@@ -637,7 +665,7 @@ describe('SQLite initialization', () => {
         .map((column) => column.name),
     ).toContain('checksum_sha256');
     expect(
-      sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('0012_drop_checksum.sql'),
+      sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('0013_drop_checksum.sql'),
     ).toBeUndefined();
     expect(
       sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'must_not_be_applied_after_drop'").get(),
@@ -650,12 +678,12 @@ describe('SQLite initialization', () => {
     const first = createDatabase(fixture.databasePath, fixture.migrations);
     first.sqlite.close();
     await writeFile(
-      resolve(fixture.migrations, '0012_forge_history.sql'),
+      resolve(fixture.migrations, '0013_forge_history.sql'),
       `INSERT INTO schema_migrations (version, applied_at, checksum_sha256)
        VALUES ('9999_forged.sql', 123, '${'0'.repeat(64)}');
        CREATE TABLE must_not_be_applied_after_forged_history (id INTEGER PRIMARY KEY);\n`,
     );
-    await addManifestEntry(fixture.migrations, '0012_forge_history.sql');
+    await addManifestEntry(fixture.migrations, '0013_forge_history.sql');
 
     expect(() => createDatabase(fixture.databasePath, fixture.migrations)).toThrow(
       'protected SQLite migration metadata',
@@ -665,12 +693,12 @@ describe('SQLite initialization', () => {
       sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('9999_forged.sql'),
     ).toBeUndefined();
     expect(
-      sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('0012_forge_history.sql'),
+      sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('0013_forge_history.sql'),
     ).toBeUndefined();
     expect(
       sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'must_not_be_applied_after_forged_history'").get(),
     ).toBeUndefined();
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 12 });
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toEqual({ count: 13 });
     sqlite.close();
   });
 
@@ -682,7 +710,7 @@ describe('SQLite initialization', () => {
       .get() as { readonly checksums_locked_at: number }).checksums_locked_at;
     first.sqlite.close();
     await writeFile(
-      resolve(fixture.migrations, '0012_recreate_lock_without_triggers.sql'),
+      resolve(fixture.migrations, '0013_recreate_lock_without_triggers.sql'),
       `DROP TRIGGER schema_migrations_checksum_immutable;
        DROP TRIGGER schema_migrations_row_immutable;
        DROP TRIGGER schema_migration_integrity_lock_immutable;
@@ -695,7 +723,7 @@ describe('SQLite initialization', () => {
        INSERT INTO schema_migration_integrity (id, checksums_locked_at) VALUES (1, ${String(lock)});
        CREATE TABLE must_not_be_applied_after_recreated_lock (id INTEGER PRIMARY KEY);\n`,
     );
-    await addManifestEntry(fixture.migrations, '0012_recreate_lock_without_triggers.sql');
+    await addManifestEntry(fixture.migrations, '0013_recreate_lock_without_triggers.sql');
 
     expect(() => createDatabase(fixture.databasePath, fixture.migrations)).toThrow(
       'migration framework object set is incomplete',
@@ -713,7 +741,7 @@ describe('SQLite initialization', () => {
       sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'must_not_be_applied_after_recreated_lock'").get(),
     ).toBeUndefined();
     expect(
-      sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('0012_recreate_lock_without_triggers.sql'),
+      sqlite.prepare('SELECT version FROM schema_migrations WHERE version = ?').get('0013_recreate_lock_without_triggers.sql'),
     ).toBeUndefined();
     sqlite.close();
   });

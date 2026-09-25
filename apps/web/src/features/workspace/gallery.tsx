@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Bookmark, FolderInput, Images, Copy, Check, CheckCheck, Image as ImageIcon, ImagePlus, MoreHorizontal, Play, RefreshCw, Trash2, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { copyPrompt } from './copy-prompt';
-import { createSelectionGestureState, LONG_PRESS_DURATION_MS, reduceSelectionGesture } from '../gallery/model/selection-gesture';
+import { useGallerySelection } from './use-gallery-selection';
 import { RETRYABLE_JOB_STATUSES, type MediaItem } from './data';
 import { Choice, Options } from './ui';
 import { groupPendingStudies, type PendingStudy } from './pending-studies';
@@ -25,6 +25,7 @@ interface GalleryProps {
   onCancelJob?: (id: string) => void;
   onRetryJob?: (id: string) => void;
   onDeleteJob?: (id: string) => void;
+  onDeleteJobs?: (ids: string[]) => void;
   onReference?: (item: MediaItem) => void;
   items: MediaItem[];
   scrollRef: RefObject<HTMLElement | null>;
@@ -61,56 +62,27 @@ function Thumbnail({ item, visible, shouldLoad }: { item: MediaItem; visible: bo
   </>;
 }
 
-function Card({ item, props, visible, shouldLoad }: { item: MediaItem; props: GalleryProps; visible: boolean; shouldLoad: boolean }) {
-  const gesture = useRef(createSelectionGestureState());
-  const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const suppressClick = useRef(false);
+function Card({ item, props, visible, shouldLoad, task }: { item: MediaItem; props: GalleryProps; visible: boolean; shouldLoad: boolean; task?: PendingStudy }) {
   const selected = props.selected.includes(item.id);
   const elapsed = item.job?.completedAt ? generationSeconds(item.job.createdAt, item.job.completedAt) : null;
-  const reset = () => {
-    if (timeout.current) clearTimeout(timeout.current);
-    timeout.current = null;
-    gesture.current = createSelectionGestureState();
-  };
-  useEffect(() => {
-    const element = props.scrollRef.current;
-    element?.addEventListener('scroll', reset, { passive: true });
-    return () => { element?.removeEventListener('scroll', reset); reset(); };
-  }, [props.scrollRef]);
-
-  return <article className={`study-card ${selected ? 'is-selected' : ''}`} data-study-id={item.id}>
+  const selection = useGallerySelection(props.scrollRef, () => props.onSelect(item), () => props.onPick(item));
+  return <article className={`study-card ${task ? 'pending-study has-cover' : ''} ${selected ? 'is-selected' : ''}`} data-study-id={item.id} data-pending-job={task?.jobId}>
     <button className="study-open" aria-label={t("查看 {0}", [item.title])} aria-pressed={props.selecting ? selected : undefined}
-      onPointerDown={event => {
-        suppressClick.current = false;
-        const next = reduceSelectionGesture(gesture.current, { type: 'pointerdown', pointerId: event.pointerId, pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, interactiveTarget: false });
-        gesture.current = next;
-        if (next.phase === 'pending') timeout.current = setTimeout(() => {
-          const triggered = reduceSelectionGesture(gesture.current, { type: 'long-press', pointerId: event.pointerId });
-          gesture.current = triggered;
-          if (triggered.phase === 'triggered') { suppressClick.current = true; props.onSelect(item); }
-        }, LONG_PRESS_DURATION_MS);
-      }}
-      onPointerMove={event => {
-        gesture.current = reduceSelectionGesture(gesture.current, { type: 'pointermove', pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY });
-        if (gesture.current.phase !== 'pending' && timeout.current) clearTimeout(timeout.current);
-      }}
-      onPointerUp={reset} onPointerCancel={reset}
-      onContextMenu={event => { event.preventDefault(); if (!suppressClick.current) { suppressClick.current = true; props.onSelect(item); } }}
-      onClick={event => {
-        if (suppressClick.current) { suppressClick.current = false; event.preventDefault(); return; }
-        if (event.shiftKey) props.onSelect(item); else props.onPick(item);
-      }}>
+      {...selection}>
       <Thumbnail key={item.thumbnail} item={item} visible={visible} shouldLoad={shouldLoad} />
       {item.kind === 'video' && <span className="video-tag"><Play size={11} fill="currentColor" />{durationLabel(item.durationSeconds ?? 0)}</span>}
       {item.asset?.series && item.asset.series.count > 1 && <span className="series-count" aria-label={t("系列共 {0} 件作品", [item.asset.series.count])}><Images size={14} strokeWidth={1.75} aria-hidden="true" /><span>{item.asset.series.count}</span></span>}
       <span className="study-caption"><strong>{item.title}</strong><span>{item.model}{elapsed !== null ? ` · ${formatGenerationTime(elapsed)}` : ''}</span></span>
       {props.selecting && <span className="select-mark">{selected && <Check size={17} />}</span>}
     </button>
+    {task && !props.selecting && <span title={task.error} className={`pending-cover-status ${RETRYABLE_JOB_STATUSES.has(task.status) ? 'is-failed' : ''}`}>{RETRYABLE_JOB_STATUSES.has(task.status) ? t("生成失败") : <GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />}</span>}
     {!props.selecting && <>
-      {item.prompt && <button className="card-copy-prompt" aria-label={t("复制提示词 {0}", [item.title])} title={t("复制提示词")} onClick={event => { event.stopPropagation(); void copyPrompt(item.prompt, props.onNotice ?? (() => {})); }}><Copy size={17} /></button>}
+      {(item.prompt || task?.prompt) && <button className="card-copy-prompt" aria-label={t("复制提示词 {0}", [item.title])} title={t("复制提示词")} onClick={event => { event.stopPropagation(); void copyPrompt(item.prompt || task?.prompt || '', props.onNotice ?? (() => {})); }}><Copy size={17} /></button>}
       <button className={`card-bookmark ${item.saved ? 'is-saved' : ''}`} disabled={!props.online} aria-label={item.saved ? t("取消收藏 {0}", [item.title]) : t("收藏 {0}", [item.title])} onClick={() => props.onSave(item)}><Bookmark size={17} fill={item.saved ? 'currentColor' : 'none'} /></button>
       <button className="card-reference" disabled={!props.online} aria-label={t("加入参考 {0}", [item.title])} title={t("加入参考")} onClick={() => props.onReference?.(item)}><ImagePlus size={17} /></button>
       <Options label={t("{0} 更多操作", [item.title])} className="card-more" contentClassName="asset-options" trigger={<MoreHorizontal size={19} />}>
+        {task && <Choice active={false} onClick={() => props.onShowJobs?.()}>{t("查看系列任务")}</Choice>}
+        {task && props.online && (task.members ?? [task]).some(member => RETRYABLE_JOB_STATUSES.has(member.status) && member.jobId) && <Choice active={false} onClick={() => props.onDeleteJobs?.((task.members ?? [task]).filter(member => RETRYABLE_JOB_STATUSES.has(member.status) && member.jobId).map(member => member.jobId!))}><Trash2 size={15} />{t("删除失败任务")}</Choice>}
         <Choice active={false} onClick={() => props.onSelect(item)}><CheckCheck size={15} />{t("选择作品")}</Choice>
         {props.online && props.onMoveProject && <Choice active={false} onClick={() => props.onMoveProject?.(item)}><FolderInput size={15} />{t("移动到项目")}</Choice>}
         {item.kind === 'video' && props.online && props.canEditVideo && <Choice active={false} onClick={() => props.onVideoContinue?.(item, 'edit')}>{t("编辑视频")}</Choice>}
@@ -191,14 +163,19 @@ export function Gallery(props: GalleryProps) {
 }
 
 function PendingCard({ task, props }: { task: PendingStudy; props: GalleryProps }) {
+  if (task.cover) {
+    const item = { ...task.cover, ...(task.cover.asset ? { asset: { ...task.cover.asset, series: { id: task.seriesId ?? task.cover.id, count: task.seriesCount ?? task.cover.asset.series?.count ?? 1 } } } : {}) };
+    return <Card item={item} props={props} visible shouldLoad task={task} />;
+  }
   const failed = RETRYABLE_JOB_STATUSES.has(task.status);
-  const selected = !!task.cover && props.selected.includes(task.cover.id);
-  return <article className={`study-card pending-study ${task.cover ? 'has-cover' : ''} ${selected ? 'is-selected' : ''} ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? t("生成失败") : task.kind === 'image' ? t("正在生成图片") : t("正在生成视频")} aria-busy={!failed}>
-    {!task.cover && task.seriesId && task.jobId && <button className="study-open pending-series-open" aria-label={t("查看生成中的系列")} disabled={props.selecting} onClick={() => props.onOpenPendingSeries?.(task.jobId!)} />}
-    {task.cover && <button className="study-open" aria-label={t("查看 {0}", [task.cover.title])} aria-pressed={props.selecting ? selected : undefined} onClick={() => props.onPick(task.cover!)}><Thumbnail item={task.cover} visible={true} shouldLoad={true} />{props.selecting && <span className="select-mark">{selected && <Check size={17} />}</span>}</button>}
+  return <article className={`study-card pending-study ${failed ? 'is-failed' : ''}`} data-pending-job={task.jobId ?? task.id} aria-label={failed ? t("生成失败") : task.kind === 'image' ? t("正在生成图片") : t("正在生成视频")} aria-busy={!failed}>
+    {task.seriesId && task.jobId && <button className="study-open pending-series-open" aria-label={t("查看生成中的系列")} disabled={props.selecting} onClick={() => props.onOpenPendingSeries?.(task.jobId!)} />}
     {!!task.seriesCount && task.seriesCount > 1 && <span className="series-count" aria-label={t("系列共 {0} 件作品", [task.seriesCount])}><Images size={14} /><span>{task.seriesCount}</span></span>}
-    {!task.cover && <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div>}<div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? t("生成失败")}</span> : <><LoaderCircle size={17} className="spin" /><GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />{task.progress !== null && <span>{Math.round(task.progress)}%</span>}</>}<p>{task.prompt}</p>{task.members && task.members.length > 1 && <span>{rich("{0} 个任务 · {1} 个失败", [task.members.length, task.members.filter(member => ['failed', 'rejected', 'expired'].includes(member.status)).length])}</span>}</div>
-    {task.members && task.members.length > 1 && <button type="button" className="pending-study-action" aria-label={t("查看系列任务")} title={t("查看系列任务")} onClick={props.onShowJobs}><MoreHorizontal size={17} /></button>}
+    <div className="pending-study-art"><Sparkles size={34} strokeWidth={1} /></div><div className="pending-study-copy" role="status">{failed ? <span>{task.error ?? t("生成失败")}</span> : <><LoaderCircle size={17} className="spin" /><GenerationStatus status={task.status} createdAt={task.createdAt} completedAt={task.completedAt} />{task.progress !== null && <span>{Math.round(task.progress)}%</span>}</>}<p>{task.prompt}</p>{task.members && task.members.length > 1 && <span>{rich("{0} 个任务 · {1} 个失败", [task.members.length, task.members.filter(member => ['failed', 'rejected', 'expired'].includes(member.status)).length])}</span>}</div>
+    {(task.members && task.members.length > 1) && <Options label={t("系列更多操作")} className="pending-study-action" trigger={<MoreHorizontal size={17} />}>
+      <Choice active={false} onClick={() => props.onShowJobs?.()}>{t("查看系列任务")}</Choice>
+      {props.online && (task.members ?? [task]).some(member => RETRYABLE_JOB_STATUSES.has(member.status) && member.jobId) && <Choice active={false} onClick={() => props.onDeleteJobs?.((task.members ?? [task]).filter(member => RETRYABLE_JOB_STATUSES.has(member.status) && member.jobId).map(member => member.jobId!))}><Trash2 size={15} />{t("删除失败任务")}</Choice>}
+    </Options>}
     {(!task.members || task.members.length === 1) && task.jobId && <button type="button" className="pending-study-action" aria-label={failed ? t("重试生成") : t("取消生成")} title={failed ? t("重试生成") : t("取消生成")} disabled={!props.online} onClick={() => failed ? props.onRetryJob?.(task.jobId!) : props.onCancelJob?.(task.jobId!)}>{failed ? <RefreshCw size={17} /> : <X size={17} />}</button>}
     {failed && task.prompt && <button type="button" className="card-copy-prompt" aria-label={t("复制提示词")} title={t("复制提示词")} onClick={() => void copyPrompt(task.prompt, props.onNotice ?? (() => {}))}><Copy size={17} /></button>}
     {failed && (!task.members || task.members.length === 1) && task.jobId && <button type="button" className="pending-study-action pending-study-delete" aria-label={t("删除失败任务")} title={t("删除失败任务")} disabled={!props.online} onClick={() => props.onDeleteJob?.(task.jobId!)}><Trash2 size={17} /></button>}

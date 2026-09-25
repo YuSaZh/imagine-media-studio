@@ -24,7 +24,9 @@ import {
   CustomAdapterSimulateRequestSchema,
   CustomAdapterValidateRequestSchema,
   CustomAdapterValidationResponseSchema,
+  SiteBrandingSchema,
   AssetPageSchema,
+  AssetSeriesMergeSchema,
   AssetSeriesResponseSchema,
   AssetResponseSchema,
   AuthLoginSchema,
@@ -1138,6 +1140,8 @@ export const internalClient = {
       body: jsonBody({ favorite }),
     }),
   getJobSeries: async (jobId: string, groupConcurrentImages = false, groupUploadedReferences = false) => requestJson(`/internal/jobs/${encodeURIComponent(jobId)}/series?groupConcurrentImages=${groupConcurrentImages}&groupUploadedReferences=${groupUploadedReferences}`, AssetSeriesResponseSchema),
+  mergeAssetSeries: async (assetIds: string[]) => requestEmpty('/internal/assets/series', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: jsonBody(AssetSeriesMergeSchema.parse({ assetIds })) }),
+  getSiteBranding: () => requestJson('/internal/branding', SiteBrandingSchema),
   getAssetSeries: async (assetId: string, groupConcurrentImages = false, groupUploadedReferences = false) => requestJson(`/internal/assets/${encodeURIComponent(assetId)}/series?groupConcurrentImages=${groupConcurrentImages}&groupUploadedReferences=${groupUploadedReferences}`, AssetSeriesResponseSchema),
   deleteAsset: async (assetId: string) => {
     await requestEmpty(`/internal/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' });

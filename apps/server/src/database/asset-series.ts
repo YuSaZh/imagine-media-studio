@@ -8,7 +8,7 @@ export class AssetSeriesGraph {
   public readonly roots = new Map<string, string>();
   private readonly edges = new Map<string, string[]>();
 
-  public constructor(nodes: readonly SeriesNode[]) {
+  public constructor(nodes: readonly SeriesNode[], links: readonly { node: string; linked: string }[] = []) {
     const parents = new Map(nodes.map(row => [row.node, row.parent]));
     for (const { node, parent } of nodes) {
       if (!this.edges.has(node)) this.edges.set(node, []);
@@ -37,6 +37,21 @@ export class AssetSeriesGraph {
       }
       for (const item of path) this.roots.set(item, root);
     }
+    // Merge whole connected families without replacing generation ancestry.
+    const unions = new Map<string, string>();
+    const find = (value: string): string => {
+      const path: string[] = [];
+      while (unions.has(value)) { path.push(value); value = unions.get(value)!; }
+      for (const node of path) unions.set(node, value);
+      return value;
+    };
+    for (const { node, linked } of links) {
+      if (!this.roots.has(node) || !this.roots.has(linked)) continue;
+      this.edges.get(node)!.push(linked); this.edges.get(linked)!.push(node);
+      const left = find(this.roots.get(node)!), right = find(this.roots.get(linked)!);
+      if (left !== right) unions.set(left < right ? right : left, left < right ? left : right);
+    }
+    for (const [node, root] of this.roots) this.roots.set(node, find(root));
   }
 
   public assetRoots(): readonly (readonly [string, string])[] {
@@ -85,5 +100,10 @@ export function loadAssetSeriesGraph(database: AppDatabase, ownerId: string, gro
     UNION ALL
     SELECT DISTINCT 'b:' || batch_id AS node, NULL AS parent FROM owned_jobs WHERE batch_id IS NOT NULL
   `);
-  return new AssetSeriesGraph(nodes);
+  const links = database.all<{ node: string; linked: string }>(sql`
+    SELECT 'a:' || l.asset_id AS node, 'a:' || l.linked_asset_id AS linked
+    FROM asset_series_links l JOIN assets a ON a.id = l.asset_id JOIN assets b ON b.id = l.linked_asset_id
+    WHERE a.owner_id = ${ownerId} AND b.owner_id = ${ownerId}
+  `);
+  return new AssetSeriesGraph(nodes, links);
 }

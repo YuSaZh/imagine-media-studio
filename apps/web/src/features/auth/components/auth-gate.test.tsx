@@ -381,7 +381,8 @@ describe('AuthGate', () => {
         pending={false}
       />,
     );
-    expect(markup).toContain('Imagine Media Studio');
+    expect(markup).toContain('<h1>Imagine.</h1>');
+    expect(markup).toContain('/icons/app-icon-192.png');
     expect(markup).not.toContain('受保护的工作区');
     expect(markup).toContain('密码');
     expect(markup).not.toContain('应用密码');

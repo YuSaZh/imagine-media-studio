@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { AssetSeriesGraph } from './asset-series.js';
 
 describe('asset series graph', () => {
+  it('merges explicit links transitively while preserving branches and ignoring foreign nodes', () => {
+    const graph = new AssetSeriesGraph([
+      { node: 'a:one', parent: null }, { node: 'j:edit', parent: 'a:one' },
+      { node: 'a:output', parent: 'j:edit' }, { node: 'a:two', parent: null },
+      { node: 'a:three', parent: null }, { node: 'a:unrelated', parent: null },
+    ], [{ node: 'a:output', linked: 'a:two' }, { node: 'a:three', linked: 'a:two' }, { node: 'a:two', linked: 'a:output' }, { node: 'a:unrelated', linked: 'foreign' }]);
+    expect(new Set(graph.family('a:three').nodes)).toEqual(new Set(['a:one', 'j:edit', 'a:output', 'a:two', 'a:three']));
+    expect(graph.roots.get('a:three')).toBe(graph.roots.get('a:one'));
+    expect(graph.family('a:unrelated').nodes).toEqual(['a:unrelated']);
+  });
   it('resolves deep chains iteratively and bounds the visible family', () => {
     const graph = new AssetSeriesGraph(Array.from({ length: 20_000 }, (_, i) => ({ node: `a:${i}`, parent: i === 0 ? null : `a:${i - 1}` })).reverse());
     expect(graph.roots.size).toBe(20_000);

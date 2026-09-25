@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+import { SiteBranding } from './features/workspace/site-branding';
 import { App } from './app';
 import { subscribeToAuthRequired } from './api/internal-client';
 import { subscribeToInternalEvents } from './api/internal-events';
@@ -45,11 +46,9 @@ function AuthenticatedApplication() {
   }, [queryClient]);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <Appearance><Tooltip.Provider delayDuration={450} skipDelayDuration={120}>
+    <QueryClientProvider client={queryClient}><Appearance><Tooltip.Provider delayDuration={450} skipDelayDuration={120}>
         <App />
-      </Tooltip.Provider></Appearance>
-    </QueryClientProvider>
+      </Tooltip.Provider></Appearance></QueryClientProvider>
   );
 }
 
@@ -57,7 +56,8 @@ const rootElement = document.getElementById('root');
 function ApplicationRoot() {
   useLanguage();
   usePwaViewport();
-  return <AuthGate><AuthenticatedApplication /></AuthGate>;
+  const [queryClient] = useState(createAppQueryClient);
+  return <QueryClientProvider client={queryClient}><SiteBranding><AuthGate><AuthenticatedApplication /></AuthGate></SiteBranding></QueryClientProvider>;
 }
 
 if (!rootElement) {

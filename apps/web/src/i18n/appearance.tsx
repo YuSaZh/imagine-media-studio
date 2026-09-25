@@ -1,10 +1,13 @@
-import { useLayoutEffect, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useEffect, useState, type ReactNode } from 'react';
+import { useSiteBranding } from '../features/workspace/site-branding';
 import { readGeneralSettings, useSettingsQuery } from '../features/settings/api/settings-query';
 import { setLanguage, useLanguage } from './index';
 
 /** Account-scoped server preferences; never cache another account's selection on this device. */
 export function Appearance({ children }: { children: ReactNode }) {
   const settings = useSettingsQuery();
+  const branding = useSiteBranding();
+  useEffect(() => { if (settings.dataUpdatedAt) branding.refresh(); }, [settings.dataUpdatedAt, branding.refresh]);
   const preferences = readGeneralSettings(settings.data?.settings);
   const language = useLanguage();
   const [failed, setFailed] = useState(false);

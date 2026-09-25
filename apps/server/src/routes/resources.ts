@@ -1,7 +1,12 @@
+import sharp from 'sharp';
+import { fileTypeFromBuffer } from 'file-type';
+import { accountContext } from '../security/account-context.js';
+import { SiteNameSchema, SiteLogoSchema } from '@imagine/shared';
 import { createReadStream } from 'node:fs';
 
 import {
   AssetPatchSchema,
+  AssetSeriesMergeSchema,
   AssetRoleSchema,
   AssetTypeSchema,
   CollectionAssetsPatchSchema,
@@ -201,6 +206,27 @@ function registerSettingsRoutes(app: FastifyInstance, options: ResourceRoutesOpt
   app.patch('/internal/settings', async (request, reply) => {
     const input = parseOrReply(SettingsPatchSchema, request.body, reply);
     if (!input) return;
+    if (Object.keys(input.values).some(key => key.startsWith('branding.')) && options.settings instanceof AccountSettingsRepository && accountContext.getStore()?.role !== 'admin') return errorResponse(reply, 403, 'administrator_required');
+    if ('branding.name' in input.values) {
+      const name = SiteNameSchema.safeParse(input.values['branding.name']);
+      if (!name.success) return errorResponse(reply, 400, 'invalid_site_name');
+      input.values['branding.name'] = name.data;
+    }
+    if ('branding.logo' in input.values) {
+      const logo = SiteLogoSchema.safeParse(input.values['branding.logo']);
+      if (!logo.success) return errorResponse(reply, 400, 'invalid_site_logo');
+      if (logo.data) {
+        try {
+          const bytes = Buffer.from(logo.data.slice(logo.data.indexOf(',') + 1), 'base64');
+          if (bytes.length > 512 * 1024 || !['image/png', 'image/jpeg', 'image/webp'].includes((await fileTypeFromBuffer(bytes))?.mime ?? '')) return errorResponse(reply, 400, 'invalid_site_logo');
+          const image = sharp(bytes, { limitInputPixels: 16_777_216 });
+          const metadata = await image.metadata();
+          if (!['png', 'jpeg', 'webp'].includes(metadata.format)) return errorResponse(reply, 400, 'invalid_site_logo');
+          const png = await image.rotate().resize(256, 256, { fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+          input.values['branding.logo'] = `data:image/png;base64,${png.toString('base64')}`;
+        } catch { return errorResponse(reply, 400, 'invalid_site_logo'); }
+      }
+    }
     let records;
     try { records = await publishCommitted(options, () => options.settings.upsertMany(input.values)); }
     catch (error) {
@@ -522,6 +548,14 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
           }),
       } : {}),
     };
+  });
+
+  app.post('/internal/assets/series', async (request, reply) => {
+    const input = parseOrReply(AssetSeriesMergeSchema, request.body, reply);
+    if (!input) return;
+    const merged = await publishCommitted(options, () => options.assets.mergeSeries(input.assetIds));
+    if (!merged) return errorResponse(reply, 400, 'invalid_series_assets');
+    return reply.code(204).send();
   });
 
   app.get<{ Params: { id: string } }>('/internal/assets/:id', async (request, reply) => {

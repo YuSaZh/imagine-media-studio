@@ -1,3 +1,4 @@
+import { SiteNameSchema, SiteLogoSchema } from '@imagine/shared';
 import type Database from 'better-sqlite3';
 import type { AppDatabase } from './client.js';
 import { SettingsRepository, type SettingRecord } from './settings.js';
@@ -8,15 +9,23 @@ export class AccountSettingsRepository extends SettingsRepository {
   public publicBaseUrl(): string { return String(this.global.get('public_base_url')?.value ?? this.initialUrl); }
   public override list(): SettingRecord[] {
     const rows = this.sqlite.prepare('SELECT key,value_json,updated_at FROM account_settings WHERE owner_id=? ORDER BY key').all(requestOwner()) as { key: string; value_json: string; updated_at: number }[];
-    return [...rows.filter(row => row.key !== 'public_base_url' && row.key !== 'network.allow_http_content').map(row => ({ key: row.key, value: JSON.parse(row.value_json) as unknown, updatedAt: new Date(row.updated_at) })), { key: 'public_base_url', value: this.publicBaseUrl(), updatedAt: new Date() }, { key: 'network.allow_http_content', value: this.global.get('network.allow_http_content')?.value ?? true, updatedAt: new Date() }];
+    return [...['branding.name', 'branding.logo'].flatMap(key => { const entry = this.global.get(key); return entry ? [entry] : []; }), ...rows.filter(row => row.key !== 'public_base_url' && row.key !== 'network.allow_http_content' && !row.key.startsWith('branding.')).map(row => ({ key: row.key, value: JSON.parse(row.value_json) as unknown, updatedAt: new Date(row.updated_at) })), { key: 'public_base_url', value: this.publicBaseUrl(), updatedAt: new Date() }, { key: 'network.allow_http_content', value: this.global.get('network.allow_http_content')?.value ?? true, updatedAt: new Date() }];
   }
   public override get(key: string): SettingRecord | null {
+    if (key.startsWith('branding.')) return this.global.get(key);
     if (key === 'public_base_url') return this.global.get(key) ?? { key, value: this.initialUrl, updatedAt: new Date(0) };
     if (key === 'network.allow_http_content') return this.global.get(key) ?? { key, value: true, updatedAt: new Date(0) };
     const row = this.sqlite.prepare('SELECT value_json,updated_at FROM account_settings WHERE owner_id=? AND key=?').get(requestOwner(), key) as { value_json: string; updated_at: number } | undefined;
     return row ? { key, value: JSON.parse(row.value_json) as unknown, updatedAt: new Date(row.updated_at) } : null;
   }
   public override upsertMany(values: Readonly<Record<string, unknown>>): readonly SettingRecord[] {
+    if (Object.keys(values).some(key => key.startsWith('branding.'))) {
+      if (accountContext.getStore()?.role !== 'admin') throw Object.assign(new Error('Administrator required'), { statusCode: 403 });
+      for (const [key, value] of Object.entries(values).filter(([key]) => key.startsWith('branding.'))) {
+        const schema = key === 'branding.name' ? SiteNameSchema : key === 'branding.logo' ? SiteLogoSchema : null;
+        if (!schema?.safeParse(value).success) throw Object.assign(new Error('Invalid site branding'), { statusCode: 400 });
+      }
+    }
     if ('network.allow_http_content' in values && accountContext.getStore()?.role !== 'admin') {
       throw Object.assign(new Error('Administrator required'), { statusCode: 403 });
     }
@@ -29,7 +38,7 @@ export class AccountSettingsRepository extends SettingsRepository {
       }
       if (!valid) throw Object.assign(new Error('公网地址必须是 HTTPS 域名地址'), { statusCode: 400 });
     }
-    const globalKeys: string[] = Object.keys(values).filter(key => key === 'public_base_url' || key === 'network.allow_http_content');
+    const globalKeys: string[] = Object.keys(values).filter(key => key === 'public_base_url' || key === 'network.allow_http_content' || key.startsWith('branding.'));
     const keys = Object.keys(values).filter(key => !globalKeys.includes(key));
     this.sqlite.transaction(() => {
       const now = Date.now();

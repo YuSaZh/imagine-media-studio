@@ -1734,3 +1734,9 @@ export type CustomAdapterExtractedResponse = z.infer<typeof CustomAdapterExtract
 export const CustomAdapterSimulationResultSchema = CustomAdapterExtractedResponseSchema;
 export const CustomAdapterSimulatedResponseSchema = CustomAdapterExtractedResponseSchema;
 export const CustomAdapterSimulateOutputSchema = CustomAdapterExtractedResponseSchema;
+
+export const AssetSeriesMergeSchema = z.object({ assetIds: z.array(z.string().min(1)).min(2).max(1000) }).strict();
+
+export const SiteNameSchema = z.string().trim().min(1).max(60);
+export const SiteLogoSchema = z.union([z.literal(''), z.string().max(750_000).regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/)]);
+export const SiteBrandingSchema = z.object({ name: SiteNameSchema, logoUrl: z.string() }).strict();
