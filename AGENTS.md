@@ -67,6 +67,12 @@ Directory guides must not weaken the runtime and secret boundaries below.
   The tag workflow reuses its successful main CI, then tests the published
   candidate by digest. Missing/skipped/failed/cancelled required jobs block release.
   Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
+- Browser CI allows one retry and reports flaky cases separately. Reduced
+  representative coverage is for server/document-only PRs; main and release
+  acceptance retain all eight viewports. Do not weaken assertions or conceal flakes.
+- A failed release attempt does not by itself require a version bump. Preserve
+  the requested unreleased version; replacing its remote tag requires explicit
+  maintainer authorization and confirmation that no release artifacts were published.
 - Keep Chinese and English READMEs consistent when changing public behavior,
   deployment commands, configuration, or documentation links.
 - Update current specifications with behavior changes. Keep dated test results

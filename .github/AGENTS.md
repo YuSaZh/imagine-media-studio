@@ -10,6 +10,9 @@ workflow plus scripts before changing CI or publishing behavior.
   Follow [CI parity rules](../CONTRIBUTING.md#local-and-github-ci-parity): local
   focused checks are for development; `pnpm run ci` must complete locally before
   release. GitHub uses the same partial entry scripts and gates the exact SHA.
+- PRs may use the shared scope selector for representative browser coverage. Main
+  and release gates always require all eight projects. Allow one browser retry,
+  report flaky cases separately, and fix recurrent failures without weakening checks.
 - Test Image is manually dispatched on `main` and requires successful CI for the
   same commit. Build a unique multi-architecture candidate, smoke its immutable
   digest, then attach `test` and `test-sha-*` to that verified digest.

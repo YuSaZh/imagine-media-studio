@@ -1,9 +1,9 @@
-# Imagine Media Studio v0.2.2 Release Guide
+# Imagine Media Studio v0.2.1 Release Guide
 
-Imagine Media Studio `v0.2.2` repairs browser acceptance for the workspace changes introduced in v0.2.1 and unifies local/GitHub CI entry points. It adds no database migration beyond `0012_manual_series.sql`.
+Imagine Media Studio `v0.2.1` adds persistent manual media series, explicit cover/series deletion, site branding, and refined desktop/mobile navigation. It includes repaired browser synchronization and tiered PR acceptance while retaining full local/main release gates. Migration `0012_manual_series.sql` adds explicit series links.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.2)
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.1)
 for deployment and verification. Replace `<digest-from-release>` below with its
 64-character SHA-256 digest.
 
@@ -43,7 +43,7 @@ remains an administrator trust boundary.
 
 ## Install the released image
 
-For `v0.2.2`, take the exact digest from the GitHub Release or release workflow
+For `v0.2.1`, take the exact digest from the GitHub Release or release workflow
 summary:
 
 ```bash
@@ -153,11 +153,11 @@ docker run --rm \
   --entrypoint node "$IMAGE" \
   dist/maintenance/data-archive-cli.js restore \
   --bundle /recovery/live/backups/<id>.bundle \
-  --target /recovery/restored-v0.2.2
+  --target /recovery/restored-v0.2.1
 ```
 
 Inspect the restored tree, recreate the application container with
-`imagine-state/restored-v0.2.2` bound to `/data`, and keep the same
+`imagine-state/restored-v0.2.1` bound to `/data`, and keep the same
 `APP_SECRET`. A container-only rollback may reuse the live database only when
 the older application is known to support its schema. Otherwise restore the
 verified pre-upgrade archive to a new root and switch the bind mount. The CLI
@@ -165,9 +165,9 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
-Use the digest, not `0.2.2`, `0.2`, or `latest`, as the verification subject:
+Use the digest, not `0.2.1`, `0.2`, or `latest`, as the verification subject:
 
-Run these commands from a verified `v0.2.2` source checkout. GitHub CLI must be
+Run these commands from a verified `v0.2.1` source checkout. GitHub CLI must be
 authenticated with `gh auth login` or a `GH_TOKEN` that can read this repository;
 keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.
@@ -306,4 +306,8 @@ Prepare the description according to [.github/RELEASE_NOTES.md](./.github/RELEAS
 5. Verify the Release, GHCR tags, digest attestation, SBOM, provenance, and all
    required platform manifests before announcing availability.
 
-The workflow reuse follows GitHub's [reusable workflow mechanism](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows); the local workflow reference selects the same commit as the release tag. Pushing a branch alone does not publish a stable image, and publication does not deploy or restart an existing installation.
+The tag workflow uses `.github/scripts/require-successful-ci.mjs` to inspect the exact commit's latest main CI and required jobs. It does not invoke a reusable workflow or start another source CI suite. Pushing main alone does not publish a stable image, and publication does not deploy or restart an existing installation.
+
+### Retrying an unpublished version
+
+A failed CI or release attempt does not automatically consume the intended version. Keep the requested version unless the maintainer chooses another. Never rewrite a published version. If an existing tag must point to a repaired commit, obtain explicit maintainer authorization, verify that no GitHub Release or stable version image was published, and record the old tag object. Complete local acceptance, push main and verify its exact-commit CI first; then replace only that failed tag using an explicit expected-old-value lease. Do not force-push main or unrelated tags.

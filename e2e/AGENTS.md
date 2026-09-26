@@ -21,8 +21,13 @@ Read the [root guide](../AGENTS.md), [frontend guide](../apps/web/AGENTS.md), an
   when affected. Keep accessible-name and keyboard/focus checks meaningful.
 - Normal workflow tests block Service Workers; PWA tests deliberately enable them.
   Do not remove offline/cache/auth assertions to reduce test flakiness.
+- CI permits one retry and reports flakes separately; a failed retry still blocks
+  acceptance. Stress a repaired flaky test with repeated runs and fail-on-flaky.
 - Prefer visible state and response assertions over arbitrary sleeps. Retain
   failure traces/screenshots without credentials or private provider payloads.
+  Synchronize on application state or browser Resource Timing rather than unbounded
+  `response.finished()` waits. Bound test-created synchronization signals, release
+  held routes in finally blocks, and preserve original failures during cleanup.
 - Clean task-owned runtime data/processes after runs, including interrupted runs.
   Keep baseline media and licensing provenance in the workspace specification.
 - Report fixture/browser coverage separately from live Provider and physical

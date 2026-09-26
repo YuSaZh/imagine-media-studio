@@ -2463,36 +2463,37 @@ test('recent series cover changes before the view save finishes and without a re
   await open(page, '/library');
   const firstSave = page.waitForResponse(response => response.url().endsWith('/internal/settings') && response.request().method() === 'PATCH' && !!response.request().postDataJSON()?.values?.['gallery.series_last_viewed']?.default?.[original.id]);
   await page.locator(`[data-study-id="${original.id}"] .study-open`).click();
-  await (await firstSave).finished();
+  expect((await firstSave).ok()).toBe(true);
   await expect(page.locator('.editing-result')).toHaveCount(2);
   await expect(page.locator('.viewer-entry-layer')).toHaveCount(0);
   await expect.poll(async () => (await (await request.get('/internal/settings')).json()).settings['gallery.series_last_viewed']?.default?.[original.id]).toBeTruthy();
-  let release!: () => void, started!: () => void;
+  let release!: () => void, saveStarted = false;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const received = new Promise<void>(resolve => { started = resolve; });
-  let releaseGallery!: () => void, galleryStarted!: () => void;
+  let releaseGallery!: () => void, galleryStarted = false;
   const galleryGate = new Promise<void>(resolve => { releaseGallery = resolve; });
-  const staleGallery = new Promise<void>(resolve => { galleryStarted = resolve; });
   await page.route('**/internal/assets?**', async route => {
-    const response = await route.fetch();
+    const response = await route.fetch({ timeout: 10000 });
     await response.body();
-    galleryStarted();
+    galleryStarted = true;
     await galleryGate;
     await route.fulfill({ response });
   });
   await page.route('**/internal/settings', async route => {
     const body = route.request().method() === 'PATCH' ? route.request().postDataJSON() : null;
-    if (body?.values?.['gallery.series_last_viewed']?.default?.[result.id]) { started(); await gate; }
+    if (body?.values?.['gallery.series_last_viewed']?.default?.[result.id]) { saveStarted = true; await gate; }
     await route.continue();
   });
   try {
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await staleGallery;
+    await expect.poll(() => galleryStarted, { message: 'Stale gallery response is held by the route' }).toBe(true);
+    await expect(page.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'true');
     await page.getByRole('button', { name: '编辑此生成结果', exact: true }).click();
-    await received;
+    await expect.poll(() => saveStarted, { message: 'New cover save is held by the route' }).toBe(true);
     const oldResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/internal/assets');
     releaseGallery();
-    await (await oldResponse).finished();
+    expect((await oldResponse).ok()).toBe(true);
+    // Observe the application's completed query instead of CDP loadingFinished.
+    await expect(page.locator('.gallery-scroll')).toHaveAttribute('aria-busy', 'false');
     await page.getByRole('button', { name: '返回作品', exact: true }).click();
     await expect(page.locator('.study-card')).toHaveAttribute('data-study-id', result.id);
     release();
@@ -2849,8 +2850,11 @@ test('editor preloads before first opening without flashing a loading panel', as
   const workspaceLoaded = page.waitForResponse(response => /\/assets\/media-editing-workspace-[^/]+\.js$/.test(response.url()));
   const maskLoaded = page.waitForResponse(response => /\/assets\/editor-[^/]+\.js$/.test(response.url()));
   await open(page);
-  await (await workspaceLoaded).finished();
-  await (await maskLoaded).finished();
+  const urls = await Promise.all([workspaceLoaded, maskLoaded].map(async pending => {
+    const response = await pending; expect(response.ok()).toBe(true); return response.url();
+  }));
+  // Resource Timing reflects browser download completion without CDP's response.finished race.
+  await expect.poll(() => page.evaluate(urls => urls.every(url => performance.getEntriesByName(url, 'resource').some(entry => (entry as PerformanceResourceTiming).responseEnd > 0)), urls)).toBe(true);
   await expect(page.locator('.study-open')).toHaveCount(1);
   await page.evaluate(() => {
     const panels: string[] = [];

@@ -7,7 +7,7 @@ const viewports = projects.map(project => project.replace('workspace-', '').spli
 export default defineConfig({
   testDir: './e2e', testMatch: ['**/workspace.spec.ts', '**/workspace-*.spec.ts'], fullyParallel: false, workers: 1,
   forbidOnly: Boolean(process.env.CI), retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['html', { open: 'never' }], ['list']] : 'list',
+  reporter: process.env.CI ? [['html', { open: 'never' }], ['list'], ['json', { outputFile: process.env.PLAYWRIGHT_JSON_OUTPUT_FILE ?? 'test-results/report.json' }]] : 'list',
   globalSetup: resolve('e2e/global-setup.ts'), globalTeardown: resolve('e2e/global-teardown.ts'),
   use: { baseURL: E2E_BASE_URL, storageState: E2E_STORAGE_STATE, trace: 'retain-on-failure', serviceWorkers: 'block',
     ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } } : {}) },

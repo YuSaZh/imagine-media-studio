@@ -1,6 +1,7 @@
+import { browserSummary } from './browser-results.mjs';
 import { createHash } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { readFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, readFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -44,6 +45,16 @@ async function run(stage, command, args, env = {}) {
       active.once('error', no);
       active.once('exit', (code, signal) => code === 0 ? yes() : no(new Error(`${stage} failed (${signal ?? code}).`)));
     });
+    if (env.PLAYWRIGHT_JSON_OUTPUT_FILE) {
+      const json = await readFile(env.PLAYWRIGHT_JSON_OUTPUT_FILE, 'utf8').catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+      if (json) {
+        record.browser = browserSummary(JSON.parse(json));
+        const details = `${stage}: ${record.browser.passed} passed, ${record.browser.failed} failed, ${record.browser.flaky} flaky, ${record.browser.skipped} conditional skips`;
+        process.stdout.write(`${details}\n`);
+        if (record.browser.flaky) process.stdout.write(`Flaky tests (passed on retry): ${record.browser.flakyTests.join('; ')}\n`);
+        if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${details}\n\n${record.browser.flakyTests.map(name => `- Retry passed: ${name}`).join('\n')}\n`);
+      }
+    }
     record.status = 'passed';
   } catch (error) { record.status = 'failed'; throw error; }
   finally { children.delete(active); await save(); }
@@ -81,9 +92,10 @@ try {
         const data = await mkdtemp(join(tmpdir(), 'imagine-media-studio-e2e-'));
         try {
           await run(name, 'pnpm', ['test:e2e', `--project=${name}`, '--update-snapshots=none', `--output=${join(output, name, 'test-results')}`], {
-          E2E_PORT: String(await port()), IMAGINE_E2E_DATA_DIR: data,
-          PLAYWRIGHT_HTML_OUTPUT_DIR: join(output, name, 'report'),
-        });
+            E2E_PORT: String(await port()), IMAGINE_E2E_DATA_DIR: data,
+            PLAYWRIGHT_HTML_OUTPUT_DIR: join(output, name, 'report'),
+            PLAYWRIGHT_JSON_OUTPUT_FILE: join(output, name, 'results.json'),
+          });
         } finally { await rm(data, { recursive: true, force: true }); }
       }
     }));

@@ -13,12 +13,13 @@ import { apiRequestContextOptions } from './request-context-options.js';
  * against the configured test origin.
  */
 export const test = base.extend<{ request: APIRequestContext }>({
-  page: async ({ page }, use) => {
+  page: async ({ page }, use, testInfo) => {
     try { await use(page); }
     finally {
       // Complete in-flight interception while the page/request context is still alive.
-      // Waiting preserves handler errors instead of hiding them during context teardown.
-      await page.unrouteAll({ behavior: 'wait' });
+      // Successful tests drain handlers. Failed tests already retain their original error;
+      // detach pending handlers so a timed-out test cannot deadlock its own teardown.
+      if (!page.isClosed()) await page.unrouteAll({ behavior: testInfo.status === testInfo.expectedStatus ? 'wait' : 'ignoreErrors' });
     }
   },
   request: async ({ playwright }, use) => {
