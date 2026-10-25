@@ -1,9 +1,9 @@
-# Imagine. v0.2.1 Release Guide
+# Imagine. v0.2.3 Release Guide
 
-Imagine. `v0.2.1` adds persistent manual media series, explicit cover/series deletion, site branding, and refined desktop/mobile navigation. It includes repaired browser synchronization and tiered PR acceptance while retaining full local/main release gates. Migration `0012_manual_series.sql` adds explicit series links.
+Imagine. `v0.2.3` unifies the product name across documentation, UI/PWA, APIs and release metadata. Moving a series to a project now moves all existing image/video members together. It also guards oversized series merges, preserves whole-series deletion retry plans and clarifies media retention and operator guidance. There are no new database migrations compared with `v0.2.1`.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.1)
+the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.3)
 for deployment and verification. Replace `<digest-from-release>` below with its
 64-character SHA-256 digest.
 
@@ -43,7 +43,7 @@ remains an administrator trust boundary.
 
 ## Install the released image
 
-For `v0.2.1`, take the exact digest from the GitHub Release or release workflow
+For `v0.2.3`, take the exact digest from the GitHub Release or release workflow
 summary:
 
 ```bash
@@ -162,11 +162,11 @@ docker run --rm \
   --entrypoint node "$IMAGE" \
   dist/maintenance/data-archive-cli.js restore \
   --bundle /recovery/live/backups/<id>.bundle \
-  --target /recovery/restored-v0.2.1
+  --target /recovery/restored-v0.2.3
 ```
 
 Inspect the restored tree, recreate the application container with
-`imagine-state/restored-v0.2.1` bound to `/data`, and keep the same
+`imagine-state/restored-v0.2.3` bound to `/data`, and keep the same
 `APP_SECRET`. A container-only rollback may reuse the live database only when
 the older application is known to support its schema. Otherwise restore the
 verified pre-upgrade archive to a new root and switch the bind mount. The CLI
@@ -174,9 +174,9 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
-Use the digest, not `0.2.1`, `0.2`, or `latest`, as the verification subject:
+Use the digest, not `0.2.3`, `0.2`, or `latest`, as the verification subject:
 
-Run these commands from a verified `v0.2.1` source checkout. GitHub CLI must be
+Run these commands from a verified `v0.2.3` source checkout. GitHub CLI must be
 authenticated with `gh auth login` or a `GH_TOKEN` that can read this repository;
 keep that token in the environment, never in an argument or URL. A private GHCR
 package also requires the read-only `docker login --password-stdin` flow above.

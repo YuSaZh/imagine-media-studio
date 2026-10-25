@@ -4,6 +4,41 @@ All notable changes to Imagine. are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-25
+
+发布日期：2026-10-25 · 上一稳定版：v0.2.1
+
+> 项目统一更名为 Imagine.；系列卡片的“移动到项目”整体迁移现有图片和视频，并修复系列合并边界、删除失败后的重试及相关文档说明。
+
+### 重点更新
+
+- **统一项目名称：** 中英日 README、页面与 PWA 安装名称、应用信息、认证提示、镜像及发布标题统一为 Imagine.，管理员自定义站点名称继续保留。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+- **整个系列移动到项目：** 同时移动当前系列的所有现有图片和视频，包括被筛选或其他项目视图隐藏的成员；只有全体成员都仅属于目标项目时才禁用该目标。成员读取失败或不完整时阻止操作，失败后可重试。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+- **系列批量操作恢复：** 合并事务拒绝超过完整读取边界的结果并保留选择；整系列删除记录未完成成员，即使封面已经删除或响应丢失，也只重试剩余作品和失败任务。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+
+### 文档与使用说明
+
+- 三语删除确认明确说明作品从图库移除、应用内不可恢复，但媒体文件暂留且不释放磁盘空间；项目删除默认保留作品。
+- 更新 HTTP 持久偏好、离线归档停服要求及当前 Mock 能力说明；历史验收记录标注原始范围，不再作为当前版本的验收结论。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+
+### 验收与发布可靠性
+
+- 侧栏测试等待展开/收起的精确宽度终态；单元测试限制并行 worker，保留断言、默认超时和完整测试范围。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+- **完整 CI 入口：** `pnpm run ci` 包含质量检查、全部八个浏览器尺寸及隔离源码容器验收；正式发布继续复用相同提交的成功 main CI，再验证实际候选镜像 digest。
+
+### 升级说明与限制
+
+- 相比 v0.2.1 没有新增数据库迁移，既有账号、项目、媒体和设置继续保留。仓库/GHCR 地址、Compose 服务与环境变量、加密上下文、归档及浏览器存储标识保持兼容。
+- 单次移动最多提交 1000 个现有作品 ID，并在一个事务中替换项目归属。系列完整读取上限仍按素材、任务、批次及隐藏祖先的图节点计数，超过上限时不执行部分移动或合并。
+- 系列移动覆盖成员读取时已存在的图片和视频；进行中的任务及其后续产物不自动迁移。删除作品仍不等于物理回收文件。
+- 自动化夹具和 Mock 验证不代表真实付费 Provider、实体设备键盘或原生 PWA 安装验收。
+
+### 贡献者
+
+- [@YuSaZh](https://github.com/YuSaZh)
+
+完整变更：[v0.2.1...v0.2.3](https://github.com/YuSaZh/imagine-media-studio/compare/v0.2.1...v0.2.3)
+
 ## [0.2.1] - 2026-09-26
 
 发布日期：2026-09-26 · 上一稳定版：v0.2.0
