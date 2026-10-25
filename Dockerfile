@@ -40,7 +40,7 @@ ARG OCI_CREATED
 ARG OCI_REVISION
 ARG OCI_VERSION
 
-LABEL org.opencontainers.image.title="Imagine Media Studio" \
+LABEL org.opencontainers.image.title="Imagine." \
   org.opencontainers.image.description="A lightweight self-hosted media generation WebUI" \
   org.opencontainers.image.licenses="MIT" \
   org.opencontainers.image.source="https://github.com/YuSaZh/imagine-media-studio" \

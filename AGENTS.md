@@ -1,4 +1,4 @@
-# Imagine Media Studio Agent Guide
+# Imagine. Agent Guide
 
 These are shared repository instructions for coding agents and maintainers.
 They apply throughout this repository; directory guides add scoped requirements.

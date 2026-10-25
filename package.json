@@ -1,10 +1,10 @@
 {
-  "name": "imagine-media-studio",
+  "name": "imagine",
   "version": "0.2.1",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "A lightweight self-hosted web UI for user-provided media generation APIs.",
+  "description": "Imagine. is a lightweight self-hosted web UI for user-provided media generation APIs.",
   "packageManager": "pnpm@11.23.0",
   "engines": {
     "node": ">=24 <25",

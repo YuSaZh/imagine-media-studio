@@ -1209,6 +1209,10 @@ export const CollectionAssetsPatchSchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1).max(100),
 }).strict();
 
+export const CollectionAssetsMoveSchema = z.object({
+  assetIds: z.array(z.string().min(1)).min(1).max(1000),
+}).strict();
+
 export const CollectionDtoSchema = z.object({
   id: z.string().min(1),
   name: z.string(),

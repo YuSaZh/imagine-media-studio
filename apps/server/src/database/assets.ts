@@ -82,6 +82,14 @@ export interface UpdateAssetDerivativesInput {
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
+export class AssetSeriesLimitError extends Error {
+  public override readonly name = 'AssetSeriesLimitError';
+  public readonly code = 'series_too_large';
+  public constructor() {
+    super('The merged series would exceed the complete series read limit. Select fewer works.');
+  }
+}
+
 export function mapAssetRow(row: typeof assets.$inferSelect): AssetRecord {
   const metadata: unknown = JSON.parse(row.metadataJson);
   if (metadata === null || Array.isArray(metadata) || typeof metadata !== 'object') {
@@ -289,6 +297,13 @@ export class AssetRepository {
       const ids = [...new Set(assetIds)];
       if (ids.length < 2 || ids.some(id => { const asset = this.get(id); return !asset || !['image', 'video'].includes(asset.type) || asset.role === 'mask' || asset.metadata.temporaryVideoFrame === true; })) return false;
       for (const id of ids.slice(1)) transaction.run(sql`INSERT OR IGNORE INTO asset_series_links (asset_id, linked_asset_id) VALUES (${ids[0]!}, ${id})`);
+      // Check both uploaded-input policies: enabling them can replace batch
+      // ancestry rather than only add edges. Concurrent grouping is a superset
+      // of ungrouped batches under either policy. Throw to roll back every link.
+      for (const groupUploadedReferences of [false, true]) {
+        const graph = loadAssetSeriesGraph(transaction, this.owner?.() ?? 'admin', true, groupUploadedReferences);
+        if (graph.family(`a:${ids[0]!}`).truncated) throw new AssetSeriesLimitError();
+      }
       transaction.insert(changeEvents).values(toChangeEventValues({ aggregateType: 'asset', aggregateId: ids[0]!, eventType: 'asset.updated', payload: { id: ids[0]!, seriesMerged: true } })).run();
       return true;
     });

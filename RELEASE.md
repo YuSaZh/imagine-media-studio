@@ -1,6 +1,6 @@
-# Imagine Media Studio v0.2.1 Release Guide
+# Imagine. v0.2.1 Release Guide
 
-Imagine Media Studio `v0.2.1` adds persistent manual media series, explicit cover/series deletion, site branding, and refined desktop/mobile navigation. It includes repaired browser synchronization and tiered PR acceptance while retaining full local/main release gates. Migration `0012_manual_series.sql` adds explicit series links.
+Imagine. `v0.2.1` adds persistent manual media series, explicit cover/series deletion, site branding, and refined desktop/mobile navigation. It includes repaired browser synchronization and tiered PR acceptance while retaining full local/main release gates. Migration `0012_manual_series.sql` adds explicit series links.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
 the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.1)
@@ -9,7 +9,7 @@ for deployment and verification. Replace `<digest-from-release>` below with its
 
 ## Deployment boundary
 
-Imagine Media Studio runs as one Node.js container with one SQLite database,
+Imagine. runs as one Node.js container with one SQLite database,
 one application port, and one persistent `/data` bind mount. It does not need
 PostgreSQL, Redis, MinIO, Nginx, or a separate worker. A host reverse proxy may
 be used outside this application boundary.
@@ -118,6 +118,15 @@ the whole `<id>.bundle` directory as one unit. The SQLite payload can contain
 encrypted Provider credential ciphertext and remains sensitive even though the
 external `APP_SECRET` is absent.
 
+### Deletion and disk usage
+
+Deleting ordinary assets hides them and blocks media delivery, but retains their
+originals and derived files on disk. It does not reclaim disk space. The Data
+page repairs missing previews; it is not an orphan purge or retention-policy
+manager. Full-data archives include retained managed files, including soft-deleted
+assets. Do not delete files based only on gallery visibility: job inputs and
+series ancestry may still reference them. See [known limitations](./Hold.md#media-retention-policy).
+
 ## Upgrade and migration
 
 Version `v0.2.1` introduced the `asset_series_links` table through migration `0012_manual_series.sql`. Existing accounts, projects, media, and settings are retained. Manual merges can include images and videos and preserve their existing editing families; series deletion offers cover-only or whole-series removal. Site branding is administrator-managed and public on the login page, while other settings and media retain their authorization boundaries. Older installations apply all intervening migrations on startup; migrations remain forward-only.
@@ -125,7 +134,7 @@ Version `v0.2.1` introduced the `asset_series_links` table through migration `00
 1. Record the running image digest, environment-file backup, and active data
    root. Never rely on `latest` as the rollback record.
 2. Create and verify a full-data archive with the currently running image.
-3. Stop only the Imagine Media Studio container.
+3. Stop only the Imagine. container.
 4. Pull and verify the new digest, then recreate the container with the same
    UID/GID, environment file, and `/data` bind mount.
 5. Watch startup and `/internal/health`. Startup validates the immutable

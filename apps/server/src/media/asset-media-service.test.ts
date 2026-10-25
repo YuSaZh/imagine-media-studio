@@ -102,6 +102,17 @@ async function rgbaPng(width: number, height: number, alpha: readonly number[]):
   return sharp(bytes, { raw: { channels: 4, height, width } }).png().toBuffer();
 }
 
+it('soft deletion blocks delivery while retaining ordinary media files', async () => {
+  const { paths, png, repository, service } = await fixture();
+  const asset = await service.materializeUpload({ source: Readable.from(png), role: 'upload', claimedMimeType: 'image/png', originalFilename: 'retained.png' });
+  expect(await service.softDelete(asset.id)).toBe(true);
+  expect(repository.get(asset.id)).toBeNull();
+  expect(repository.get(asset.id, true)?.deletedAt).toBeInstanceOf(Date);
+  expect(await service.getDelivery(asset.id, 'content')).toBeNull();
+  expect((await stat(join(paths.root, asset.filePath))).size).toBeGreaterThan(0);
+  expect((await stat(join(paths.root, asset.thumbnailPath!))).size).toBeGreaterThan(0);
+});
+
 describe('AssetMediaService', () => {
   it('uses the provider-scoped downloader for provider-owned results', async () => {
     const { paths, png, repository } = await fixture();

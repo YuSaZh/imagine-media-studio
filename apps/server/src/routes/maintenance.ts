@@ -62,7 +62,7 @@ function invalidRequest(reply: FastifyReply): void {
 }
 
 function unauthorized(reply: FastifyReply): void {
-  reply.header('www-authenticate', 'Basic realm="Imagine Media Studio", charset="UTF-8"');
+  reply.header('www-authenticate', 'Basic realm="Imagine.", charset="UTF-8"');
   void reply.code(401).send({
     error: 'authentication_required',
     message: 'Administrator authentication is required.',

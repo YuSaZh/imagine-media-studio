@@ -1,9 +1,14 @@
 # PR8 Data Archive Core
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 Status: **Offline archive, target-only restore, restored-server startup, and GitHub Actions acceptance passed.**
 
 This milestone defines an offline, versioned data bundle and target-only
-restore flow for Imagine Media Studio. It is a directory bundle that can be
+restore flow for Imagine. It is a directory bundle that can be
 copied as a unit; it is not a compressed tar archive.
 
 ## Bundle layout
@@ -38,7 +43,7 @@ trusted adapter files. The entire `backups` tree, including
 `backups/.staging`, is excluded so a bundle cannot recursively archive prior
 backups or its own staging data. `media/temp`, `adapters/.staging`, `logs`,
 `app.db-wal`, `app.db-shm`, and `.offline-maintenance.lock` are excluded as
-transient or operational data. The lease lock is listed explicitly in the
+transient or operational data. The legacy lock sidecar is listed explicitly in the
 manifest exclusion set but is never copied into a bundle.
 Provider-result temporary manifests are therefore not promised to survive as
 archive payloads. Durable Job state remains in SQLite and uses the existing

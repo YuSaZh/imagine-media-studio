@@ -1,4 +1,4 @@
-# Contributing to Imagine Media Studio
+# Contributing to Imagine.
 
 [Chinese README](./README.md) | [English README](./README_EN.md) | [日本語 README](./README_JA.md) |
 [Agent rules](./AGENTS.md) | [Documentation](./docs/README.md)

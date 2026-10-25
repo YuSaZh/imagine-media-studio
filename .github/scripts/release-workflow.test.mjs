@@ -225,7 +225,10 @@ assert.equal(
   metadata.with.tags,
   'type=raw,value=candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
 );
-assert.equal(metadata.with.labels, 'org.opencontainers.image.version=${{ needs.validate.outputs.version }}');
+assert.deepEqual(metadata.with.labels.trim().split('\n'), [
+  'org.opencontainers.image.title=Imagine.',
+  'org.opencontainers.image.version=${{ needs.validate.outputs.version }}',
+]);
 assert.doesNotMatch(JSON.stringify(publish), /type=semver|value=latest|prefix=sha-/u);
 
 const build = action(publish, buildRef);
@@ -390,13 +393,14 @@ try {
   assert.deepEqual(createCalls[0]?.slice(0, 3), ['release', 'create', 'v0.1.0']);
   assert.ok(createCalls[0]?.includes('--verify-tag'));
   assert.ok(createCalls[0]?.includes('--latest'));
+  assert.equal(createCalls[0]?.[createCalls[0].indexOf('--title') + 1], 'Imagine. v0.1.0');
   assert.equal(createCalls[0]?.at(-1), notesPath);
 
   const matchingRelease = JSON.stringify({
     body: releaseNotes,
     isDraft: false,
     isPrerelease: false,
-    name: 'Imagine Media Studio v0.1.0',
+    name: 'Imagine. v0.1.0',
     tagName: 'v0.1.0',
   });
   const ambiguousResponses = [
@@ -662,6 +666,10 @@ assert.equal(testImage.jobs.publish.if, "github.ref == 'refs/heads/main'");
 assert.equal(testImage.jobs.publish.permissions.actions, 'read');
 assert.ok(testImage.jobs.publish.steps.some(step => step.run === 'node .github/scripts/require-successful-ci.mjs'));
 const testBuild = testImage.jobs.publish.steps.find(step => step.id === 'push');
+assert.deepEqual(action(testImage.jobs.publish, metadataRef).with.labels.trim().split('\n'), [
+  'org.opencontainers.image.title=Imagine.',
+  'org.opencontainers.image.version=test-${{ github.sha }}',
+]);
 assert.equal(testBuild.with.platforms, 'linux/amd64,linux/arm64');
 assert.equal(testBuild.with.sbom, true);
 assert.equal(testBuild.with.provenance, 'mode=max');

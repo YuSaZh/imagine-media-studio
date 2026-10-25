@@ -1,5 +1,10 @@
 # PR 6 Verification
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 Status: **Local and GitHub Actions acceptance passed.**
 
 This historical PR 6 record covers the original custom Provider milestone.

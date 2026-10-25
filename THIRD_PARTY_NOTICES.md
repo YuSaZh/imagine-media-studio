@@ -40,7 +40,7 @@ SOFTWARE.
 
 ## Runtime dependency notice policy
 
-Imagine Media Studio uses third-party packages installed from the exact versions in `pnpm-lock.yaml`. The table below records the direct browser runtime dependencies introduced or used by the PR 1 interface. It is an inventory, not a replacement for the complete license text distributed with each package.
+Imagine. uses third-party packages installed from the exact versions in `pnpm-lock.yaml`. The table below records the direct browser runtime dependencies introduced or used by the PR 1 interface. It is an inventory, not a replacement for the complete license text distributed with each package.
 
 | Package | Version | License |
 | --- | --- | --- |

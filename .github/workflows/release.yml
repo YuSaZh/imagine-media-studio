@@ -114,7 +114,9 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: type=raw,value=candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          labels: org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=Imagine.
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
 
       - name: Build and push linux/amd64 and linux/arm64 images
         id: push

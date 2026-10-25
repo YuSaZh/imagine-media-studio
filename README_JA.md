@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./apps/web/public/icons/app-icon-192.png" alt="Imagine Media Studio" width="80" />
+<img src="./apps/web/public/icons/app-icon-192.png" alt="Imagine." width="80" />
 
-# Imagine Media Studio
+# Imagine.
 
 **軽量なセルフホスト型の画像・動画制作ワークスペース**
 
@@ -19,6 +19,10 @@
 </div>
 
 <a id="features"></a>
+画像・動画をまとめて永続的なシリーズに結合できます。シリーズ全体を読み込める上限を超える結合は拒否され、選択は保持されます。削除はカバーのみ、またはシリーズ全体を選べます。作品を削除してもメディアファイルは当面保持され、ディスク容量は解放されません。
+
+シリーズカードの「プロジェクトに移動」は、現在の絞り込みやプロジェクトで表示されていないメンバーも含め、シリーズ内の既存の画像・動画をまとめて移動します。
+
 ## 制作に必要な機能を、ひとつに
 
 | 特徴 | できること |
@@ -53,7 +57,7 @@
 ### 1 · ディレクトリと初期設定を作成
 
 ```bash
-mkdir imagine-media-studio && cd imagine-media-studio
+mkdir imagine && cd imagine
 umask 077
 mkdir -m 700 data
 (
@@ -108,7 +112,7 @@ OpenAI 互換 API の Base URL は通常 `https://api.example.com/v1` のよう�
 <details>
 <summary>追加設定と PWA</summary>
 
-`PUBLIC_BASE_URL` や、プライベートネットワーク内の API に接続するための `ALLOW_PRIVATE_NETWORK_ACCESS=true` などを `.env` に追加し、コンテナを再作成します。設定一覧は [.env.example](./.env.example) を参照してください。外部公開には HTTPS を使用してください。PWA のインストールも原則 HTTPS が必要です（ローカルの `localhost` は例外）。オフラインではキャッシュ済みのプレビューと下書きを利用できます。
+`PUBLIC_BASE_URL` や、プライベートネットワーク内の API に接続するための `ALLOW_PRIVATE_NETWORK_ACCESS=true` などを `.env` に追加し、コンテナを再作成します。設定一覧は [.env.example](./.env.example) を参照してください。Provider 通信とメディア取得の HTTP 許可は管理者が環境設定で一括管理し、既定では有効です。保存後の設定は旧 HTTP 環境変数 2 つより優先されます。プライベートネットワークへのアクセスは別途有効化が必要です。外部公開には HTTPS を使用してください。PWA のインストールも原則 HTTPS が必要です（ローカルの `localhost` は例外）。オフラインではキャッシュ済みのプレビューと下書きを利用できます。
 
 </details>
 

@@ -60,7 +60,9 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: type=raw,value=test-candidate-sha-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          labels: org.opencontainers.image.version=test-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Imagine.
+            org.opencontainers.image.version=test-${{ github.sha }}
 
       - name: Build and push test candidate
         id: push

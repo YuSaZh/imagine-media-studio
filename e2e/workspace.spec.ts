@@ -1625,7 +1625,7 @@ test('ordinary accounts log in without seeing administrator data and can change 
   try {
     const other = await context.newPage();
     await other.goto('/imagine');
-    await expect(other.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await expect(other.getByRole('heading', { name: '登录 Imagine.', exact: true })).toBeVisible();
     await other.screenshot({ path: `/tmp/imagine-account-login-${page.viewportSize()!.width}.png` });
     await other.getByLabel('用户名', { exact: true }).fill(username);
     await other.getByLabel('密码', { exact: true }).fill('member-password');
@@ -1641,14 +1641,14 @@ test('ordinary accounts log in without seeing administrator data and can change 
     await other.getByRole('button', { name: '保存账号', exact: true }).click();
     await expect(other.getByRole('status').filter({ hasText: '已保存' })).toBeVisible();
     await other.getByRole('button', { name: '退出登录', exact: true }).click();
-    await expect(other.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await expect(other.getByRole('heading', { name: '登录 Imagine.', exact: true })).toBeVisible();
     await other.getByLabel('用户名', { exact: true }).fill(username);
     await other.getByLabel('密码', { exact: true }).fill('changed-password');
     await other.getByRole('button', { name: '登录', exact: true }).click();
     await expect(other.getByLabel('账号用户名', { exact: true })).toHaveValue(username);
     await page.goto('/settings/account');
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '登录 Imagine.', exact: true })).toBeVisible();
     await page.getByLabel('用户名', { exact: true }).fill(username);
     await page.getByLabel('密码', { exact: true }).fill('changed-password');
     await page.getByRole('button', { name: '登录', exact: true }).click();
@@ -2151,7 +2151,7 @@ test('desktop rail expands in place with fixed logo and mobile keeps its drawer'
     const before = (await logo.boundingBox())!;
     const iconBefore = (await rail.getByRole('button', { name: '创作', exact: true }).locator('svg').boundingBox())!;
     await logo.click(); await expect(logo).toHaveAttribute('aria-expanded', 'true');
-    expect((await rail.boundingBox())!.width).toBe(260);
+    await expect.poll(async () => (await rail.boundingBox())!.width).toBe(260);
     const after = (await logo.boundingBox())!; expect(after.x).toBe(before.x); expect(after.y).toBe(before.y);
     const iconAfter = (await rail.getByRole('button', { name: '创作', exact: true }).locator('svg').boundingBox())!;
     expect(iconAfter.x).toBe(iconBefore.x); expect(iconAfter.y).toBe(iconBefore.y);
@@ -2165,10 +2165,10 @@ test('desktop rail expands in place with fixed logo and mobile keeps its drawer'
     await rail.getByRole('button', { name: 'Sidebar project', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`)); await expect(logo).toHaveAttribute('aria-expanded', 'true');
     await expect(rail.getByRole('button', { name: 'Sidebar project', exact: true })).toHaveAttribute('aria-current', 'page');
-    await logo.click(); expect((await rail.boundingBox())!.width).toBe(72); expect((await logo.boundingBox())!.x).toBe(before.x);
+    await logo.click(); await expect.poll(async () => (await rail.boundingBox())!.width).toBe(72); expect((await logo.boundingBox())!.x).toBe(before.x);
   } else {
     await page.getByRole('button', { name: '打开导航', exact: true }).click();
-    const drawer = page.getByRole('dialog', { name: 'Imagine', exact: true }); await expect(drawer).toBeVisible();
+    const drawer = page.getByRole('dialog', { name: 'Imagine.', exact: true }); await expect(drawer).toBeVisible();
     await drawer.getByRole('button', { name: 'Sidebar project', exact: true }).click(); await expect(drawer).toHaveCount(0);
     await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`));
   }
@@ -2200,7 +2200,7 @@ test('card project moves and optional project file deletion', async ({ page, req
   await open(page, `/projects/${destination.id}`);
   await page.getByRole('button', { name: '项目操作', exact: true }).click();
   await page.getByRole('button', { name: '删除项目', exact: true }).click();
-  await expect(page.getByRole('checkbox', { name: '同时删除项目内文件' })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '同时移除项目内作品' })).not.toBeChecked();
   await page.getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(page).toHaveURL(/\/projects$/);
   expect((await request.get(`/internal/assets/${asset.id}`)).status()).toBe(200);
@@ -2208,7 +2208,7 @@ test('card project moves and optional project file deletion', async ({ page, req
   await open(page, `/projects/${source.id}`);
   await page.getByRole('button', { name: '项目操作', exact: true }).click();
   await page.getByRole('button', { name: '删除项目', exact: true }).click();
-  await page.getByRole('checkbox', { name: '同时删除项目内文件' }).check();
+  await page.getByRole('checkbox', { name: '同时移除项目内作品' }).check();
   await page.screenshot({ animations: 'disabled', path: testInfo.outputPath('delete-project.png') });
   await page.getByRole('button', { name: '确认删除', exact: true }).click();
   await expect(page).toHaveURL(/\/projects$/);
@@ -3300,7 +3300,7 @@ test.describe('PWA thumbnail reuse', () => {
     expect(await page.evaluate(async url => !!await (await caches.open('imagine-derived-media-v2')).match(url), retained.thumbnailUrl)).toBe(true);
     await open(page, '/settings/account');
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '登录 Imagine' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '登录 Imagine.', exact: true })).toBeVisible();
     await expect.poll(() => page.evaluate(() => caches.has('imagine-derived-media-v2'))).toBe(false);
     expect(await page.evaluate(async url => (await fetch(url)).status, retained.thumbnailUrl)).toBe(401);
     const username = `cache-${randomUUID().slice(0, 8)}`;

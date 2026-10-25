@@ -101,7 +101,7 @@ export async function publishGitHubRelease({
   if (!expectedBody.includes(digest)) {
     throw new Error('Release notes do not contain the current image digest.');
   }
-  const expectedName = `Imagine Media Studio ${tag}`;
+  const expectedName = `Imagine. ${tag}`;
   const create = await runGh([
     'release', 'create', tag,
     '--repo', repository,

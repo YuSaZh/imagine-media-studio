@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./apps/web/public/icons/app-icon-192.png" alt="Imagine Media Studio" width="80" />
+<img src="./apps/web/public/icons/app-icon-192.png" alt="Imagine." width="80" />
 
-# Imagine Media Studio
+# Imagine.
 
 **A lightweight, self-hosted image and video workspace**
 
@@ -20,6 +20,10 @@ One container · No GPU required · Desktop & mobile · 中文 / English / 日�
 
 <a id="features"></a>
 Selected images and videos, including mixed selections, can be merged into a persistent series. Series deletion offers cover-only or whole-series removal. Task lists collapse long prompts by default and support deleting failed tasks.
+
+Move to project on a series card moves all existing images and videos in that series, including members hidden by the current filter or project.
+
+Series merges that exceed the complete-read limit are rejected with the selection preserved. Deleting works removes them from the gallery but retains media files and does not free disk space.
 
 Administrators can rename the site and upload or reset its logo in Preferences. Mobile galleries support long-press selection and expandable header search.
 
@@ -57,7 +61,7 @@ You need **Docker Compose v2**, on **AMD64 or ARM64**. The first-install command
 ### 1 · Create a directory and initial configuration
 
 ```bash
-mkdir imagine-media-studio && cd imagine-media-studio
+mkdir imagine && cd imagine
 umask 077
 mkdir -m 700 data
 (
@@ -112,7 +116,7 @@ An OpenAI-compatible Base URL typically looks like `https://api.example.com/v1`,
 <details>
 <summary>More configuration and PWA</summary>
 
-Add optional settings to `.env`, such as `PUBLIC_BASE_URL` or `ALLOW_PRIVATE_NETWORK_ACCESS=true` for a private-network API, then recreate the container. See [.env.example](./.env.example) for all options. Use HTTPS for public access; PWA installation generally requires it too (`localhost` is a local exception). Offline support covers cached previews and drafts.
+Add optional settings to `.env`, such as `PUBLIC_BASE_URL` or `ALLOW_PRIVATE_NETWORK_ACCESS=true` for a private-network API, then recreate the container. See [.env.example](./.env.example) for all options. Administrators control HTTP for both Provider calls and media downloads in Preferences; it is enabled by default. The saved preference overrides the two legacy HTTP environment flags after initialization. Private-network access requires its separate opt-in. Use HTTPS for public access; PWA installation generally requires it too (`localhost` is a local exception). Offline support covers cached previews and drafts.
 
 </details>
 

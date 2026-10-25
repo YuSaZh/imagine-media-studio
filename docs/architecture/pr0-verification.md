@@ -1,5 +1,10 @@
 # PR 0 Verification
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 Historical milestone record. Current rules and verification guidance are indexed
 in [docs/README.md](../README.md); the deferred work below describes PR 0 only.
 

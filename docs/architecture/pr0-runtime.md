@@ -1,5 +1,10 @@
 # PR 0 Runtime Architecture
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 Historical infrastructure record. For the maintained topology, account model,
 and Provider boundaries, read the [current architecture](./overview.md).
 

@@ -1,5 +1,10 @@
 # PR 7 Verification
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 Status: **Implementation and automated acceptance passed.** Real-platform PWA
 installation, device safe-area/keyboard evidence, and strict authenticated Grok
 visual comparison remain external evidence in [`Hold.md`](../../Hold.md).

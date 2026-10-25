@@ -69,6 +69,26 @@ describe('account boundaries', () => {
     server = await createServer({ config: loadConfig({ DATA_DIR: root, NODE_ENV: 'test', MOCK_PROVIDER_ENABLED: 'true' }), startRunner: false, logger: false });
     expect(server.assets.series(first.id)?.assets.map(asset => asset.id).sort()).toEqual([first.id, third.id].sort());
   });
+  it('moves more than 100 series members in one transaction and rejects incomplete or oversized requests', async () => {
+    await setup();
+    const admin = await login('admin');
+    const source = server.collections.create('Source');
+    const destination = server.collections.create('Destination');
+    const ids = Array.from({ length: 101 }, (_, index) => server.assets.create({ type: 'image', role: 'upload', filePath: `media/${index}.png`, mimeType: 'image/png', fileSize: 10, sha256: index.toString(16).padStart(64, '0') }).id);
+    server.collections.addAssets(source.id, ids);
+    const move = (assetIds: string[]) => server.app.inject({ method: 'POST', url: `/internal/collections/${destination.id}/assets/move`, headers: admin, payload: { assetIds } });
+    expect((await move([...ids, 'missing'])).statusCode).toBe(404);
+    expect(server.collections.get(source.id)?.itemCount).toBe(101);
+    expect(server.collections.get(destination.id)?.itemCount).toBe(0);
+    for (const id of ids) expect(server.assets.collectionIdsForAsset(id)).toEqual([source.id]);
+    expect((await server.app.inject({ method: 'POST', url: `/internal/collections/${destination.id}/assets`, headers: admin, payload: { assetIds: ids } })).statusCode).toBe(400);
+    expect((await move(ids)).statusCode).toBe(200);
+    expect(server.collections.get(source.id)?.itemCount).toBe(0);
+    expect(server.collections.get(destination.id)?.itemCount).toBe(101);
+    for (const id of ids) expect(server.assets.collectionIdsForAsset(id)).toEqual([destination.id]);
+    expect((await move(Array.from({ length: 1001 }, () => ids[0]!))).statusCode).toBe(400);
+    expect(server.collections.get(destination.id)?.itemCount).toBe(101);
+  });
   it('caches private previews while enforcing ownership before conditional responses', async () => {
     await setup();
     const admin = await login('admin');

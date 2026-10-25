@@ -2,7 +2,7 @@
 
 ## 2026-09-07 bilingual README presentation reference
 
-Reviewed [CookSleep/gpt_image_playground README](https://github.com/CookSleep/gpt_image_playground/blob/574c41e6263016c4f1d987b4746b2767cae1c5cf/README.md) at commit `574c41e6263016c4f1d987b4746b2767cae1c5cf` (MIT) for documentation structure: project introduction, badges, expandable screenshots, feature groups, deployment instructions, and FAQ. The Chinese and English Imagine Media Studio READMEs are independently written from this repository's implementation and operator guides. No donor prose, screenshots, sponsor content, deployment configuration, or application UI was copied. Preview images reference this repository's existing regression screenshots.
+Reviewed [CookSleep/gpt_image_playground README](https://github.com/CookSleep/gpt_image_playground/blob/574c41e6263016c4f1d987b4746b2767cae1c5cf/README.md) at commit `574c41e6263016c4f1d987b4746b2767cae1c5cf` (MIT) for documentation structure: project introduction, badges, expandable screenshots, feature groups, deployment instructions, and FAQ. The Chinese and English Imagine. READMEs are independently written from this repository's implementation and operator guides. No donor prose, screenshots, sponsor content, deployment configuration, or application UI was copied. Preview images reference this repository's existing regression screenshots.
 
 ## CPA and sub2api image response compatibility
 

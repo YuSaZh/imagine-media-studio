@@ -1,5 +1,10 @@
 # PR 7 Accessibility and Performance Gates
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 This document records the automated PR 7 acceptance boundary for the production
 web build and the deterministic PR 1 visual fixture.
 
@@ -30,7 +35,7 @@ The scan states are:
 | `/settings/pwa` online and offline | Yes | Yes |
 | Update notice | Deterministic notice fixture with production styling | Deterministic notice fixture with production styling |
 
-The production Imagine run first creates one uniquely named completed Mock
+The production Imagine. run first creates one uniquely named completed Mock
 image through the authenticated internal API, waits for its asset, and deletes
 the job and assets in a `finally` block. This keeps the production Viewer scan
 independent of an empty database without leaving test media behind. The

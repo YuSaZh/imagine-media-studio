@@ -1,10 +1,21 @@
 # Current Architecture
 
-This is the maintained architecture entry for Imagine Media Studio. Contributor
+This is the maintained architecture entry for Imagine. Contributor
 workflow lives in [CONTRIBUTING.md](../../CONTRIBUTING.md); repository instructions
 for agents live in [AGENTS.md](../../AGENTS.md) and its scoped guides.
 
 ## Product and Topology
+
+The product name is `Imagine.`, including the final period. Documentation,
+default site identity, HTML/PWA metadata, application-info responses,
+authentication prompts, OCI image title and new release titles use that name.
+Administrator-defined site names remain configurable.
+
+The GitHub repository and GHCR image addresses remain unchanged. Existing
+Compose service/environment names, `@imagine/*` package scopes, archive format,
+cryptographic context strings and browser storage/session namespaces are stable
+technical identifiers, not display names. Retaining them preserves deployments,
+archive readability, encrypted credentials and offline/session continuity.
 
 The application provides image/video creation, editing, tasks, projects, and media
 management using user-provided external APIs. It does not host model inference,
@@ -16,7 +27,7 @@ Browser / installed PWA
   v
 One Node.js application / Fastify / one application port
   |-- authenticated routes and account-scoped services
-  |-- in-process JobRunner and bounded queues
+  |-- in-process JobRunner; bounded download/processing queues
   |-- Provider adapters and guarded HTTP transport --> external APIs
   |-- media processing and managed files
   `-- SQLite and durable event outbox
@@ -110,10 +121,16 @@ See the [adapter runtime guide](../../apps/server/src/adapters/README.md).
 - Store relative managed paths and persist upstream results locally. Preserve
   path/symlink guards, byte limits, signature validation, atomic publication,
   original downloads, and video Range delivery.
+- Ordinary asset deletion tombstones records and removes project memberships;
+  managed originals/previews stay on disk and are no longer served. There is no
+  general purge/retention policy. Temporary video-frame cleanup is separate.
 - Database backups do not include all media. Full offline archives preserve the
   managed data tree; operators retain `APP_SECRET` separately for encrypted data.
-- Runtime/offline maintenance exclusion and resource ownership must survive errors.
-  Repair only classified safe cases; preserve ambiguous or referenced files.
+- Offline archive creation and restore require an operator-stopped application.
+  The server and CLI do not acquire a shared runtime/maintenance file lock or
+  detect each other. Read-only archive verification may run while online.
+  Preserve resource ownership through failures; repair only classified safe
+  cases and preserve ambiguous or referenced files.
 
 Subsystem references, with their original milestone evidence retained:
 [data archives](./pr8-data-archive.md), [SQLite integrity](./pr8-sqlite-integrity.md),
@@ -141,10 +158,27 @@ Password login and HTTP Basic share an in-memory per-source-IP attempt window (1
 
 Each settings PATCH commits one outbox row with key names and no values in the same transaction. `settings.updated` events contain `keys`; account changes use the account ID and global changes use `global` as the entity ID. For mixed writes, server-only routing metadata permits recipient-specific projection: the owner sees all changed keys, other accounts see only global keys. The same projection applies to replay and live delivery; routing metadata never reaches the SSE wire. Legacy reset events remain valid. Browser clients refresh settings, and additionally refresh workspace assets when recent-series history changes. Notifications received during local optimistic settings writes are coalesced until those writes settle.
 
-Series queries load one account's primary-parent graph and resolve roots with an iterative memoized traversal, rather than expanding every asset's ancestry in SQL. Missing parents end a chain; cycles use the smallest cycle node ID as their canonical root. Temporary/deleted nodes preserve lineage, while visible assets remain subject to the existing filters. Root mappings enter SQLite through a JSON relation; grouping, cover ranking and stable cursor pagination stay in SQL. Series detail uses the same graph and retains its 1000-node visible traversal bound. No persistent graph cache is introduced.
+Series queries load one account's primary-parent graph and resolve roots with an iterative memoized traversal, rather than expanding every asset's ancestry in SQL. Missing parents end a chain; cycles use the smallest cycle node ID as their canonical root. Temporary/deleted nodes preserve lineage, while visible assets remain subject to the existing filters. Root mappings enter SQLite through a JSON relation; grouping, cover ranking and stable cursor pagination stay in SQL. Series detail uses the same graph and retains a 1000-node traversal bound across assets, jobs and batch nodes, including hidden/deleted ancestry. This is not a 1000-visible-asset guarantee; larger families return `truncated: true`. No persistent graph cache is introduced.
 
 Concurrent image submissions persist server-only job-to-batch links in
 `job_generation_batches` (additive migration 0011). Retry jobs inherit the link;
 Provider requests remain unchanged. Grouped job-list DTOs optionally expose the account-scoped series root for pending gallery entries. When requested, the account-scoped
 series graph attaches jobs with no primary source to a batch root. Existing primary
 source lineage takes precedence, and historical jobs are not heuristically grouped.
+
+Manual series links live in `asset_series_links` (migration 0012), merging entire
+existing families without changing generation inputs or project membership.
+The merge request accepts 2–1000 asset IDs, but checks the combined graph within
+the same transaction. Concurrent grouping is enabled for both uploaded-reference
+policies during validation; a truncated family causes `409 series_too_large` and
+rolls back all links and events. Existing or later-grown families may still be
+truncated, so bulk-selection/deletion guards remain. Whole-series deletion keeps
+a local plan of unresolved asset/task IDs and retries only those IDs, including
+when the cover was already removed. See the
+[2026-10-09 review and fixes](../reviews/2026-10-09-project-review.md).
+
+Site identity uses global `branding.name` and normalized `branding.logo` settings.
+Only administrators may write them. The unauthenticated `/internal/branding`
+and `/internal/branding/logo` routes expose only the name and logo; other
+settings and media remain authenticated. Logo uploads are limited to 512 KB,
+bounded during decode, and converted to PNG within 256×256.

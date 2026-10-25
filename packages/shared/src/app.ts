@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const AppInfoSchema = z.object({
-  name: z.literal('Imagine Media Studio'),
+  name: z.literal('Imagine.'),
   version: z.string(),
   mockProviderEnabled: z.boolean(),
 });

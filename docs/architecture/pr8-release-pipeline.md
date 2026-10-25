@@ -1,5 +1,10 @@
 # PR8 Release Pipeline
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+
 Status: **v0.1.0 release pipeline and post-release verification passed.**
 
 This milestone adds a release-only GitHub Actions workflow at

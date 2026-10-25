@@ -225,7 +225,7 @@ async function reopenTestServer(dataDir: string, appPassword: string | null = nu
   return server;
 }
 
-describe('Imagine server PR 0 skeleton', () => {
+describe('Imagine. server PR 0 skeleton', () => {
   it('reconstructs editing series across generations and temporary video frames without extra references', async () => {
     const server = await createTestServer(false);
     const makeAsset = (jobId?: string, type: 'image' | 'video' = 'image', extra = {}) => server.assets.create({ type, role: jobId ? 'output' : 'upload', filePath: `media/${Math.random()}`, mimeType: type === 'image' ? 'image/png' : 'video/mp4', fileSize: 20, sha256: 'a'.repeat(64), ...(jobId ? { jobId } : {}), ...extra });
@@ -347,7 +347,7 @@ describe('Imagine server PR 0 skeleton', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
-      name: 'Imagine Media Studio',
+      name: 'Imagine.',
       version: '0.2.1',
     });
   });

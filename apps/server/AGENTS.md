@@ -10,7 +10,8 @@ Read the [root guide](../../AGENTS.md) and
   Asset, job, collection, settings, media, and SSE paths must preserve ownership.
 - Use the central HTTP client/transport for Providers and remote media. Preserve
   address validation, DNS pinning, redirect checks, credential stripping,
-  response-size limits, timeouts, and explicit private-network/HTTP opt-ins.
+  response-size limits, timeouts, the persisted administrator HTTP preference,
+  and the separate private-network opt-in.
   Cloud metadata addresses remain forbidden.
 - Keep protocol selection, payload mapping, result normalization, and fallback
   inside adapters. Catalog or connection success is not generation acceptance.
@@ -39,8 +40,10 @@ Read the [root guide](../../AGENTS.md) and
 - Persist relative media paths. Keep traversal/symlink checks, bounded streaming,
   signature/MIME validation, atomic publication, original downloads, and Range
   support. Do not rely on expiring upstream URLs as permanent asset storage.
-- Backup/restore and repair must retain ownership checks and runtime exclusion.
-  Preserve ambiguous files and locks; never automatically replace live data or
+- Backup/restore and repair must retain ownership checks. Offline archive creation
+  and restore require an operator-stopped application; there is no shared
+  runtime/CLI file lock enforcing exclusion. Preserve ambiguous files and legacy
+  sidecars; never automatically replace live data or
   delete unknown orphans. Follow the relevant archive/integrity/media guides
   linked from the architecture overview.
 

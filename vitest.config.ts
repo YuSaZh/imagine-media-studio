@@ -18,6 +18,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    maxWorkers: 2,
     include: [
       'apps/**/src/**/*.test.{ts,tsx}',
       'packages/**/src/**/*.test.{ts,tsx}',

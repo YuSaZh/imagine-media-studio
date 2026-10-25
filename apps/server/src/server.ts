@@ -541,7 +541,7 @@ export async function createServer(options: CreateServerOptions): Promise<Imagin
         !publicInternalPath &&
         !passwordAuth.authenticated(request)
       ) {
-        reply.header('www-authenticate', 'Basic realm="Imagine Media Studio", charset="UTF-8"');
+        reply.header('www-authenticate', 'Basic realm="Imagine.", charset="UTF-8"');
         return reply.code(401).send({
           error: 'authentication_required',
           message: 'Enter the application password to continue.',

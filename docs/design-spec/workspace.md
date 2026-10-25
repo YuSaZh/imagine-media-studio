@@ -1,4 +1,4 @@
-# Imagine workspace
+# Imagine. workspace
 
 The production UI in `apps/web/src/features/workspace/` replaces the previous page components, page store, styles, visual fixtures and separate interaction prototype. All routes use one authenticated application and real internal APIs. Existing `/interaction.html` bookmarks redirect to `/imagine`.
 
@@ -111,8 +111,9 @@ changes must preserve the other layout's behavior.
 - Generation count is an application task count (1-32), independent of model
   batch capabilities and count parameter rules, including legacy locked/hidden
   rules. Both layouts and generation settings share a compact 1/2/4/8/+ popover;
-  plus opens a validated custom count input. Each job requests one output and
-  server queue limits bound actual execution concurrency. Count is remembered
+  plus opens a validated custom count input. Each job requests one output.
+  Provider submissions and polls have no application concurrency cap; only local
+  download/processing queues are bounded. Count is remembered
   per project, media type and model alongside the other generation choices.
 - Custom image dimensions use one editor in shortcuts and generation settings.
   The central lock starts enabled; changing either edge derives the other from
@@ -316,7 +317,7 @@ Clicking the desktop rail logo expands the existing rail from 72px to 260px in t
 
 Image and video card menus use a 190px minimum width and offer “移动到项目”. The project picker lists the account's projects, marks existing membership, and disables the sole current destination. A move replaces all previous memberships atomically; unlike batch “加入项目”, it does not leave the media in the source project. Project counts and privacy filtering refresh from authoritative data. Offline writes are unavailable.
 
-Deleting a project presents an unchecked “同时删除项目内文件” checkbox. The default removes only the project and preserves media. Opting in soft-deletes all current member assets, including their memberships elsewhere, through the existing asset deletion path; managed file cleanup continues to respect reference retention. Membership deletion, asset changes and outbox events commit atomically. Both operations enforce account ownership; failed validation leaves memberships and assets unchanged.
+Deleting a project presents an unchecked “同时移除项目内作品” checkbox. The default removes only the project and preserves media. Opting in soft-deletes all current member assets, including their memberships elsewhere, through the existing asset deletion path; ordinary managed files remain on disk; this is not space reclamation. Membership deletion, asset changes and outbox events commit atomically. Both operations enforce account ownership; failed validation leaves memberships and assets unchanged.
 
 ### Editing series
 
@@ -365,9 +366,11 @@ each editing series into one entry with a bottom-left member-count badge and sta
 runs on the server before cursor pagination. The latest matching member anchors
 series ordering and cursors, independently of the selected cover. Search, media
 type, favorite, project and privacy filters apply to covers and counts; hidden
-members never become covers. Selection mode expands individual works, so bulk
-operations retain their existing per-asset meaning. Card actions affect the cover
-asset; opening it restores the existing editor series strip.
+members never become covers. Selection mode retains grouped cards and resolves
+their complete member lists
+before bulk operations, including members outside the current filter/page.
+Ordinary card actions affect the cover; grouped-card deletion offers cover-only
+or whole-series removal. Opening a card restores the editor series strip.
 
 The nested cover preference offers latest generated work (default), most recently
 viewed work, or original work. Deleted/filtered originals fall back to the oldest
@@ -611,6 +614,16 @@ are not asset selections; later outputs are not silently added to a selection.
 Truncated or failed membership reads block selection instead of silently acting
 on a partial series. Exiting selection or changing its scope ignores late reads.
 
+The series card's More → Move to project action resolves the same complete
+membership before enabling destination choices, including works outside the
+current filter, page or project. It moves all resolved images/videos together
+in one transactional request (up to 1000 asset IDs), removing their other project
+memberships. The destination is disabled only when every resolved work belongs
+exclusively to it; the cover's membership alone cannot disable the move.
+Loading, failed and truncated membership reads prevent submission and failed
+reads offer retry. Ungrouped cards still move only the selected work. Running
+jobs and outputs created after the membership read are not part of this move.
+
 ## Appearance and language
 
 Preferences exposes `ui.theme` (`light`, `dark`, `system`) and `ui.language`
@@ -667,12 +680,22 @@ Task management, gallery cards and editor task stages share the same explicit re
 
 ### Manual series and compact tasks
 
-The selection toolbar can merge 2–1000 selected images and videos (including mixed selections) into a durable series and
-turn on series display. Explicit links merge their existing editing families,
+The selection toolbar merges images and videos (including mixed selections)
+into a durable series and enables series display. The merge API accepts 2–1000
+asset IDs per request. Explicit links merge their existing editing families,
 independently of the concurrent-image and uploaded-reference preferences. They do
 not change generation inputs or project membership. Only owned, existing images and videos
 are accepted; invalid or foreign members reject the whole operation. Deleted
 members remain ancestry bridges. Reload and restart preserve the links.
+
+Series detail traverses at most 1000 graph nodes, including jobs, batches and
+hidden/deleted ancestry. A merge validates its combined family in the same
+transaction, with concurrent grouping enabled under both uploaded-reference
+policies. If either traversal would be truncated, the API returns
+`409 series_too_large` and rolls back all new links and events. The UI explains
+the limit and keeps the selection. This is a graph bound, not a promise that
+1000 generated works can always be merged. Historical families or later
+creation may still exceed it; truncated reads remain explicitly guarded.
 
 The grouped card's delete action opens three choices: Cancel, Delete cover image,
 and Delete entire series. Both delete actions use red danger buttons; a video
@@ -681,8 +704,21 @@ cover is labeled Delete cover video. On desktop, the selection toolbar stays
 Whole-series deletion resolves all current members,
 including those outside the gallery filter/page, and removes terminal failed tasks.
 Truncated series and series with running tasks are rejected before deletion.
-Partial request failures are reported and surviving members remain available.
+Whole-series deletion snapshots the confirmed asset and terminal-task IDs before
+removing the cover. Successes are removed from that plan, while failures remain
+for an explicit “Retry remaining items” action in the same dialog. An exact
+asset/job-not-found 404 completes an ambiguous prior deletion; other errors do
+not. Retries never fetch the family through a deleted cover or add later outputs.
+Task removal waits until the asset stage completes. Cover-only deletion is
+disabled once a whole-series plan starts. Cancelling the dialog discards the
+local retry plan; surviving works and tasks remain accessible through their lists.
 The editor's single-work delete still deletes the selected work only.
+
+Ordinary asset deletion sets a tombstone and removes project memberships; it
+blocks subsequent media access but does not unlink originals or previews. There
+is no general retention/purge mechanism. Individual, series and project deletion confirmations in Chinese, English and
+Japanese explicitly state that files remain and disk space is not freed; the
+application does not provide a restore action. This behavior differs from cleanup of temporary video frames.
 
 Failed multi-job cards open an options menu containing task-list access and
 confirmed removal of failed tasks. Single failures and task-list failures expose
@@ -713,7 +749,9 @@ Preferences. Defaults are Imagine. and the existing project app icon. Uploads
 accept PNG/JPEG/WebP up to 512 KB; the server bounds decoding and normalizes to
 PNG within 256x256. Only the explicit site name and normalized logo are public;
 other settings, assets and credentials remain authenticated. Header, sidebar,
-login screen, browser title, favicon and Apple touch icon use the saved identity.
+login screen, creation heading, mobile navigation panel, browser title, favicon and
+Apple touch icon use the saved identity. The default HTML metadata, PWA manifest
+name/short name and installation screenshot labels use `Imagine.`.
 Changes persist in global settings and refresh other sessions through SSE.
 
 Series with completed covers and unfinished/failed tasks reuse the normal media

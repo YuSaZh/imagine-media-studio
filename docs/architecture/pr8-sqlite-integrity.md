@@ -1,5 +1,13 @@
 # PR 8 SQLite Integrity and Migration Trust
 
+> Historical milestone record: test results, versions and commands below describe
+> the original PR scope, not acceptance of the current checkout. Use the
+> [current architecture](./overview.md), [deployment guide](../../RELEASE.md) and
+> [verification matrix](../../CONTRIBUTING.md#verification) for current operation.
+> Current account authentication supersedes the historical `APP_PASSWORD` gate:
+> maintenance requires a signed-in administrator; an unset legacy password variable
+> does not disable maintenance. `APP_SECRET` remains external to backups.
+
 Status: **Local and GitHub Actions acceptance passed.**
 
 These PR 8 milestones establish immutable migration history, a bounded SQLite

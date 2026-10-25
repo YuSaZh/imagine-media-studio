@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./apps/web/public/icons/app-icon-192.png" alt="Imagine Media Studio" width="80" />
+<img src="./apps/web/public/icons/app-icon-192.png" alt="Imagine." width="80" />
 
-# Imagine Media Studio
+# Imagine.
 
 **轻量、自托管的图片与视频创作空间**
 
@@ -20,6 +20,10 @@
 
 <a id="features"></a>
 多选图片、视频或混合选择可合并为持久化系列；系列删除可选择仅删除封面或整个系列。任务列表默认折叠长提示词，失败任务支持删除。
+
+系列卡片的“移动到项目”会整体移动该系列的现有图片和视频，包括当前筛选或项目中未显示的成员。
+
+系列合并超出完整读取范围时会拒绝并保留选择。删除作品会从图库移除，但媒体文件暂留，不释放磁盘空间。
 
 管理员可在偏好中修改网站名称、上传或恢复网站 Logo；移动端长按作品多选，顶部搜索可展开。
 
@@ -57,7 +61,7 @@
 ### 1 · 创建目录与初始配置
 
 ```bash
-mkdir imagine-media-studio && cd imagine-media-studio
+mkdir imagine && cd imagine
 umask 077
 mkdir -m 700 data
 (
@@ -112,7 +116,7 @@ OpenAI 兼容接口的 Base URL 通常形如 `https://api.example.com/v1`，不�
 <details>
 <summary>更多配置与 PWA</summary>
 
-在 `.env` 中添加可选配置，例如 `PUBLIC_BASE_URL` 或内网 API 所需的 `ALLOW_PRIVATE_NETWORK_ACCESS=true`，然后重新创建容器。完整参数见 [.env.example](./.env.example)。对外访问建议使用 HTTPS；PWA 安装通常也需要 HTTPS（本机 `localhost` 除外），离线功能限于已缓存预览和草稿。
+在 `.env` 中添加可选配置，例如 `PUBLIC_BASE_URL` 或内网 API 所需的 `ALLOW_PRIVATE_NETWORK_ACCESS=true`，然后重新创建容器。完整参数见 [.env.example](./.env.example)。Provider 请求和媒体下载是否允许 HTTP，由管理员在偏好中统一设置，默认开启；该设置持久化后优先于两个旧 HTTP 环境变量，私网访问仍需单独开启。对外访问建议使用 HTTPS；PWA 安装通常也需要 HTTPS（本机 `localhost` 除外），离线功能限于已缓存预览和草稿。
 
 </details>
 

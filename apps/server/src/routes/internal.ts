@@ -16,7 +16,7 @@ export async function registerInternalRoutes(
   }));
 
   app.get('/internal/app-info', async () => ({
-    name: 'Imagine Media Studio',
+    name: 'Imagine.',
     version: APP_VERSION,
     mockProviderEnabled: options.mockProviderEnabled,
   }));

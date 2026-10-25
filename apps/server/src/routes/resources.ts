@@ -9,6 +9,7 @@ import {
   AssetSeriesMergeSchema,
   AssetRoleSchema,
   AssetTypeSchema,
+  CollectionAssetsMoveSchema,
   CollectionAssetsPatchSchema,
   CollectionDeleteQuerySchema,
   CollectionCreateSchema,
@@ -28,7 +29,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import type { AssetRepository } from '../database/assets.js';
+import { AssetSeriesLimitError, type AssetRepository } from '../database/assets.js';
 import {
   CollectionRepositoryError,
   type CollectionRepository,
@@ -553,9 +554,14 @@ function registerAssetRoutes(app: FastifyInstance, options: ResourceRoutesOption
   app.post('/internal/assets/series', async (request, reply) => {
     const input = parseOrReply(AssetSeriesMergeSchema, request.body, reply);
     if (!input) return;
-    const merged = await publishCommitted(options, () => options.assets.mergeSeries(input.assetIds));
-    if (!merged) return errorResponse(reply, 400, 'invalid_series_assets');
-    return reply.code(204).send();
+    try {
+      const merged = await publishCommitted(options, () => options.assets.mergeSeries(input.assetIds));
+      if (!merged) return errorResponse(reply, 400, 'invalid_series_assets');
+      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof AssetSeriesLimitError) return errorResponse(reply, 409, error.code, error.message);
+      throw error;
+    }
   });
 
   app.get<{ Params: { id: string } }>('/internal/assets/:id', async (request, reply) => {
@@ -657,7 +663,7 @@ function registerCollectionRoutes(app: FastifyInstance, options: ResourceRoutesO
   });
 
   app.post<{ Params: { id: string } }>('/internal/collections/:id/assets/move', async (request, reply) => {
-    const input = parseOrReply(CollectionAssetsPatchSchema, request.body, reply);
+    const input = parseOrReply(CollectionAssetsMoveSchema, request.body, reply);
     if (!input) return;
     try {
       const added = await publishCommitted(options, () => options.collections.moveAssets(request.params.id, input.assetIds));
