@@ -10,7 +10,7 @@ in [docs/README.md](../README.md); the deferred work below describes PR 0 only.
 
 Status: **passed**
 
-PR 0 was verified at commit `55f4d2bc5f1a7a51ce4a24d1597b8c84062e5e8e` by [GitHub Actions run 32770343331](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32770343331).
+PR 0 was verified at commit `55f4d2bc5f1a7a51ce4a24d1597b8c84062e5e8e` by [GitHub Actions run 32770343331](https://github.com/YuSaZh/Imagine./actions/runs/32770343331).
 
 ## Acceptance Matrix
 

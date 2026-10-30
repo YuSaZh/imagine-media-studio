@@ -10,7 +10,7 @@ Bring your own AI APIs. Create, edit, and organize your work in one place.
 
 One container · No GPU required · Desktop & mobile · 中文 / English / 日本語
 
-[![Release](https://img.shields.io/github/v/release/YuSaZh/imagine-media-studio?style=flat-square)](https://github.com/YuSaZh/imagine-media-studio/releases/latest) [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&logo=docker&logoColor=white)](https://github.com/YuSaZh/imagine-media-studio/pkgs/container/imagine-media-studio) [![CI](https://github.com/YuSaZh/imagine-media-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/YuSaZh/imagine-media-studio/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-MIT-22a06b?style=flat-square)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/YuSaZh/Imagine.?style=flat-square)](https://github.com/YuSaZh/Imagine./releases/latest) [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&logo=docker&logoColor=white)](https://github.com/YuSaZh/Imagine./pkgs/container/imagine-media-studio) [![CI](https://github.com/YuSaZh/Imagine./actions/workflows/ci.yml/badge.svg)](https://github.com/YuSaZh/Imagine./actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-MIT-22a06b?style=flat-square)](./LICENSE)
 
 [简体中文](./README.md) · **English** · [日本語](./README_JA.md)
 
@@ -75,6 +75,8 @@ Sign in as `admin` with the random `ADMIN_PASSWORD` in `.env`. **Keep `.env` and
 
 ### 2 · Save as `compose.yaml`
 
+The GitHub repository is named `Imagine.`; published images remain available at `ghcr.io/yusazh/imagine-media-studio`, as used below.
+
 ```yaml
 services:
   imagine-media:
@@ -135,9 +137,9 @@ docker compose up -d
 <a id="documentation"></a>
 ## Explore further
 
-- [Changelog](./CHANGELOG.md) · [Releases](https://github.com/YuSaZh/imagine-media-studio/releases) · [Known limitations](./Hold.md)
+- [Changelog](./CHANGELOG.md) · [Releases](https://github.com/YuSaZh/Imagine./releases) · [Known limitations](./Hold.md)
 - [Model capabilities](./docs/model-capabilities.md) · [Deployment and data](./RELEASE.md) · [All docs](./docs/README.md)
-- [Development and contributing](./CONTRIBUTING.md) · [Report an issue](https://github.com/YuSaZh/imagine-media-studio/issues)
+- [Development and contributing](./CONTRIBUTING.md) · [Report an issue](https://github.com/YuSaZh/Imagine./issues)
 
 ---
 

@@ -67,13 +67,13 @@ No check uses a real Provider credential or endpoint.
 
 ## GitHub Actions acceptance
 
-GitHub Actions run [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) accepted commit `79a30f2ac0881b7f668b9a176d6b02a8884eb73f` and completed all three jobs successfully.
+GitHub Actions run [33140963119](https://github.com/YuSaZh/Imagine./actions/runs/33140963119) accepted commit `79a30f2ac0881b7f668b9a176d6b02a8884eb73f` and completed all three jobs successfully.
 
 | Workflow surface | Commit | Run | Job/evidence | Status |
 | --- | --- | --- | --- | --- |
-| Quality, lint, typecheck, unit tests, production build | `79a30f2` | [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) | [Job 98751517902](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119/job/98751517902) | Pass; 1m16s |
-| Browser/E2E and screenshot artifact | `79a30f2` | [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) | [Job 98751517753](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119/job/98751517753) | Pass; 3m02s |
-| Single-container API/persistence smoke | `79a30f2` | [33140963119](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119) | [Job 98751517875](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119/job/98751517875) | Pass; 1m30s |
+| Quality, lint, typecheck, unit tests, production build | `79a30f2` | [33140963119](https://github.com/YuSaZh/Imagine./actions/runs/33140963119) | [Job 98751517902](https://github.com/YuSaZh/Imagine./actions/runs/33140963119/job/98751517902) | Pass; 1m16s |
+| Browser/E2E and screenshot artifact | `79a30f2` | [33140963119](https://github.com/YuSaZh/Imagine./actions/runs/33140963119) | [Job 98751517753](https://github.com/YuSaZh/Imagine./actions/runs/33140963119/job/98751517753) | Pass; 3m02s |
+| Single-container API/persistence smoke | `79a30f2` | [33140963119](https://github.com/YuSaZh/Imagine./actions/runs/33140963119) | [Job 98751517875](https://github.com/YuSaZh/Imagine./actions/runs/33140963119/job/98751517875) | Pass; 1m30s |
 
 The remote checks retained the one-service topology and did not add a real
 credential, endpoint, or secret to workflow logs, artifacts, fixtures, or

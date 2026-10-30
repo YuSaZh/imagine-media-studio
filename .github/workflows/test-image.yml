@@ -79,7 +79,9 @@ jobs:
             OCI_VERSION=test-${{ github.sha }}
           sbom: true
           provenance: mode=max
-          cache-from: type=gha,scope=test-image
+          cache-from: |
+            type=gha,scope=test-image
+            type=registry,ref=${{ env.IMAGE }}-buildcache:release
           cache-to: type=gha,mode=max,scope=test-image
 
       - name: Attest test candidate in GitHub

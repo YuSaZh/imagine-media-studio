@@ -10,7 +10,7 @@
 
 一个容器 · 无需 GPU · 桌面与手机 · 中 / 英 / 日
 
-[![Release](https://img.shields.io/github/v/release/YuSaZh/imagine-media-studio?style=flat-square)](https://github.com/YuSaZh/imagine-media-studio/releases/latest) [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&logo=docker&logoColor=white)](https://github.com/YuSaZh/imagine-media-studio/pkgs/container/imagine-media-studio) [![CI](https://github.com/YuSaZh/imagine-media-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/YuSaZh/imagine-media-studio/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-MIT-22a06b?style=flat-square)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/YuSaZh/Imagine.?style=flat-square)](https://github.com/YuSaZh/Imagine./releases/latest) [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&logo=docker&logoColor=white)](https://github.com/YuSaZh/Imagine./pkgs/container/imagine-media-studio) [![CI](https://github.com/YuSaZh/Imagine./actions/workflows/ci.yml/badge.svg)](https://github.com/YuSaZh/Imagine./actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-MIT-22a06b?style=flat-square)](./LICENSE)
 
 **简体中文** · [English](./README_EN.md) · [日本語](./README_JA.md)
 
@@ -75,6 +75,8 @@ mkdir -m 700 data
 
 ### 2 · 保存为 `compose.yaml`
 
+GitHub 仓库名为 `Imagine.`；已发布镜像继续使用下面的 `ghcr.io/yusazh/imagine-media-studio` 地址。
+
 ```yaml
 services:
   imagine-media:
@@ -135,9 +137,9 @@ docker compose up -d
 <a id="documentation"></a>
 ## 按需了解更多
 
-- [更新记录](./CHANGELOG.md) · [发布版本](https://github.com/YuSaZh/imagine-media-studio/releases) · [已知限制](./Hold.md)
+- [更新记录](./CHANGELOG.md) · [发布版本](https://github.com/YuSaZh/Imagine./releases) · [已知限制](./Hold.md)
 - [模型能力](./docs/model-capabilities.md) · [部署与数据管理](./RELEASE.md) · [完整文档](./docs/README.md)
-- [开发与贡献](./CONTRIBUTING.md) · [问题反馈](https://github.com/YuSaZh/imagine-media-studio/issues)
+- [开发与贡献](./CONTRIBUTING.md) · [问题反馈](https://github.com/YuSaZh/Imagine./issues)
 
 ---
 

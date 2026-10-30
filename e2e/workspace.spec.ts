@@ -9,7 +9,7 @@ import { test, expect } from './fixtures.js';
 
 test.beforeEach(async ({ request, page }) => resetWorkspace(request, page));
 
-test('generation memory separates projects modes and models before submission', async ({ page, request }) => {
+test('generation memory separates projects modes and models before submission', { tag: '@workflow' }, async ({ page, request }) => {
   const created = await request.post('/internal/providers', { data: { name: `Memory ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } });
   const { provider } = await created.json();
   const project = await (await request.post('/internal/collections', { data: { name: 'Memory project' } })).json();
@@ -60,7 +60,7 @@ test('generation memory separates projects modes and models before submission', 
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('recognized catalog models are highlighted and stably ordered before unknown entries', async ({ page, request }) => {
+test('recognized catalog models are highlighted and stably ordered before unknown entries', { tag: '@workflow' }, async ({ page, request }) => {
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Recognition ${randomUUID()}`, type: 'openai', enabled: true } })).json();
   try {
     await page.route(`**/internal/providers/${provider.id}/models/catalog`, route => route.fulfill({ json: { models: [
@@ -146,7 +146,7 @@ test('video edit accepts a source and omits inherited generation options', async
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('model editor offers the complete catalog and cross-family protocols', async ({ page, request }) => {
+test('model editor offers the complete catalog and cross-family protocols', { tag: '@workflow' }, async ({ page, request }) => {
   const name = `Catalog ${randomUUID()}`;
   const { provider } = await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json();
   try {
@@ -207,7 +207,7 @@ test('new workspace visual baseline and accessible responsive geometry', async (
   await expect(page).toHaveScreenshot('workspace.png', { animations: 'disabled', maxDiffPixelRatio: .005 });
 });
 
-test('real image and video generation, original download, favorites and failure feedback', async ({ page, request }) => {
+test('real image and video generation, original download, favorites and failure feedback', { tag: '@workflow' }, async ({ page, request }) => {
   await open(page);
   for (const mode of ['图片', '视频']) {
     const modeToggle = page.getByRole('button', { name: '切换图片/视频', exact: true });
@@ -241,7 +241,7 @@ test('real image and video generation, original download, favorites and failure 
   await expect(page.locator('.study-card')).toHaveCount(2);
 });
 
-test('deleting freshly generated results never restores completed placeholders', async ({ page, request }, testInfo) => {
+test('deleting freshly generated results never restores completed placeholders', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   await open(page);
   await page.getByRole('button', { name: '生成设置', exact: true }).click();
   await chooseCount(page, '4');
@@ -313,7 +313,7 @@ test('login presents a conventional form and supports authentication', async ({ 
   } finally { await context.close(); }
 });
 
-test('private projects hide recent results and obscure project covers', async ({ page, request }, testInfo) => {
+test('private projects hide recent results and obscure project covers', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const privateAsset = await upload(request);
   const publicAsset = await upload(request, 'mountain');
   const { collection } = await (await request.post('/internal/collections', { data: { name: '隐私测试项目' } })).json();
@@ -430,7 +430,7 @@ test('prompt focus keeps geometry and settings fields share one appearance', asy
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('project creation, membership, search, reload and deletion confirmation', async ({ page, request }) => {
+test('project creation, membership, search, reload and deletion confirmation', { tag: '@workflow' }, async ({ page, request }) => {
   const asset = await upload(request);
   await open(page, '/projects');
   await page.getByRole('button', { name: '新建项目', exact: true }).first().click();
@@ -458,7 +458,7 @@ test('project creation, membership, search, reload and deletion confirmation', a
   expect((await request.get(`/internal/assets/${asset.id}`)).status()).toBe(200);
 });
 
-test('reference upload, canvas mask and server-backed edit submission', async ({ page, request }) => {
+test('reference upload, canvas mask and server-backed edit submission', { tag: '@workflow' }, async ({ page, request }) => {
   await open(page);
   await page.getByLabel('上传参考图', { exact: true }).setInputFiles(resolve('e2e/media/coast.webp'));
   await expect(page.locator('.reference.upload-ready')).toBeVisible();
@@ -496,7 +496,7 @@ test('reference upload, canvas mask and server-backed edit submission', async ({
   expect(detail.job.request.inputs.map((input: { role: string }) => input.role).sort()).toEqual(['mask', 'source']);
 });
 
-test('connections, persisted preferences and canonical legacy entry', async ({ page, request }) => {
+test('connections, persisted preferences and canonical legacy entry', { tag: '@workflow' }, async ({ page, request }) => {
   await open(page, '/settings/providers');
   await page.getByRole('region', { name: '连接 Mock Provider', exact: true }).getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('连接测试通过');
@@ -508,6 +508,7 @@ test('connections, persisted preferences and canonical legacy entry', async ({ p
   await open(page, '/interaction.html');
   await expect(page).toHaveURL(/\/imagine$/);
   await expect(page.locator('.creation-composer')).toBeVisible();
+  if (page.viewportSize()!.width <= 760) await page.getByLabel('创作描述', { exact: true }).focus();
   await expect(page.getByRole('group', { name: '创作类型' }).getByRole('button', { name: '切换图片/视频', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByLabel('创作描述', { exact: true }).fill('persist this draft');
   await page.waitForTimeout(700);
@@ -515,7 +516,7 @@ test('connections, persisted preferences and canonical legacy entry', async ({ p
   await expect(page.getByLabel('创作描述', { exact: true })).toHaveValue('persist this draft');
 });
 
-test('provider editor protects secrets and custom adapter management persists a real definition', async ({ page, request }) => {
+test('provider editor protects secrets and custom adapter management persists a real definition', { tag: '@workflow' }, async ({ page, request }) => {
   await open(page, '/settings/providers');
   await page.getByRole('button', { name: '添加连接', exact: true }).first().click();
   await page.getByLabel('连接名称', { exact: true }).fill('Workspace adapter');
@@ -550,7 +551,7 @@ test('provider editor protects secrets and custom adapter management persists a 
 
 test.describe('PWA', () => {
 test.use({ serviceWorkers: 'allow' });
-test('installed cache retains real previews and drafts while offline', async ({ page, request, context }) => {
+test('installed cache retains real previews and drafts while offline', { tag: '@workflow' }, async ({ page, request, context }) => {
   await upload(request);
   await open(page);
   await page.evaluate(async () => { await navigator.serviceWorker.ready; });
@@ -570,7 +571,7 @@ test('installed cache retains real previews and drafts while offline', async ({ 
 });
 });
 
-test('custom generation parameters reach the job request from the bottom composer', async ({ page, request }) => {
+test('custom generation parameters reach the job request from the bottom composer', { tag: '@workflow' }, async ({ page, request }) => {
   const created = await request.post('/internal/providers', { data: { name: 'Workspace parameters', type: 'openai-images-v1', baseUrl: 'https://api.example.com', enabled: true, isDefault: true } });
   expect(created.status()).toBe(201);
   const { provider } = await created.json();
@@ -835,7 +836,7 @@ test('image shortcuts respect desktop scope and ratio choices balance their rows
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('native image protocols select tiers without forcing ratio across policies and reloads', async ({ page, request }, testInfo) => {
+test('native image protocols select tiers without forcing ratio across policies and reloads', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   test.setTimeout(60000);
   const scenarios = [
     { name: 'Legacy Chat', profile: 'openai-chat-image-v1', modelId: 'gemini-3.1-flash-image', resolutions: ['auto', '1024x1024', '2048x2048'], tier: '4K' },
@@ -902,7 +903,7 @@ test('native image protocols select tiers without forcing ratio across policies 
   } finally { for (const id of providers) await request.delete(`/internal/providers/${id}`); }
 });
 
-test('custom model resolution capabilities edit, persist and expose a future native tier', async ({ page, request }, testInfo) => {
+test('custom model resolution capabilities edit, persist and expose a future native tier', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Custom resolution ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
   try {
     const created = await request.post('/internal/models', { data: { providerId: provider.id, modelId: 'private-future-image', displayName: 'Future image', enabled: true, capabilities: {
@@ -937,7 +938,7 @@ test('custom model resolution capabilities edit, persist and expose a future nat
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('GPT Image 2 presets choose a valid ratio from auto on both layouts', async ({ page, request }, testInfo) => {
+test('GPT Image 2 presets choose a valid ratio from auto on both layouts', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const { provider } = await (await request.post('/internal/providers', { data: { name: `GPT sizes ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
   const ratios = ['auto', '1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4'];
   try {
@@ -986,7 +987,7 @@ test('GPT Image 2 presets choose a valid ratio from auto on both layouts', async
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('mobile pixel resolution presets submit mapped dimensions and retain custom sizes', async ({ page, request }, testInfo) => {
+test('mobile pixel resolution presets submit mapped dimensions and retain custom sizes', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   test.skip(page.viewportSize()!.width > 760, 'Mobile generation settings');
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Mobile pixels ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
   try {
@@ -1148,7 +1149,7 @@ test('count presets custom count ratio lock and card selects work across layouts
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('desktop video shortcuts preserve presets custom values and model rules', async ({ page, request }, testInfo) => {
+test('desktop video shortcuts preserve presets custom values and model rules', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   test.skip(page.viewportSize()!.width <= 760);
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Desktop ${randomUUID()}`, type: 'openai', enabled: true, isDefault: true } })).json();
   try {
@@ -1260,7 +1261,7 @@ test('desktop gallery scroll keeps headers fixed and paginates in its own viewpo
   await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test('catalog selection loads capabilities and unknown models copy builtin or saved configuration', async ({ page, request }, testInfo) => {
+test('catalog selection loads capabilities and unknown models copy builtin or saved configuration', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const name = `Template connection ${randomUUID()}`;
   const { provider } = await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json();
   const sourceCapabilities = { operations: ['image.generate', 'image.edit'], profile: 'openai-chat-image-v1', aspectRatios: ['auto', '16:9'], resolutions: ['2K'], maxReferenceImages: 3, parameters: [{ path: 'resolution', label: '固定分辨率', type: 'select', options: ['2K'], defaultValue: '2K', locked: true }] };
@@ -1301,7 +1302,7 @@ test('catalog selection loads capabilities and unknown models copy builtin or sa
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('delayed automatic capability loading preserves newer model edits', async ({ page, request }) => {
+test('delayed automatic capability loading preserves newer model edits', { tag: '@workflow' }, async ({ page, request }) => {
   const name = `Delayed template ${randomUUID()}`;
   const { provider } = await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json();
   let release!: () => void;
@@ -1435,7 +1436,7 @@ test('shared connection model management saves rules and renders them in the com
   } finally { expect((await request.delete(`/internal/providers/${provider.id}`)).ok()).toBeTruthy(); }
 });
 
-test('project selection scopes resources, references and generated outputs with inline loading', async ({ page, request }) => {
+test('project selection scopes resources, references and generated outputs with inline loading', { tag: '@workflow' }, async ({ page, request }) => {
   const first = await upload(request, 'coast');
   await upload(request, 'mountain');
   const project = (await (await request.post('/internal/collections', { data: { name: `项目 ${randomUUID()}` } })).json()).collection;
@@ -1485,7 +1486,7 @@ test('project selection scopes resources, references and generated outputs with 
   await expect(page.locator('.study-card')).toHaveCount(2);
 });
 
-test('xAI reference upload automatically chooses image edit and auto ratio', async ({ page, request }) => {
+test('xAI reference upload automatically chooses image edit and auto ratio', { tag: '@workflow' }, async ({ page, request }) => {
   const created = await request.post('/internal/providers', { data: { name: `xAI edits ${randomUUID()}`, type: 'xai', baseUrl: 'https://api.example.com/v1', enabled: true, isDefault: true } });
   const { provider } = await created.json();
   try {
@@ -1553,7 +1554,7 @@ test('card references, video parameter memory and responsive video controls', as
   await expect(page.getByRole('combobox', { name: '分辨率', exact: true })).toHaveText('720p');
 });
 
-test('account category exposes administrator account management and live public domain', async ({ page, request }) => {
+test('account category exposes administrator account management and live public domain', { tag: '@workflow' }, async ({ page, request }) => {
   await open(page, '/settings');
   await expect(page.getByLabel('账号用户名', { exact: true })).toHaveCount(0);
   await page.getByRole('link', { name: '账号管理', exact: true }).click();
@@ -1574,7 +1575,7 @@ test('account category exposes administrator account management and live public 
   await request.patch('/internal/settings', { data: { values: { public_base_url: '' } } });
 });
 
-test('failed waterfall cards can be deleted independently', async ({ page, request }) => {
+test('failed waterfall cards can be deleted independently', { tag: '@workflow' }, async ({ page, request }) => {
   const response = await request.post('/internal/jobs', { data: { operation: 'image.generate', providerId: 'mock', modelId: 'mock-image-v1', prompt: 'failed card deletion', inputs: [] } });
   expect(response.status()).toBe(202);
   const id = (await response.json()).job.id as string;
@@ -1595,17 +1596,18 @@ test('failed waterfall cards can be deleted independently', async ({ page, reque
   await page.unrouteAll({ behavior: 'wait' });
 });
 
-test('rejected tasks expose retry in task management', async ({ page, request }) => {
+test('rejected tasks expose retry in task management', { tag: '@workflow' }, async ({ page, request }) => {
   const response = await request.post('/internal/jobs', { data: { operation: 'image.generate', providerId: 'mock', modelId: 'mock-image-v1', prompt: 'rejected task retry', inputs: [] } });
   expect(response.status()).toBe(202);
   const id = (await response.json()).job.id as string;
   await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).job.status).toBe('completed');
-  await page.route('**/internal/jobs?*', async route => {
-    const response = await route.fetch();
-    const body = await response.json();
-    body.items = body.items.map((job: { id: string }) => job.id === id ? { ...job, status: 'rejected', errorMessage: '测试拒绝状态' } : job);
-    await route.fulfill({ response, json: body });
-  });
+  // Project the real account's terminal list without an extra asynchronous
+  // route.fetch hop that can outlive a query cancellation during retry/teardown.
+  const listed = await request.get('/internal/jobs?limit=100');
+  expect(listed.ok()).toBeTruthy();
+  const body = await listed.json();
+  body.items = body.items.map((job: { id: string }) => job.id === id ? { ...job, status: 'rejected', errorMessage: '测试拒绝状态' } : job);
+  await page.route('**/internal/jobs?*', route => route.fulfill({ json: body }));
   await open(page, '/jobs');
   const row = page.locator(`[data-job-id="${id}"]`);
   await expect(row).toContainText('请求被拒绝');
@@ -1615,7 +1617,7 @@ test('rejected tasks expose retry in task management', async ({ page, request })
   await page.unrouteAll({ behavior: 'wait' });
 });
 
-test('ordinary accounts log in without seeing administrator data and can change their credentials', async ({ page, request, browser }) => {
+test('ordinary accounts log in without seeing administrator data and can change their credentials', { tag: '@workflow' }, async ({ page, request, browser }) => {
   test.skip(![1440, 390].includes(page.viewportSize()!.width));
   await upload(request);
   const username = `member-${randomUUID()}`;
@@ -1752,7 +1754,9 @@ test('back to top follows the active gallery viewport and avoids composer select
   await open(page);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const scroll = page.locator(page.viewportSize()!.width > 760 ? '.gallery-scroll' : '.workspace');
+  await expect.poll(() => scroll.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1000);
   await scroll.evaluate(element => { element.scrollTop = 700; });
+  await expect.poll(() => scroll.evaluate(element => element.scrollTop)).toBe(700);
   await expect(page.locator('.back-to-top')).toBeVisible();
   await page.evaluate(() => {
     const original = Element.prototype.scrollTo;
@@ -1764,6 +1768,7 @@ test('back to top follows the active gallery viewport and avoids composer select
   await page.locator('.back-to-top').click();
   expect(await page.locator('html').getAttribute('data-top-scroll-behavior')).toBe('instant');
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator('.workspace').evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(1000);
   await page.locator('.workspace').evaluate(element => { element.scrollTop = 700; });
   await expect(page.locator('.back-to-top')).toBeVisible();
   await page.evaluate(() => { Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 480 }); window.visualViewport!.dispatchEvent(new Event('resize')); });
@@ -1939,7 +1944,7 @@ test('mask entry follows prompt focus and remains clickable by touch', async ({ 
 });
 
 
-test('video workspace defers frame capture until send and removes temporary inputs', async ({ page, request }, testInfo) => {
+test('video workspace defers frame capture until send and removes temporary inputs', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   test.setTimeout(60000);
   const path = testInfo.outputPath('two-color.mp4');
   execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=10:d=1', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=10:d=1', '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[v]', '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', path]);
@@ -1974,7 +1979,7 @@ test('video workspace defers frame capture until send and removes temporary inpu
   await page.screenshot({ path: testInfo.outputPath('deferred-video-frame.png'), animations: 'disabled' });
 });
 
-test('video viewer edits and extends in place and reports capture upload failures', async ({ page, request }, testInfo) => {
+test('video viewer edits and extends in place and reports capture upload failures', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   test.skip(![1440, 390].includes(page.viewportSize()!.width));
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Video editor ${randomUUID()}`, type: 'xai', enabled: true } })).json();
   try {
@@ -2068,7 +2073,7 @@ test('model dialog select menus scroll by wheel without scrolling the form', asy
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('add catalog excludes saved models per provider and restores deleted entries', async ({ page, request }) => {
+test('add catalog excludes saved models per provider and restores deleted entries', { tag: '@workflow' }, async ({ page, request }) => {
   const providers = [];
   for (const name of ['Catalog current', 'Catalog other']) providers.push((await (await request.post('/internal/providers', { data: { name, type: 'openai', enabled: true } })).json()).provider);
   const save = async (providerId: string, modelId: string, enabled: boolean) => (await (await request.post('/internal/models', { data: { providerId, modelId, displayName: modelId, enabled, capabilities: { operations: ['image.generate'] } } })).json()).model;
@@ -2091,7 +2096,7 @@ test('add catalog excludes saved models per provider and restores deleted entrie
   } finally { for (const provider of providers) await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('gallery shows live generation seconds and compact completed duration', async ({ page, request }, testInfo) => {
+test('gallery shows live generation seconds and compact completed duration', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const submitted = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Timing completed fixture', inputs: [] } });
   expect(submitted.status()).toBe(202); const id = (await submitted.json()).job.id;
   await expect.poll(async () => (await (await request.get(`/internal/jobs/${id}`)).json()).job.status, { timeout: 20000 }).toBe('completed');
@@ -2298,7 +2303,7 @@ test('editor keeps a reloadable series across repeated image and video generatio
   await page.screenshot({ path: testInfo.outputPath('series-video-badge.png'), animations: 'disabled' });
 });
 
-test('failed gallery generation copies its full prompt', async ({ page, request }) => {
+test('failed gallery generation copies its full prompt', { tag: '@workflow' }, async ({ page, request }) => {
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Original fixture', inputs: [] } });
   const job = (await response.json()).job;
   const prompt = '失败提示词完整内容\n第二行也需要保留';
@@ -2313,7 +2318,7 @@ test('failed gallery generation copies its full prompt', async ({ page, request 
 });
 
 
-test('series preferences group gallery entries and persist all three cover choices', async ({ page, request }, testInfo) => {
+test('series preferences group gallery entries and persist all three cover choices', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const original = await upload(request);
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Series preference result', inputs: [{ assetId: original.id, role: 'source' }] } });
   expect(response.ok()).toBe(true);
@@ -2426,7 +2431,7 @@ test('editor navigation crosses series on desktop and uses separate mobile swipe
   await page.screenshot({ path: testInfo.outputPath('editor-navigation.png'), animations: 'disabled' });
 });
 
-test('cold gallery filters retain the current gallery while the next type loads', async ({ page, request }) => {
+test('cold gallery filters retain the current gallery while the next type loads', { tag: '@workflow' }, async ({ page, request }) => {
   await upload(request);
   await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'clip.mp4', mimeType: 'video/mp4', buffer: await readFile(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4')) } } });
   await open(page, '/library');
@@ -2453,7 +2458,7 @@ test('cold gallery filters retain the current gallery while the next type loads'
   }
 });
 
-test('recent series cover changes before the view save finishes and without a reload', async ({ page, request }) => {
+test('recent series cover changes before the view save finishes and without a reload', { tag: '@workflow' }, async ({ page, request }) => {
   const original = await upload(request);
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Immediate cover', inputs: [{ assetId: original.id, role: 'source' }] } });
   const { job } = await response.json();
@@ -2668,7 +2673,7 @@ test('neighbor media follows the finger before release and cancels without savin
   if (mobile) await drag('y', single.id, false);
 });
 
-test('opening an uncached gallery item never displays the previously closed item', async ({ page, request }) => {
+test('opening an uncached gallery item never displays the previously closed item', { tag: '@workflow' }, async ({ page, request }) => {
   const previous = await upload(request, 'coast');
   await upload(request, 'mountain');
   const target = await upload(request, 'architecture');
@@ -2706,7 +2711,7 @@ test('opening an uncached gallery item never displays the previously closed item
   } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 
-test('HTTP content preference saves and survives reload', async ({ page, request }, testInfo) => {
+test('HTTP content preference saves and survives reload', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   await request.patch('/internal/settings', { data: { values: { 'network.allow_http_content': true } } });
   await open(page, '/settings');
   const toggle = page.getByRole('checkbox', { name: '是否允许 HTTP 内容', exact: true });
@@ -2776,7 +2781,7 @@ test('mobile editor closes on a committed left edge swipe without losing its dra
   await expect(viewer).toHaveCount(0);
 });
 
-test('UUID project editor remembers per-model settings across reloads', async ({ page, request }) => {
+test('UUID project editor remembers per-model settings across reloads', { tag: '@workflow' }, async ({ page, request }) => {
   const { provider } = await (await request.post('/internal/providers', { data: { name: `Editor memory ${randomUUID()}`, type: 'openai', enabled: true } })).json();
   const { collection } = await (await request.post('/internal/collections', { data: { name: 'Editor memory project' } })).json();
   const original = await upload(request);
@@ -2819,7 +2824,7 @@ test('UUID project editor remembers per-model settings across reloads', async ({
   } finally { await request.delete(`/internal/providers/${provider.id}`); }
 });
 
-test('settings events synchronize open pages without crossing account boundaries', async ({ page, context, request, browser, baseURL }) => {
+test('settings events synchronize open pages without crossing account boundaries', { tag: '@workflow' }, async ({ page, context, request, browser, baseURL }) => {
   await open(page, '/settings');
   const peer = await context.newPage();
   const otherContext = await browser.newContext({ baseURL, serviceWorkers: 'block', storageState: { cookies: [], origins: [] } });
@@ -2845,7 +2850,7 @@ test('settings events synchronize open pages without crossing account boundaries
   }
 });
 
-test('editor preloads before first opening without flashing a loading panel', async ({ page, request }) => {
+test('editor preloads before first opening without flashing a loading panel', { tag: '@workflow' }, async ({ page, request }) => {
   await upload(request);
   const workspaceLoaded = page.waitForResponse(response => /\/assets\/media-editing-workspace-[^/]+\.js$/.test(response.url()));
   const maskLoaded = page.waitForResponse(response => /\/assets\/editor-[^/]+\.js$/.test(response.url()));
@@ -3016,7 +3021,7 @@ test('concurrent image series preference groups main composer outputs and surviv
   await expect(page.locator('.study-card')).toHaveCount(2);
 });
 
-test('recent series covers keep separate caches when concurrent grouping changes live', async ({ page, request }) => {
+test('recent series covers keep separate caches when concurrent grouping changes live', { tag: '@workflow' }, async ({ page, request }) => {
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Live concurrent cover fixture', count: 2 } });
   expect(response.ok()).toBe(true);
   const { jobs } = await response.json();
@@ -3051,7 +3056,7 @@ test('recent series covers keep separate caches when concurrent grouping changes
   } finally { release(); }
 });
 
-test('homepage thumbnails take priority over idle editor preloads', async ({ page, request }) => {
+test('homepage thumbnails take priority over idle editor preloads', { tag: '@workflow' }, async ({ page, request }) => {
   await upload(request);
   let releaseData!: () => void, releaseImages!: () => void;
   const dataGate = new Promise<void>(resolve => { releaseData = resolve; });
@@ -3082,7 +3087,7 @@ test('homepage thumbnails take priority over idle editor preloads', async ({ pag
   } finally { releaseData(); releaseImages(); }
 });
 
-test('opening a work bypasses speculative editor idle waiting', async ({ page, request }) => {
+test('opening a work bypasses speculative editor idle waiting', { tag: '@workflow' }, async ({ page, request }) => {
   await upload(request);
   await page.addInitScript(() => {
     window.requestIdleCallback = () => 1;
@@ -3099,7 +3104,7 @@ test('opening a work bypasses speculative editor idle waiting', async ({ page, r
   expect(editors.some(url => /\/editor-/.test(url))).toBe(false);
 });
 
-test('historical event replay keeps homepage request counts bounded', async ({ page, request }) => {
+test('historical event replay keeps homepage request counts bounded', { tag: '@workflow' }, async ({ page, request }) => {
   await upload(request);
   const calls = new Map<string, number>();
   page.on('request', req => {
@@ -3118,7 +3123,7 @@ test('historical event replay keeps homepage request counts bounded', async ({ p
 });
 
 
-test('session validation has no separate access page and keeps workspace data gated', async ({ page }) => {
+test('session validation has no separate access page and keeps workspace data gated', { tag: '@workflow' }, async ({ page }) => {
   let requested!: () => void, release!: () => void;
   const started = new Promise<void>(resolve => { requested = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -3248,7 +3253,7 @@ test('gallery preloads thumbnails within 1000px while prioritizing visible cards
   await expect(target.locator('img')).toHaveAttribute('fetchpriority', 'high');
 });
 
-test('gallery reuses cached thumbnails after scrolling and reload', async ({ page, request }) => {
+test('gallery reuses cached thumbnails after scrolling and reload', { tag: '@workflow' }, async ({ page, request }) => {
   for (let index = 0; index < 40; index++) await upload(request, 'botanical');
   await open(page);
   const first = page.locator('.study-card').first();
@@ -3278,7 +3283,7 @@ test('gallery reuses cached thumbnails after scrolling and reload', async ({ pag
 
 test.describe('PWA thumbnail reuse', () => {
   test.use({ serviceWorkers: 'allow' });
-  test('cached previews avoid network and clear on deletion and logout', async ({ page, request, context }) => {
+  test('cached previews avoid network and clear on deletion and logout', { tag: '@workflow' }, async ({ page, request, context }) => {
     const deleted = await upload(request, 'coast'), retained = await upload(request, 'botanical');
     await open(page);
     await page.evaluate(async () => { await navigator.serviceWorker.ready; });
@@ -3315,7 +3320,7 @@ test.describe('PWA thumbnail reuse', () => {
 });
 
 
-test('pending concurrent series and uploaded reference suboption survive reload', async ({ page, request }, testInfo) => {
+test('pending concurrent series and uploaded reference suboption survive reload', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   await request.patch('/internal/settings', { data: { values: { 'gallery.group_uploaded_references': false } } });
   const reference = await upload(request);
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Pending series fixture', count: 2, inputs: [{ assetId: reference.id, role: 'reference' }] } });
@@ -3601,7 +3606,7 @@ test('main mobile composer collapses only when empty and unfocused including por
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('selection keeps series grouped and bulk actions include every member', async ({ page, request }) => {
+test('selection keeps series grouped and bulk actions include every member', { tag: '@workflow' }, async ({ page, request }) => {
   const original = await upload(request), single = await upload(request, 'mountain');
   const { job } = await (await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Whole series selection', inputs: [{ assetId: original.id, role: 'source' }] } })).json();
   await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
@@ -3642,7 +3647,7 @@ test('selection keeps series grouped and bulk actions include every member', asy
   await expect(page.locator('.batch-toolbar')).toContainText('已选 1 件');
 });
 
-test('series selection rejects incomplete membership and ignores reads after closing selection', async ({ page, request }) => {
+test('series selection rejects incomplete membership and ignores reads after closing selection', { tag: '@workflow' }, async ({ page, request }) => {
   const original = await upload(request);
   const { job } = await (await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Selection loading fixture', inputs: [{ assetId: original.id, role: 'source' }] } })).json();
   await expect.poll(async () => (await (await request.get(`/internal/jobs/${job.id}`)).json()).assets.length, { timeout: 25000 }).toBe(1);
@@ -3911,7 +3916,7 @@ test('localized dark workspace keeps prompts assets and editor state unchanged',
   await page.screenshot({path:testInfo.outputPath('composer-dark-ja.png'),animations:'disabled'});
 });
 
-test('theme and language remain account-scoped after signing in as another user', async ({ page, request }) => {
+test('theme and language remain account-scoped after signing in as another user', { tag: '@workflow' }, async ({ page, request }) => {
   const username=`appearance-${randomUUID()}`;
   expect((await request.post('/internal/accounts',{data:{username,password:'appearance-fixture-password'}})).status()).toBe(201);
   await request.patch('/internal/settings',{data:{values:{'ui.theme':'dark','ui.language':'ja'}}});
@@ -3928,7 +3933,7 @@ test('theme and language remain account-scoped after signing in as another user'
 });
 
 
-test('uploaded image sources and video first frames follow the reference series preference', async ({ page, request }) => {
+test('uploaded image sources and video first frames follow the reference series preference', { tag: '@workflow' }, async ({ page, request }) => {
   await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.group_uploaded_references': false } } });
   const source = await upload(request, 'coast');
   const outputs: string[] = [];
@@ -3982,7 +3987,7 @@ test('uploaded image sources and video first frames follow the reference series 
 
 
 for (const empty of [false, true]) {
-  test(`failed series details delete placeholders and preserve works (empty=${empty})`, async ({ page, request }) => {
+  test(`failed series details delete placeholders and preserve works (empty=${empty})`, { tag: '@workflow' }, async ({ page, request }) => {
     await request.patch('/internal/settings', { data: { values: { 'gallery.group_by_series': true, 'gallery.group_concurrent_images': true } } });
     const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Failed series deletion fixture', count: 2, inputs: [] } });
     expect(response.status()).toBe(202);
@@ -4035,7 +4040,7 @@ for (const empty of [false, true]) {
   });
 }
 
-test('deleting a failed editor draft task does not restore its placeholder when reopened', async ({ page, request }, testInfo) => {
+test('deleting a failed editor draft task does not restore its placeholder when reopened', { tag: '@workflow' }, async ({ page, request }, testInfo) => {
   const source = await upload(request, 'coast');
   const response = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.edit', prompt: 'Failed editor draft fixture', inputs: [{ assetId: source.id, role: 'source' }] } });
   const { job } = await response.json();

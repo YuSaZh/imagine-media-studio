@@ -3,7 +3,7 @@
 Imagine. `v0.2.3` unifies the product name across documentation, UI/PWA, APIs and release metadata. Moving a series to a project now moves all existing image/video members together. It also guards oversized series merges, preserves whole-series deletion retry plans and clarifies media retention and operator guidance. There are no new database migrations compared with `v0.2.1`.
 The release workflow publishes a candidate, verifies its exact digest, and then
 promotes stable tags and creates the GitHub Release. Use the immutable digest in
-the [GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.2.3)
+the [GitHub Release](https://github.com/YuSaZh/Imagine./releases/tag/v0.2.3)
 for deployment and verification. Replace `<digest-from-release>` below with its
 64-character SHA-256 digest.
 
@@ -174,6 +174,12 @@ cannot atomically exchange an active Docker bind mount.
 
 ## Image, signature, SBOM, and provenance verification
 
+The GitHub repository is now `YuSaZh/Imagine.`. The published image name remains
+`ghcr.io/yusazh/imagine-media-studio`. Releases produced before the repository
+rename, including `v0.2.3`, retain `YuSaZh/imagine-media-studio` in their signed
+source identity, so the version-specific verification command below deliberately
+uses that original identity. New releases use their actual signing identity.
+
 Use the digest, not `0.2.3`, `0.2`, or `latest`, as the verification subject:
 
 Run these commands from a verified `v0.2.3` source checkout. GitHub CLI must be
@@ -223,7 +229,7 @@ The corrected `verify-release-attestations.mjs` is attached to the GitHub
 Release at this fixed download URL:
 
 ```text
-https://github.com/YuSaZh/imagine-media-studio/releases/download/v0.1.0/verify-release-attestations.mjs
+https://github.com/YuSaZh/Imagine./releases/download/v0.1.0/verify-release-attestations.mjs
 ```
 
 The uploaded asset is 3,681 bytes with SHA-256
@@ -234,7 +240,7 @@ and replace the final helper invocation above with:
 ```bash
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output verify-release-attestations.mjs \
-  'https://github.com/YuSaZh/imagine-media-studio/releases/download/v0.1.0/verify-release-attestations.mjs'
+  'https://github.com/YuSaZh/Imagine./releases/download/v0.1.0/verify-release-attestations.mjs'
 node ./verify-release-attestations.mjs \
   --sbom sbom.json \
   --provenance provenance.json
@@ -253,12 +259,12 @@ and lock-cleanup race windows remain outside the atomicity guarantee.
 ## v0.1.0 completion record
 
 - Annotated tag `v0.1.0` resolves to commit `967b350`.
-- [Release run 33215005527](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33215005527)
+- [Release run 33215005527](https://github.com/YuSaZh/Imagine./actions/runs/33215005527)
   passed all four jobs and published digest
   `sha256:025b56e7cbe198bea60954068b135fa71bcb9fa9e029aa04d44cf30c3bc37018`.
 - `0.1.0`, `0.1`, `latest`, and the full commit-SHA tag resolve to that digest;
   its index contains both `linux/amd64` and `linux/arm64` images.
-- [Fix CI run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872)
+- [Fix CI run 33216883872](https://github.com/YuSaZh/Imagine./actions/runs/33216883872)
   passed all 17 jobs at commit `4dc4432`. The corrected verifier asset matches
   that commit and validates the registry's real SPDX/SLSA output for both
   platforms.
@@ -295,7 +301,8 @@ Prepare the description according to [.github/RELEASE_NOTES.md](./.github/RELEAS
 1. Prepare the release commit locally. Confirm the root, server, web, and app-info
    versions match the intended stable tag; ensure `CHANGELOG.md` has one non-empty
    matching version section and the working tree is clean.
-2. Run `pnpm run ci` locally: quality, all eight isolated browser projects, and
+2. Run `pnpm run ci` locally: quality, all eight isolated browser projects
+   (full scenarios on 1440×900/390×844, responsive scenarios on the other six), and
    source Docker smoke. A quality-only or focused run is not complete acceptance.
    Reuse evidence only for unchanged inputs, scope and environment. See [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
 3. Push the final commit to main and let its normal complete CI pass once. Prefer

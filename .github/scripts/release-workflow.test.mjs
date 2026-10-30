@@ -1,5 +1,8 @@
 import { testProjectSelection } from './ci-projects.test.mjs';
 import { testCiEntry } from './ci.test.mjs';
+import { testCiOptions } from './ci-options.test.mjs';
+import { testCiToolchain } from './ci-toolchain.test.mjs';
+import { testBrowserCoverage } from './browser-coverage.test.mjs';
 import projects from '../ci-projects.json' with { type: 'json' };
 import { REQUIRED_CI_JOBS } from './require-successful-ci.mjs';
 import { testCiReuseGuard } from './require-successful-ci.test.mjs';
@@ -47,14 +50,21 @@ assert.ok(Object.hasOwn(ci.on, 'pull_request'));
 assert.equal(ci.on.push.tags, undefined, 'Release must own tag runs to avoid a duplicate CI image build.');
 assert.equal(ci.on.workflow_call, undefined, 'Release must reuse main CI instead of invoking another suite.');
 assert.equal(ci.jobs['docker-smoke'].if, undefined);
-assert.ok(ci.jobs['docker-smoke'].steps.some(candidate => candidate.run === 'node .github/scripts/ci.mjs docker'));
+assert.ok(ci.jobs['docker-smoke'].steps.some(candidate => candidate.run === 'node .github/scripts/ci-toolchain.mjs docker'));
 assert.equal(ci.jobs.quality.if, undefined);
 assert.equal(ci.jobs['workspace-e2e'].if, undefined);
-assert.ok(ci.jobs.quality.steps.some(candidate => candidate.run === 'pnpm run ci:quality'));
+assert.ok(ci.jobs.quality.steps.some(candidate => candidate.run === 'node .github/scripts/ci-toolchain.mjs quality'));
 assert.equal(projects.length, 8);
 assert.equal(ci.jobs['workspace-e2e'].strategy.matrix.project, '${{ fromJSON(needs.projects.outputs.projects) }}');
 assert.ok(ci.jobs.projects.steps.some(step => step.run === 'node .github/scripts/ci-projects.mjs'));
-assert.ok(ci.jobs['workspace-e2e'].steps.some(candidate => candidate.run === 'pnpm run ci:browser "$CI_BROWSER_PROJECT"'));
+assert.ok(ci.jobs['workspace-e2e'].steps.some(candidate => candidate.run === 'node .github/scripts/ci-toolchain.mjs browser "$CI_BROWSER_PROJECT"'));
+assert.equal(ci.jobs['workspace-e2e'].strategy['max-parallel'], 8);
+assert.deepEqual(ci.jobs['workspace-e2e'].needs, ['projects', 'toolchain']);
+assert.equal(ci.jobs.quality.needs, 'toolchain');
+assert.equal(ci.jobs['docker-smoke'].needs, 'toolchain');
+assert.ok(ci.jobs.toolchain.steps.some(step => step.run === 'node .github/scripts/ci-toolchain.mjs prepare'));
+assert.deepEqual(ci.permissions, { contents: 'read' });
+assert.doesNotMatch(ciText, /apt-get|playwright install|packages: write/u);
 const runner = await readFile(new URL('./ci.mjs', import.meta.url), 'utf8');
 assert.match(runner, /--update-snapshots=none/u);
 assert.match(runner, /CI: 'true'/u);
@@ -86,11 +96,14 @@ assert.equal(checks['timeout-minutes'], 50);
 assert.ok(checks.steps.some(step => step.uses?.startsWith('actions/checkout@') && !step.with?.ref));
 const reuseGate = checks.steps.find(step => step.run === 'node .github/scripts/require-successful-ci.mjs');
 assert.deepEqual(reuseGate.env, { GH_TOKEN: '${{ github.token }}' });
-assert.deepEqual(REQUIRED_CI_JOBS, [ci.jobs.quality.name, ...projects.map(project => `Workspace browser gates: ${project}`), ci.jobs['docker-smoke'].name]);
+assert.deepEqual(REQUIRED_CI_JOBS, [ci.jobs.toolchain.name, ci.jobs.quality.name, ...projects.map(project => `Workspace browser gates: ${project}`), ci.jobs['docker-smoke'].name]);
 assert.ok(!checks.steps.some(step => /pnpm|workflow run|dispatch/.test(step.run ?? '')));
 await testCiReuseGuard();
 await testCiEntry();
+testCiOptions();
+await testCiToolchain();
 testProjectSelection();
+await testBrowserCoverage();
 assert.equal(checks.secrets, undefined);
 assert.deepEqual(publish.needs, ['validate', 'checks']);
 assert.equal(publish.if, undefined, 'Failed or cancelled checks must prevent publishing.');
@@ -239,6 +252,8 @@ assert.equal(build.with.tags, '${{ steps.meta.outputs.tags }}');
 assert.equal(build.with.labels, '${{ steps.meta.outputs.labels }}');
 assert.equal(build.with.sbom, true);
 assert.equal(build.with.provenance, 'mode=max');
+assert.equal(build.with['cache-from'], 'type=registry,ref=${{ env.IMAGE }}-buildcache:release');
+assert.equal(build.with['cache-to'], 'type=registry,ref=${{ env.IMAGE }}-buildcache:release,mode=max');
 assert.ok(build.with['build-args'].includes("OCI_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}"));
 assert.ok(build.with['build-args'].includes('OCI_VERSION=${{ needs.validate.outputs.version }}'));
 assert.ok(build.with['build-args'].includes('OCI_REVISION=${{ github.sha }}'));
@@ -376,7 +391,7 @@ try {
 
   const publishOptions = {
     digest: releaseDigest,
-    repository: 'YuSaZh/imagine-media-studio',
+    repository: 'YuSaZh/Imagine.',
     runnerTemp,
     tag: 'v0.1.0',
     version: '0.1.0',
@@ -474,6 +489,7 @@ const slsaPayload = {
     buildType: 'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
   },
   runDetails: {
+    // Signed historical provenance retains the repository identity used at build time.
     builder: { id: 'https://github.com/YuSaZh/imagine-media-studio/actions/runs/33214299163' },
     metadata: {
       finishedOn: '2026-08-29T06:30:01Z',

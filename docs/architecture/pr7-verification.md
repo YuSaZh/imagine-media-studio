@@ -62,18 +62,18 @@ isolated Docker smoke.
 ## GitHub Actions acceptance
 
 Commit `a58ab7b` passed all 13 jobs in [run
-33174754136](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136).
+33174754136](https://github.com/YuSaZh/Imagine./actions/runs/33174754136).
 
 | Workflow surface | Evidence | Status |
 | --- | --- | --- |
-| Lint, typecheck, 929 unit tests, production build/budget | [Job 98860362163](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362163) | Pass |
-| Base PR 1/3/4/5/6 Playwright suite | [Job 98860361984](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860361984) | Pass |
-| Single-container build, API/media/persistence/restart smoke | [Job 98860362155](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362155) | Pass |
-| PR 7 desktop 1280/1440/1920 | Jobs [98860362277](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362277), [98860362235](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362235), [98860362207](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362207) | Pass |
-| PR 7 tablet 834/1024 | Jobs [98860362337](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362337), [98860362198](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362198) | Pass |
-| PR 7 mobile 360/390/430 | Jobs [98860362357](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362357), [98860362115](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362115), [98860362139](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362139) | Pass |
-| Desktop axe and performance | [Job 98860362200](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362200) | Pass |
-| Mobile axe and performance | [Job 98860362147](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362147) | Pass |
+| Lint, typecheck, 929 unit tests, production build/budget | [Job 98860362163](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362163) | Pass |
+| Base PR 1/3/4/5/6 Playwright suite | [Job 98860361984](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860361984) | Pass |
+| Single-container build, API/media/persistence/restart smoke | [Job 98860362155](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362155) | Pass |
+| PR 7 desktop 1280/1440/1920 | Jobs [98860362277](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362277), [98860362235](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362235), [98860362207](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362207) | Pass |
+| PR 7 tablet 834/1024 | Jobs [98860362337](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362337), [98860362198](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362198) | Pass |
+| PR 7 mobile 360/390/430 | Jobs [98860362357](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362357), [98860362115](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362115), [98860362139](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362139) | Pass |
+| Desktop axe and performance | [Job 98860362200](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362200) | Pass |
+| Mobile axe and performance | [Job 98860362147](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362147) | Pass |
 
 ## Evidence boundary
 

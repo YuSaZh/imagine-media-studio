@@ -87,10 +87,10 @@ This keeps responsive geometry coverage broad while making automated a11y and
 resource budgets deterministic and bounded to the representative desktop and
 mobile environments.
 
-GitHub Actions [run 33174754136](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136)
+GitHub Actions [run 33174754136](https://github.com/YuSaZh/Imagine./actions/runs/33174754136)
 passed all 13 jobs for commit `a58ab7b`. The representative desktop
-[axe/performance job 98860362200](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362200)
-and mobile [job 98860362147](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136/job/98860362147)
+[axe/performance job 98860362200](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362200)
+and mobile [job 98860362147](https://github.com/YuSaZh/Imagine./actions/runs/33174754136/job/98860362147)
 both passed without adding a rule exclusion.
 
 ## Evidence Boundary

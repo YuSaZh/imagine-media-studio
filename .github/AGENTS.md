@@ -7,11 +7,16 @@ workflow plus scripts before changing CI or publishing behavior.
   viewports, and isolated Docker smoke. Keep checks available to pull requests
   without production credentials. Do not weaken acceptance to work around a failure.
 - Keep check commands, versions and semantics aligned through shared scripts.
+  Use the [pinned toolchain and cache rules](./ci/README.md); cache hits never
+  replace acceptance or authorize publication.
   Follow [CI parity rules](../CONTRIBUTING.md#local-and-github-ci-parity): local
   focused checks are for development; `pnpm run ci` must complete locally before
   release. GitHub uses the same partial entry scripts and gates the exact SHA.
 - PRs may use the shared scope selector for representative browser coverage. Main
-  and release gates always require all eight projects. Allow one browser retry,
+  and release gates always require all eight projects, using full scenarios on
+  1440×900/390×844 and responsive/interaction scenarios on the other six. Keep
+  `.github/browser-coverage.json` shared with Playwright and CI reporting; only
+  reviewed `@workflow` tests may omit the extra six viewports. Allow one browser retry,
   report flaky cases separately, and fix recurrent failures without weakening checks.
 - Test Image is manually dispatched on `main` and requires successful CI for the
   same commit. Build a unique multi-architecture candidate, smoke its immutable

@@ -90,19 +90,22 @@ Use focused checks during development. Before publishing a release, run the comp
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm exec playwright install --with-deps chromium
 pnpm run ci
 ```
 
-Install FFmpeg and Noto core/CJK fonts as in the GitHub workflow. Docker with Compose and a running daemon are required. The runner creates isolated ports, temporary databases and Compose resources; it never targets the persistent preview. Reports are retained under ignored `ci-results/`. A nonzero exit or incomplete run does not qualify as full CI.
+Use a Linux host with a running local Docker daemon and Unix socket. The shared launcher builds or loads the [pinned CI toolchain](./.github/ci/README.md), including Node, pnpm, Chromium, FFmpeg, Noto fonts and Docker CLI/Compose. Host-installed browsers or fonts are not used by these CI entries. The first run downloads/builds the toolchain; subsequent runs reuse it. Focused native development commands below still require their host dependencies.
+
+The runner creates isolated ports, temporary databases, dependency volumes and Compose resources; it never targets the persistent preview or replaces host `node_modules`. Reports, stage durations and toolchain receipts are retained under ignored `ci-results/`; reusable image archives and the pnpm store live under ignored `.ci-cache/`. A nonzero exit or incomplete run does not qualify as full CI.
 
 ### Local and GitHub CI parity
 
-- `pnpm run ci` runs lint, types, all unit/integration/release tests, production build, the unfiltered eight-viewport browser suite and isolated source Docker smoke.
+- `pnpm run ci` runs lint, types, all unit/integration/release tests, production build, the complete browser coverage matrix below and isolated source Docker smoke.
 - `pnpm run ci:quality`, `pnpm run ci:browser [workspace-WIDTHxHEIGHT]` and `pnpm run ci:docker` are explicit partial entries. GitHub calls these same scripts. The browser entry builds first, sets `CI=true`, disables snapshot updates and gives each viewport a fresh server/database. Both environments use `.github/ci-projects.json` as the matrix source.
+- Local full/browser runs schedule at most four isolated projects, bounded by available CPUs and 3 GiB of host memory per project. `CI_BROWSER_CONCURRENCY=1` through `8` explicitly overrides that scheduling limit. Each project retains one Playwright worker and one retry. GitHub schedules up to eight separate browser jobs; unit tests retain their existing two-worker limit.
 - PR browser coverage is selected by `.github/scripts/ci-projects.mjs`: server/document-only changes use 1440×900 and 390×844; frontend, shared packages, browser fixtures/configuration, dependencies and CI/runtime infrastructure use all eight. Unknown diff history falls back to all eight. Every main push and release always requires all eight; a reduced PR run never qualifies for release.
+- The shared [browser coverage policy](./.github/browser-coverage.json) runs every scenario on 1440×900 and 390×844. The other six viewports run responsive/interaction scenarios, excluding only explicitly reviewed `@workflow` tests. Untagged new cases run on all eight. Geometry, accessibility, animation, scrolling, touch, visual baselines and mixed business/layout cases retain their viewport coverage; assertions and retries are unchanged. The release contract collects real Playwright tests and rejects missing representative coverage or missing untagged cases on any viewport. `ci-results/browser-coverage.json` lists selected cases and policy omissions separately from runtime skips.
 - Browser acceptance permits one retry. Retry passes are reported separately as flaky cases in `ci-results/*/summary.json` and GitHub job summaries; they are not silently counted as first-pass success. A repeated failure blocks the gate. Fix recurring flakes rather than increasing retries, swallowing assertions or changing snapshot tolerances. Focused stress checks may use `--fail-on-flaky-tests` to verify a repair.
-- Match the declared Node/pnpm versions, frozen dependencies, Chromium, fonts and flags. OS/container differences remain possible; report them. Workflow-defined test skips are not missing gates and must be reported separately. Mock fixtures do not prove live Provider acceptance.
+- Local and GitHub gates execute the same content-fingerprinted toolchain image with frozen dependencies. GitHub prepares one archive per run and reuses an exact-key cache across runs; fork PRs need no registry credentials. Host architecture, kernel and resource differences remain possible; report them. Workflow-defined test skips are not missing gates and must be reported separately. Mock fixtures do not prove live Provider acceptance.
 - A release requires complete local evidence. Reuse passed evidence only for unchanged source inputs, assertions and environment. A notes-only follow-up needs release validation; changed tests or scripts require their affected gates again. Never label focused tests as full CI or weaken assertions to pass.
 - GitHub main CI must independently accept the exact release commit. The tag workflow waits for the latest main-push run, validates all required jobs and never starts duplicate source CI. Failed, cancelled, skipped or absent jobs block publication. Existing success for another commit or an older attempt does not qualify.
 - The actual published candidate still receives digest smoke before promotion. It is a different artifact from the local source image. Publication and development deployment are separate actions.
@@ -140,7 +143,7 @@ pnpm run ci:browser
 The first browser command selects two representative projects for development;
 the second builds and runs all eight projects with isolated data and automatically allocated ports. Use `CI=true` for acceptance parity.
 During development, select scenarios and viewports affected by the change;
-the complete unfiltered eight-viewport run is required locally before release and repeated by GitHub main CI.
+the complete browser coverage matrix (two full projects plus six responsive projects) is required locally before release and repeated by GitHub main CI.
 Read [e2e/AGENTS.md](./e2e/AGENTS.md) for baseline and cleanup rules.
 
 For isolated Docker smoke, run `pnpm run ci:docker`. All data,

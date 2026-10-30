@@ -12,18 +12,18 @@ All notable changes to Imagine. are documented in this file.
 
 ### 重点更新
 
-- **统一项目名称：** 中英日 README、页面与 PWA 安装名称、应用信息、认证提示、镜像及发布标题统一为 Imagine.，管理员自定义站点名称继续保留。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
-- **整个系列移动到项目：** 同时移动当前系列的所有现有图片和视频，包括被筛选或其他项目视图隐藏的成员；只有全体成员都仅属于目标项目时才禁用该目标。成员读取失败或不完整时阻止操作，失败后可重试。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
-- **系列批量操作恢复：** 合并事务拒绝超过完整读取边界的结果并保留选择；整系列删除记录未完成成员，即使封面已经删除或响应丢失，也只重试剩余作品和失败任务。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+- **统一项目名称：** 中英日 README、页面与 PWA 安装名称、应用信息、认证提示、镜像及发布标题统一为 Imagine.，管理员自定义站点名称继续保留。([eaafe1c](https://github.com/YuSaZh/Imagine./commit/eaafe1c))
+- **整个系列移动到项目：** 同时移动当前系列的所有现有图片和视频，包括被筛选或其他项目视图隐藏的成员；只有全体成员都仅属于目标项目时才禁用该目标。成员读取失败或不完整时阻止操作，失败后可重试。([eaafe1c](https://github.com/YuSaZh/Imagine./commit/eaafe1c))
+- **系列批量操作恢复：** 合并事务拒绝超过完整读取边界的结果并保留选择；整系列删除记录未完成成员，即使封面已经删除或响应丢失，也只重试剩余作品和失败任务。([eaafe1c](https://github.com/YuSaZh/Imagine./commit/eaafe1c))
 
 ### 文档与使用说明
 
 - 三语删除确认明确说明作品从图库移除、应用内不可恢复，但媒体文件暂留且不释放磁盘空间；项目删除默认保留作品。
-- 更新 HTTP 持久偏好、离线归档停服要求及当前 Mock 能力说明；历史验收记录标注原始范围，不再作为当前版本的验收结论。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+- 更新 HTTP 持久偏好、离线归档停服要求及当前 Mock 能力说明；历史验收记录标注原始范围，不再作为当前版本的验收结论。([eaafe1c](https://github.com/YuSaZh/Imagine./commit/eaafe1c))
 
 ### 验收与发布可靠性
 
-- 侧栏测试等待展开/收起的精确宽度终态；单元测试限制并行 worker，保留断言、默认超时和完整测试范围。([eaafe1c](https://github.com/YuSaZh/imagine-media-studio/commit/eaafe1c))
+- 侧栏测试等待展开/收起的精确宽度终态；单元测试限制并行 worker，保留断言、默认超时和完整测试范围。([eaafe1c](https://github.com/YuSaZh/Imagine./commit/eaafe1c))
 - **完整 CI 入口：** `pnpm run ci` 包含质量检查、全部八个浏览器尺寸及隔离源码容器验收；正式发布继续复用相同提交的成功 main CI，再验证实际候选镜像 digest。
 
 ### 升级说明与限制
@@ -37,7 +37,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.2.1...v0.2.3](https://github.com/YuSaZh/imagine-media-studio/compare/v0.2.1...v0.2.3)
+完整变更：[v0.2.1...v0.2.3](https://github.com/YuSaZh/Imagine./compare/v0.2.1...v0.2.3)
 
 ## [0.2.1] - 2026-09-26
 
@@ -47,25 +47,25 @@ All notable changes to Imagine. are documented in this file.
 
 ### 重点更新
 
-- **手动合并系列：** 多选图片、视频或混合内容后，可合并为一个系列，刷新和重启后保留；仍保留已有生成来源关系和账号隔离。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
-- **系列删除和失败任务：** 提供取消、仅删除封面和删除整个系列三个操作；失败系列菜单、单个任务和任务列表均可删除失败记录。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
-- **更紧凑的移动端：** 顶部搜索与标题带动画切换，保留导航按钮；空搜索点击外部收起，有内容时保持展开。长按作品进入多选，移除重复标题行。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
-- **站点外观：** 管理员可修改网站名称、上传或恢复默认 Logo；登录页、侧栏、浏览器标题和图标同步更新。([ee72aac](https://github.com/YuSaZh/imagine-media-studio/commit/ee72aac))
+- **手动合并系列：** 多选图片、视频或混合内容后，可合并为一个系列，刷新和重启后保留；仍保留已有生成来源关系和账号隔离。([ee72aac](https://github.com/YuSaZh/Imagine./commit/ee72aac))
+- **系列删除和失败任务：** 提供取消、仅删除封面和删除整个系列三个操作；失败系列菜单、单个任务和任务列表均可删除失败记录。([ee72aac](https://github.com/YuSaZh/Imagine./commit/ee72aac))
+- **更紧凑的移动端：** 顶部搜索与标题带动画切换，保留导航按钮；空搜索点击外部收起，有内容时保持展开。长按作品进入多选，移除重复标题行。([ee72aac](https://github.com/YuSaZh/Imagine./commit/ee72aac))
+- **站点外观：** 管理员可修改网站名称、上传或恢复默认 Logo；登录页、侧栏、浏览器标题和图标同步更新。([ee72aac](https://github.com/YuSaZh/Imagine./commit/ee72aac))
 
 ### 工作区与无障碍体验
 
 - 桌面侧栏展开/收起加入过渡动画，多选工具栏跟随输入框高度；动效遵循偏好和系统减少动效设置。
 - 任务提示词使用完整正文宽度，末尾显示省略号和“展开全部”；展开后由任务面板滚动，可在文末收起。
 - 移动端蒙版按钮直接浮在输入框上方，系列缩略图保持全宽；带未完成或失败任务的系列封面复用作品卡片，保留悬浮操作和信息。
-- 优化系列查看器的原图归属、失败任务详情与删除、重试状态，以及编辑器退出动画和回归测试。([ec1f5a1](https://github.com/YuSaZh/imagine-media-studio/commit/ec1f5a1)、[3e2ec74](https://github.com/YuSaZh/imagine-media-studio/commit/3e2ec74))
+- 优化系列查看器的原图归属、失败任务详情与删除、重试状态，以及编辑器退出动画和回归测试。([ec1f5a1](https://github.com/YuSaZh/Imagine./commit/ec1f5a1)、[3e2ec74](https://github.com/YuSaZh/Imagine./commit/3e2ec74))
 
 ### 文档
 
-- 精简项目 README，补充日文指南，统一主要部署与使用入口。([131ce13](https://github.com/YuSaZh/imagine-media-studio/commit/131ce13))
+- 精简项目 README，补充日文指南，统一主要部署与使用入口。([131ce13](https://github.com/YuSaZh/Imagine./commit/131ce13))
 
 ### 验收与发布可靠性
 
-- 普通后端和文档 PR 验证代表性桌面与手机尺寸；前端、共享代码和测试基础设施改动，以及 main/发版提交，验证全部八个尺寸。保留一次重试并单独记录不稳定用例。([4d33135](https://github.com/YuSaZh/imagine-media-studio/commit/4d33135))
+- 普通后端和文档 PR 验证代表性桌面与手机尺寸；前端、共享代码和测试基础设施改动，以及 main/发版提交，验证全部八个尺寸。保留一次重试并单独记录不稳定用例。([4d33135](https://github.com/YuSaZh/Imagine./commit/4d33135))
 - 系列封面测试等待应用查询完成，不再依赖可能丢失的浏览器网络结束事件；失败测试的清理保留原始错误，避免二次死锁。
 
 - 浏览器测试清理上一场景残留的任务，并按实际界面确认删除失败任务，修复整套测试中出现的任务数量及删除断言失败。
@@ -84,7 +84,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.2.0...v0.2.1](https://github.com/YuSaZh/imagine-media-studio/compare/v0.2.0...v0.2.1)
+完整变更：[v0.2.0...v0.2.1](https://github.com/YuSaZh/Imagine./compare/v0.2.0...v0.2.1)
 
 ## [0.2.0] - 2026-09-22
 
@@ -94,8 +94,8 @@ All notable changes to Imagine. are documented in this file.
 
 ### 重点更新
 
-- **主题与语言按账号保存：** 支持浅色、深色、跟随系统，以及简体中文、English、日本語；切换保留草稿和当前浮层，不改变作品颜色或用户内容。([0a16228](https://github.com/YuSaZh/imagine-media-studio/commit/0a16228))
-- **进入编辑器更平滑：** 缩略图放大的同时主界面渐隐，原图解码完成后在相同位置替换；慢加载期间持续显示预览，减少加载闪屏。([1557cf8](https://github.com/YuSaZh/imagine-media-studio/commit/1557cf8))
+- **主题与语言按账号保存：** 支持浅色、深色、跟随系统，以及简体中文、English、日本語；切换保留草稿和当前浮层，不改变作品颜色或用户内容。([0a16228](https://github.com/YuSaZh/Imagine./commit/0a16228))
+- **进入编辑器更平滑：** 缩略图放大的同时主界面渐隐，原图解码完成后在相同位置替换；慢加载期间持续显示预览，减少加载闪屏。([1557cf8](https://github.com/YuSaZh/Imagine./commit/1557cf8))
 - **模式切换与手机输入更连贯：** 图片/视频及视频生成模式使用滑动指示器；手机主界面仅在输入框聚焦或已有内容时展开完整输入区域。
 - **选择模式保留系列：** 是否合并系列继续遵循偏好设置；选中系列卡片时，批量收藏、加入项目、删除作用于整个系列。
 
@@ -107,7 +107,7 @@ All notable changes to Imagine. are documented in this file.
 
 ### 发布流程
 
-- 正式发布复用相同提交的 main CI 结果，标签流程等待已有检查而不重复运行源码验收；实际候选镜像仍按不可变 digest 验证，通过后直接晋升同一镜像。([1557cf8](https://github.com/YuSaZh/imagine-media-studio/commit/1557cf8))
+- 正式发布复用相同提交的 main CI 结果，标签流程等待已有检查而不重复运行源码验收；实际候选镜像仍按不可变 digest 验证，通过后直接晋升同一镜像。([1557cf8](https://github.com/YuSaZh/Imagine./commit/1557cf8))
 
 ### 升级说明与限制
 
@@ -119,7 +119,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.9...v0.2.0](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.9...v0.2.0)
+完整变更：[v0.1.9...v0.2.0](https://github.com/YuSaZh/Imagine./compare/v0.1.9...v0.2.0)
 
 ## [0.1.9] - 2026-09-20
 
@@ -129,9 +129,9 @@ All notable changes to Imagine. are documented in this file.
 
 ### 重点更新
 
-- **生成中即可打开系列：** 同次并发生图从提交时合并为一个入口，无需等待首张结果；点击进入后显示各任务状态，结果完成后即可查看，刷新页面也能恢复。([20776a9](https://github.com/YuSaZh/imagine-media-studio/commit/20776a9))
+- **生成中即可打开系列：** 同次并发生图从提交时合并为一个入口，无需等待首张结果；点击进入后显示各任务状态，结果完成后即可查看，刷新页面也能恢复。([20776a9](https://github.com/YuSaZh/Imagine./commit/20776a9))
 - **参考图加入系列可选：** “按照系列显示”下新增“上传参考图加入系列”子选项，开启后与生成结果合并，关闭时独立显示；设置按账号保存，并同步应用于列表和查看器。
-- **缩略图更早准备并复用缓存：** 视口上下 1000px 内的缩略图低优先级预加载，可见图片保持高优先级；补齐浏览器和 PWA 缓存校验，减少往返滚动时的重复下载。([fb6ee34](https://github.com/YuSaZh/imagine-media-studio/commit/fb6ee34))
+- **缩略图更早准备并复用缓存：** 视口上下 1000px 内的缩略图低优先级预加载，可见图片保持高优先级；补齐浏览器和 PWA 缓存校验，减少往返滚动时的重复下载。([fb6ee34](https://github.com/YuSaZh/Imagine./commit/fb6ee34))
 
 ### 生成与系列浏览
 
@@ -155,7 +155,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.8...v0.1.9](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.8...v0.1.9)
+完整变更：[v0.1.8...v0.1.9](https://github.com/YuSaZh/Imagine./compare/v0.1.8...v0.1.9)
 
 ## [0.1.8] - 2026-09-12
 
@@ -165,8 +165,8 @@ All notable changes to Imagine. are documented in this file.
 
 ### 重点更新
 
-- **逐张显示作品：** 元数据加载期间显示瀑布流占位，缩略图各自完成后独立显示；尚未进入可视区的卡片不提前请求图片，慢图或失败图片不会阻塞其他作品。([d9341de](https://github.com/YuSaZh/imagine-media-studio/commit/d9341de))
-- **双端浮动详情：** 桌面详情加宽并覆盖在画面上方，手机卡片按内容增高且受视口上限约束；长提示词充分利用剩余空间，展开后卡片尺寸保持不变，在内部滚动查看。([392811f](https://github.com/YuSaZh/imagine-media-studio/commit/392811f))
+- **逐张显示作品：** 元数据加载期间显示瀑布流占位，缩略图各自完成后独立显示；尚未进入可视区的卡片不提前请求图片，慢图或失败图片不会阻塞其他作品。([d9341de](https://github.com/YuSaZh/Imagine./commit/d9341de))
+- **双端浮动详情：** 桌面详情加宽并覆盖在画面上方，手机卡片按内容增高且受视口上限约束；长提示词充分利用剩余空间，展开后卡片尺寸保持不变，在内部滚动查看。([392811f](https://github.com/YuSaZh/Imagine./commit/392811f))
 - **并发生图系列：** 偏好新增“并发生图作为系列显示”，开启父级系列显示后，可将主界面同次生成的多张图片合并为系列，保留编辑来源关系及项目、收藏和隐私过滤。
 - **首页优先加载：** 移除刷新时闪现的“Checking access”页面，保留登录校验；编辑器模块在首页数据及可见图片完成后利用空闲时间预加载，合并连续事件触发的数据刷新，减少重复请求。
 
@@ -175,7 +175,7 @@ All notable changes to Imagine. are documented in this file.
 - 详情中的“作品信息”和关闭按钮固定在卡片顶部，滚动正文时仍可操作；手机点击卡片外部关闭详情，卡片自身的项目菜单继续可用。
 - 提示词折叠行数由卡片最大高度及其他信息占用空间计算，末尾显示省略号，提供展开、收起和完整复制；短提示词不强制折叠，滚动区域隐藏滚动条。
 - 创建时间上方新增生成耗时；依照任务起止记录显示，无任务记录的上传作品显示占位符。
-- 手机编辑器支持边缘滑动退出，移除不适用的分页按钮，保留媒体缩放、视频原生操作与减少动效偏好。([ef94e15](https://github.com/YuSaZh/imagine-media-studio/commit/ef94e15))
+- 手机编辑器支持边缘滑动退出，移除不适用的分页按钮，保留媒体缩放、视频原生操作与减少动效偏好。([ef94e15](https://github.com/YuSaZh/Imagine./commit/ef94e15))
 
 ### 状态与生成可靠性
 
@@ -187,7 +187,7 @@ All notable changes to Imagine. are documented in this file.
 ### 升级说明与限制
 
 - 启动时自动应用新增迁移 `0011_generation_batches.sql`，保留已有账号、项目、媒体和设置。迁移只记录此后创建的生图批次，不推断历史作品属于同一次生成；并发生图系列选项默认关闭。
-- 数据库迁移仅支持向前升级。需要回退旧版本时，应使用已验证兼容的数据或升级前归档，具体流程见[发布指南](https://github.com/YuSaZh/imagine-media-studio/blob/v0.1.8/RELEASE.md)。
+- 数据库迁移仅支持向前升级。需要回退旧版本时，应使用已验证兼容的数据或升级前归档，具体流程见[发布指南](https://github.com/YuSaZh/Imagine./blob/v0.1.8/RELEASE.md)。
 - 编辑器预加载仍取决于网络和浏览器空闲情况；直接进入编辑器时若模块尚未就绪，仍可能短暂显示加载状态。
 - 发布验证使用隔离数据库、Mock Provider 和测试素材，不代表真实付费提供商或实体设备 PWA 验收。
 
@@ -195,7 +195,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.7...v0.1.8](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.7...v0.1.8)
+完整变更：[v0.1.7...v0.1.8](https://github.com/YuSaZh/Imagine./compare/v0.1.7...v0.1.8)
 
 ## [0.1.7] - 2026-09-10
 
@@ -205,7 +205,7 @@ All notable changes to Imagine. are documented in this file.
 
 ### 重点更新
 
-- **连续编辑与系列浏览：** 原图、衍生图片和视频、进行中及失败任务集中在编辑器系列栏中；重新打开任意成员可恢复系列，生成结果完成后自动选中。([e5b02c1](https://github.com/YuSaZh/imagine-media-studio/commit/e5b02c1))
+- **连续编辑与系列浏览：** 原图、衍生图片和视频、进行中及失败任务集中在编辑器系列栏中；重新打开任意成员可恢复系列，生成结果完成后自动选中。([e5b02c1](https://github.com/YuSaZh/Imagine./commit/e5b02c1))
 - **按系列整理作品：** 偏好新增“按照系列显示”，支持最新生成、最近查看和原图三种封面；卡片显示成员数量，切换作品后最近查看封面及时更新。
 - **双端导航衔接：** 桌面可在系列边界继续浏览相邻作品，手机横向切换系列成员、纵向切换作品；滑动预览跟随手指，并遵循减少动效设置。
 - **统一 HTTP 开关：** 管理员可在“设置 → 偏好”切换“是否允许 HTTP 内容”，同时控制提供商调用和生成结果下载，保存后立即生效并跨重启保留。
@@ -233,7 +233,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.6...v0.1.7](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.6...v0.1.7)
+完整变更：[v0.1.6...v0.1.7](https://github.com/YuSaZh/Imagine./compare/v0.1.6...v0.1.7)
 
 ## [0.1.6] - 2026-09-09
 
@@ -248,7 +248,7 @@ All notable changes to Imagine. are documented in this file.
 - **生成状态：** 进行中的卡片显示“生成中”和已过秒数，完成作品在模型 ID 后显示 `48s`、`1m10s` 等耗时。
 - **启动可靠性：** 移除应用运行锁及其残留锁处理，不再因旧运行锁阻止应用启动。
 
-功能与修复见 [99b314f](https://github.com/YuSaZh/imagine-media-studio/commit/99b314f)。
+功能与修复见 [99b314f](https://github.com/YuSaZh/Imagine./commit/99b314f)。
 
 ### 项目与模型管理
 
@@ -272,7 +272,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.4...v0.1.6](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.4...v0.1.6)
+完整变更：[v0.1.4...v0.1.6](https://github.com/YuSaZh/Imagine./compare/v0.1.4...v0.1.6)
 
 ## [0.1.4] - 2026-09-09
 
@@ -287,7 +287,7 @@ All notable changes to Imagine. are documented in this file.
 - **隐私项目：** 隐私项目的作品从最近创作和全部作品中隐藏，项目列表不直接展示内部内容。
 - **更简洁的双端界面：** 媒体卡片可复制完整提示词，新增返回顶部按钮，修复选择边框被裁切、移动端输入框聚焦跳动和模式按钮点击区域问题。
 
-本次功能与修复见 [1e36686](https://github.com/YuSaZh/imagine-media-studio/commit/1e36686)。
+本次功能与修复见 [1e36686](https://github.com/YuSaZh/Imagine./commit/1e36686)。
 
 ### 编辑与生成
 
@@ -305,7 +305,7 @@ All notable changes to Imagine. are documented in this file.
 
 ### 升级说明与限制
 
-- 启动时应用新增的视频来源和项目隐私迁移；既有项目默认公开，账号、素材和模型配置保持保留。升级与回退流程见 [发布指南](https://github.com/YuSaZh/imagine-media-studio/blob/v0.1.4/RELEASE.md)。
+- 启动时应用新增的视频来源和项目隐私迁移；既有项目默认公开，账号、素材和模型配置保持保留。升级与回退流程见 [发布指南](https://github.com/YuSaZh/Imagine./blob/v0.1.4/RELEASE.md)。
 - Mock Provider 默认关闭，仅显式启用测试配置时提供，不再自动出现在普通部署中。
 - 兼容模板只启用当前协议能表达的能力，不保证所有上游渠道均支持。非原生蒙版是视觉范围提示，不保证精确局部编辑；临时帧清理后需要确认视频位置并重新发送，不自动重新生成。
 - 本地通过全量质量检查、八视口延迟截帧验证和编辑器回归；上游协议使用注入传输与 Mock 验证，不代表已完成真实付费渠道验收。
@@ -314,7 +314,7 @@ All notable changes to Imagine. are documented in this file.
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.3...v0.1.4](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.3...v0.1.4)
+完整变更：[v0.1.3...v0.1.4](https://github.com/YuSaZh/Imagine./compare/v0.1.3...v0.1.4)
 
 ## [0.1.3] - 2026-09-07
 
@@ -329,18 +329,18 @@ All notable changes to Imagine. are documented in this file.
 - **兼容更多 Chat 生图返回：** 支持 CPA 结构化图片、New API Markdown 内嵌图片及其流式分片，减少有图片返回却报“无图片结果”的情况。
 - **大图处理不再误报协议错误：** 修复大 Base64 图片校验时的栈溢出，保留完整原图和缩略图处理，并区分内部处理失败与模型协议不可用。
 
-以上修复见 [39b4672](https://github.com/YuSaZh/imagine-media-studio/commit/39b4672)。
+以上修复见 [39b4672](https://github.com/YuSaZh/Imagine./commit/39b4672)。
 
 ### 生图与协议兼容
 
-- 已知模型自动匹配对应协议，保留显式覆盖配置；支持经过服务器校验的自定义模型 ID，以及 OpenAI 兼容接口中的 Gemini 别名。([c52cbea](https://github.com/YuSaZh/imagine-media-studio/commit/c52cbea), [8b36c78](https://github.com/YuSaZh/imagine-media-studio/commit/8b36c78))
+- 已知模型自动匹配对应协议，保留显式覆盖配置；支持经过服务器校验的自定义模型 ID，以及 OpenAI 兼容接口中的 Gemini 别名。([c52cbea](https://github.com/YuSaZh/Imagine./commit/c52cbea), [8b36c78](https://github.com/YuSaZh/Imagine./commit/8b36c78))
 - 按渠道协议传递原生 `1K / 2K / 4K` 或映射后的像素尺寸；例如 16:9 的 4K 映射为 `3840x2160`，竖向画幅交换宽高。Chat 适配同时提供 CPA 和 New API 所需的图片配置字段。
-- 在可明确识别的图片接口不兼容错误下支持 Chat 协议回退，保留原有参数约束；不因超时、限流或不明确的失败盲目重新生成。([2598518](https://github.com/YuSaZh/imagine-media-studio/commit/2598518))
+- 在可明确识别的图片接口不兼容错误下支持 Chat 协议回退，保留原有参数约束；不因超时、限流或不明确的失败盲目重新生成。([2598518](https://github.com/YuSaZh/Imagine./commit/2598518))
 - Base64 使用线性规范校验，在解码前检查大小；已有格式、字节数和像素上限仍然生效。新增超过 10 MiB 的合成图片落盘及 64 MiB 校验边界回归。
 
 ### 桌面与移动端
 
-- 桌面图库独立滚动，保持页头和生成栏稳定；视频模式的快捷分辨率、时长与自定义参数可在更多设置中同步修改。([294ba93](https://github.com/YuSaZh/imagine-media-studio/commit/294ba93), [65680a9](https://github.com/YuSaZh/imagine-media-studio/commit/65680a9))
+- 桌面图库独立滚动，保持页头和生成栏稳定；视频模式的快捷分辨率、时长与自定义参数可在更多设置中同步修改。([294ba93](https://github.com/YuSaZh/Imagine./commit/294ba93), [65680a9](https://github.com/YuSaZh/Imagine./commit/65680a9))
 - 分辨率统一为 `auto / 1K / 2K / 4K / 自定义`。关闭自定义尺寸比例锁时，画幅立即切为 `auto`，保留当前尺寸；修改宽高后在失焦或应用时对齐到最近的 16 倍数。模型固定的画幅和分辨率规则仍受保护。
 - 原生下拉框改为共享选择卡片，覆盖生成设置、模型与连接管理、偏好、任务筛选和适配器格式。支持键盘导航、选中状态、长文本换行及滚动。
 - 生成数量和其他设置继续按账号、项目、图片/视频类型及模型分别记忆。
@@ -351,20 +351,20 @@ All notable changes to Imagine. are documented in this file.
 - “从模型能力载入”按所选模型协议补全内置能力，保留已编辑的参数和显式配置；修复跨渠道模型能力为空的问题。未识别模型会明确提示手动配置。
 - 添加模型时可以搜索远端目录的名称或 ID，并通过键盘选择。
 
-相关提交：[39b4672](https://github.com/YuSaZh/imagine-media-studio/commit/39b4672)。
+相关提交：[39b4672](https://github.com/YuSaZh/Imagine./commit/39b4672)。
 
 ### 升级说明与限制
 
 - 本版本没有新增数据库迁移，继续使用单容器、SQLite 和持久化 `/data`；升级时保留原有数据、用户权限和 `APP_SECRET`，具体步骤见版本对应的发布指南。
 - 张数表示独立任务数量，实际同时执行的数量由服务器队列限制；不等于向上游发送一个多图批量请求。原有模型 `count` 规则不再控制该数量。
 - 可用画幅、分辨率和返回的实际图片尺寸仍取决于模型与渠道；Chat 生图仅接受能映射到受支持预设的像素尺寸。自动化 fixture 通过不代表所有真实渠道验收。
-- Test Image 支持在主分支 CI 通过后手动发布经过摘要验证的多架构测试镜像，与稳定版本发布及具体部署分开执行。([4047cb2](https://github.com/YuSaZh/imagine-media-studio/commit/4047cb2), [294ba93](https://github.com/YuSaZh/imagine-media-studio/commit/294ba93))
+- Test Image 支持在主分支 CI 通过后手动发布经过摘要验证的多架构测试镜像，与稳定版本发布及具体部署分开执行。([4047cb2](https://github.com/YuSaZh/Imagine./commit/4047cb2), [294ba93](https://github.com/YuSaZh/Imagine./commit/294ba93))
 
 ### 贡献者
 
 - [@YuSaZh](https://github.com/YuSaZh)
 
-完整变更：[v0.1.2...v0.1.3](https://github.com/YuSaZh/imagine-media-studio/compare/v0.1.2...v0.1.3)
+完整变更：[v0.1.2...v0.1.3](https://github.com/YuSaZh/Imagine./compare/v0.1.2...v0.1.3)
 
 ## [0.1.2] - 2026-09-06
 
@@ -473,4 +473,4 @@ See [Hold.md](./Hold.md) for the authoritative evidence and limitation record,
 and [RELEASE.md](./RELEASE.md) for installation, upgrade, recovery, and image
 verification instructions.
 
-[0.1.0]: https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.0
+[0.1.0]: https://github.com/YuSaZh/Imagine./releases/tag/v0.1.0

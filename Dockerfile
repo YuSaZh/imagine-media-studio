@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS base
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS base
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -8,31 +8,67 @@ WORKDIR /workspace
 
 RUN corepack enable && corepack prepare pnpm@11.23.0 --activate
 
-FROM base AS dependencies
+FROM base AS build-downloads
 
 RUN apt-get update \
   && apt-get install --yes --no-install-recommends build-essential python3 \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN --mount=type=cache,id=pnpm-build-store,target=/pnpm/store pnpm fetch
+
+FROM build-downloads AS dependencies
+COPY package.json ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/provider-contract/package.json packages/provider-contract/package.json
 COPY packages/shared/package.json packages/shared/package.json
 COPY packages/testkit/package.json packages/testkit/package.json
 
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-  pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm-build-store,target=/pnpm/store \
+  pnpm install --offline --frozen-lockfile
 
 FROM dependencies AS build
 
 COPY . .
 RUN pnpm build
-RUN pnpm --filter @imagine/server --prod deploy --legacy /opt/imagine-server
-RUN mkdir -p /opt/imagine-server/public /opt/imagine-server/migrations \
-  && cp -R apps/web/dist/. /opt/imagine-server/public/ \
-  && cp -R apps/server/migrations/. /opt/imagine-server/migrations/ \
-  && cp LICENSE THIRD_PARTY_NOTICES.md /opt/imagine-server/
+RUN mkdir -p /opt/imagine-common/public /opt/imagine-common/migrations \
+  && cp -R apps/web/dist/. /opt/imagine-common/public/ \
+  && cp -R apps/server/migrations/. /opt/imagine-common/migrations/ \
+  && cp LICENSE THIRD_PARTY_NOTICES.md /opt/imagine-common/
+
+# Install native runtime modules on the target architecture. Application JS/CSS
+# above is compiled once on BUILDPLATFORM and never carries host node_modules.
+FROM node:24-bookworm-slim AS production-downloads
+ARG TARGETARCH
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+WORKDIR /workspace
+RUN corepack enable && corepack prepare pnpm@11.23.0 --activate \
+  && apt-get update \
+  && apt-get install --yes --no-install-recommends build-essential python3 \
+  && rm -rf /var/lib/apt/lists/*
+ENV npm_config_nodedir=/usr/local
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
+# Keep the production store in the exported layer. Registry cache exports do
+# not contain mutable cache mounts, and offline deploy must work after import.
+RUN pnpm fetch --prod
+
+FROM production-downloads AS production-dependencies
+COPY package.json ./
+COPY apps/server/package.json apps/server/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/provider-contract/package.json packages/provider-contract/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/testkit/package.json packages/testkit/package.json
+COPY --from=build /workspace/packages/provider-contract/dist/ packages/provider-contract/dist/
+COPY --from=build /workspace/packages/shared/dist/ packages/shared/dist/
+COPY --from=build /workspace/apps/server/dist/ apps/server/dist/
+COPY --from=build /workspace/apps/server/src/ apps/server/src/
+COPY --from=build /workspace/apps/server/migrations/ apps/server/migrations/
+RUN --network=none \
+  pnpm install --prod --offline --frozen-lockfile \
+  && pnpm --config.injectWorkspacePackages=true --filter @imagine/server --prod deploy --offline /opt/imagine-server
 
 FROM node:24-bookworm-slim AS runtime
 
@@ -43,8 +79,8 @@ ARG OCI_VERSION
 LABEL org.opencontainers.image.title="Imagine." \
   org.opencontainers.image.description="A lightweight self-hosted media generation WebUI" \
   org.opencontainers.image.licenses="MIT" \
-  org.opencontainers.image.source="https://github.com/YuSaZh/imagine-media-studio" \
-  org.opencontainers.image.url="https://github.com/YuSaZh/imagine-media-studio" \
+  org.opencontainers.image.source="https://github.com/YuSaZh/Imagine." \
+  org.opencontainers.image.url="https://github.com/YuSaZh/Imagine." \
   org.opencontainers.image.created="${OCI_CREATED}" \
   org.opencontainers.image.revision="${OCI_REVISION}" \
   org.opencontainers.image.version="${OCI_VERSION}"
@@ -59,7 +95,8 @@ ENV WEB_DIST_DIR=/app/public
 ENV NODE_ENV=production
 
 WORKDIR /app
-COPY --from=build --chown=node:node /opt/imagine-server/ /app/
+COPY --from=production-dependencies --chown=node:node /opt/imagine-server/ /app/
+COPY --from=build --chown=node:node /opt/imagine-common/ /app/
 RUN mkdir -p /data && chown node:node /data
 
 USER node

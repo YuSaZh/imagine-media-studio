@@ -108,7 +108,7 @@ No download or restore endpoint is exposed in this milestone.
 
 The SQLite milestone commit `c0fa70f` passed the recorded GitHub Actions run
 `33183142103`. Final commit `4dc4432` passed all 17 jobs in
-[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872).
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/Imagine./actions/runs/33216883872).
 Its quality job reran the complete unit/type/build gate, and its isolated
 single-container smoke exercised the released migration chain through `0007`,
 legacy upgrade, authenticated integrity/backup endpoints, backup permissions and

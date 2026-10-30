@@ -150,7 +150,7 @@ small interval between checks remains outside the atomicity boundary.
 ## Remote acceptance
 
 Commit `4dc4432` passed all 17 jobs in
-[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872).
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/Imagine./actions/runs/33216883872).
 The isolated single-container job created and verified a full archive, restored
 it to an absent task-owned root, checked standard directory/file modes and
 database/media/adapter integrity, started the server against the restored root,

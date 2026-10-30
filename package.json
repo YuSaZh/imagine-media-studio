@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "ci": "node .github/scripts/ci.mjs full",
+    "ci": "node .github/scripts/ci-toolchain.mjs full",
     "data-archive": "pnpm --filter @imagine/server data-archive",
     "dev": "pnpm --parallel --filter @imagine/web --filter @imagine/server dev",
     "lint": "eslint .",
@@ -20,9 +20,9 @@
     "test:release": "node .github/scripts/release-workflow.test.mjs",
     "test:e2e": "playwright test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "ci:quality": "node .github/scripts/ci.mjs quality",
-    "ci:browser": "node .github/scripts/ci.mjs browser",
-    "ci:docker": "node .github/scripts/ci.mjs docker"
+    "ci:quality": "node .github/scripts/ci-toolchain.mjs quality",
+    "ci:browser": "node .github/scripts/ci-toolchain.mjs browser",
+    "ci:docker": "node .github/scripts/ci-toolchain.mjs docker"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

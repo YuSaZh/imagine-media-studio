@@ -174,7 +174,7 @@ boundaries, administrator/CSRF protection, restart persistence, no-store/CSP
 headers, safe DTO projection, and bounded repair outcome invariants.
 
 Commit `4dc4432` passed all 17 jobs in
-[GitHub Actions run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872).
+[GitHub Actions run 33216883872](https://github.com/YuSaZh/Imagine./actions/runs/33216883872).
 The quality job reran the complete media audit, queue, startup reconciliation,
 worker, route, and server regression suite. The isolated single-container smoke
 verified migration `0007`, authenticated bounded media reporting, queue

@@ -47,3 +47,4 @@ progress.md
 /preview-assets/
 
 ci-results/
+/.ci-cache/

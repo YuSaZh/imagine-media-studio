@@ -51,7 +51,7 @@ test('editor exit shrinks the current image into its gallery card while the work
   await expect(page).not.toHaveURL(/asset=/);
 });
 
-test('video editor exit captures the current decoded frame', async ({ page, request }) => {
+test('video editor exit captures the current decoded frame', { tag: '@workflow' }, async ({ page, request }) => {
   test.skip(![1440, 390].includes(page.viewportSize()!.width));
   const response = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'exit-video.mp4', mimeType: 'video/mp4', buffer: await readFile(resolve('fixtures/providers/mock/mock-video-v1/tiny.mp4')) } } });
   expect(response.status()).toBe(201);

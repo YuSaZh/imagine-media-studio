@@ -133,6 +133,8 @@ jobs:
             OCI_VERSION=${{ needs.validate.outputs.version }}
           sbom: true
           provenance: mode=max
+          cache-from: type=registry,ref=${{ env.IMAGE }}-buildcache:release
+          cache-to: type=registry,ref=${{ env.IMAGE }}-buildcache:release,mode=max
 
       - name: Attest pushed image digest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4

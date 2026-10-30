@@ -4,7 +4,7 @@ import { enterSelection, open, upload, resetWorkspace } from './workspace-helper
 
 test.beforeEach(async ({ request, page }) => resetWorkspace(request, page));
 
-test('series project moves include filtered mixed media and retry without moving only the cover', async ({ page, request }) => {
+test('series project moves include filtered mixed media and retry without moving only the cover', { tag: '@workflow' }, async ({ page, request }) => {
   const photo = await upload(request, 'coast');
   const second = await upload(request, 'mountain');
   const videoResponse = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: 'series-video.mp4', mimeType: 'video/mp4', buffer: await readFile('fixtures/providers/mock/mock-video-v1/tiny.mp4') } } });
@@ -50,7 +50,7 @@ test('series project moves include filtered mixed media and retry without moving
   await expect(picker.getByRole('button', { name: 'Move destination 当前项目', exact: true })).toBeDisabled();
 });
 
-test('series project moves preserve concurrent batch membership', async ({ page, request }) => {
+test('series project moves preserve concurrent batch membership', { tag: '@workflow' }, async ({ page, request }) => {
   const created = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Move concurrent series', count: 2, inputs: [] } });
   expect(created.status()).toBe(202);
   const { jobs } = await created.json();
@@ -78,7 +78,7 @@ test('series project moves preserve concurrent batch membership', async ({ page,
 });
 
 for (const failure of ['truncated', 'empty', 'unavailable']) {
-  test(`series project moves block ${failure} membership reads and recover on retry`, async ({ page, request }) => {
+  test(`series project moves block ${failure} membership reads and recover on retry`, { tag: '@workflow' }, async ({ page, request }) => {
     const first = await upload(request, 'coast'), second = await upload(request, 'mountain');
     expect((await request.post('/internal/assets/series', { data: { assetIds: [first.id, second.id] } })).status()).toBe(204);
     const destination = (await (await request.post('/internal/collections', { data: { name: 'Complete destination' } })).json()).collection;
@@ -216,7 +216,7 @@ test('failed series menu and compact task disclosure support deletion', async ({
 });
 
 
-test('manual series accept video-only and mixed media selections', async ({ page, request }) => {
+test('manual series accept video-only and mixed media selections', { tag: '@workflow' }, async ({ page, request }) => {
   const videos = [];
   for (const name of ['first', 'second']) {
     const response = await request.post('/internal/assets/upload', { multipart: { role: 'upload', file: { name: `${name}.mp4`, mimeType: 'video/mp4', buffer: await readFile('fixtures/providers/mock/mock-video-v1/tiny.mp4') } } });
@@ -247,7 +247,7 @@ test('manual series accept video-only and mixed media selections', async ({ page
 });
 
 for (const lostResponse of [false, true]) {
-  test(`series deletion retries remaining assets after the cover disappears (lost response=${lostResponse})`, async ({ page, request }) => {
+  test(`series deletion retries remaining assets after the cover disappears (lost response=${lostResponse})`, { tag: '@workflow' }, async ({ page, request }) => {
     const first = await upload(request, 'coast');
     const second = await upload(request, 'mountain');
     expect((await request.post('/internal/assets/series', { data: { assetIds: [first.id, second.id] } })).status()).toBe(204);
@@ -286,7 +286,7 @@ for (const lostResponse of [false, true]) {
   });
 }
 
-test('series deletion retries a failed task after all covers were removed', async ({ page, request }) => {
+test('series deletion retries a failed task after all covers were removed', { tag: '@workflow' }, async ({ page, request }) => {
   const created = await request.post('/internal/jobs', { data: { providerId: 'mock', modelId: 'mock-image-v1', operation: 'image.generate', prompt: 'Series task retry', count: 2, inputs: [] } });
   expect(created.status()).toBe(202);
   const { jobs } = await created.json();
@@ -327,7 +327,7 @@ test('series deletion retries a failed task after all covers were removed', asyn
   expect(reads).toBe(1); expect(attempts).toBe(2);
 });
 
-test('merge rejection preserves selection and explains the series limit', async ({ page, request }) => {
+test('merge rejection preserves selection and explains the series limit', { tag: '@workflow' }, async ({ page, request }) => {
   const first = await upload(request, 'coast'); const second = await upload(request, 'mountain');
   await page.route('**/internal/assets/series', route => route.fulfill({ status: 409, json: { error: 'series_too_large' } }));
   await open(page, '/imagine', false);

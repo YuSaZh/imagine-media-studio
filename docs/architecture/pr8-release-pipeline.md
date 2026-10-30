@@ -124,7 +124,7 @@ failed reads, notes cleanup, and per-platform SPDX/SLSA validation.
 
 ## Remote release evidence
 
-[Release run 33215005527](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33215005527)
+[Release run 33215005527](https://github.com/YuSaZh/Imagine./actions/runs/33215005527)
 passed all four jobs for tag commit `967b350`: multi-platform candidate publish,
 exact-digest amd64 smoke, stable-tag promotion, and GitHub Release publication.
 Tags `0.1.0`, `0.1`, `latest`, and
@@ -134,11 +134,11 @@ The index contains `linux/amd64` and `linux/arm64` images plus their BuildKit
 attestation manifests, and the GitHub artifact attestation verifies against the
 repository.
 
-The [v0.1.0 GitHub Release](https://github.com/YuSaZh/imagine-media-studio/releases/tag/v0.1.0)
+The [v0.1.0 GitHub Release](https://github.com/YuSaZh/Imagine./releases/tag/v0.1.0)
 is the non-draft, non-prerelease Latest release. Its corrected verifier asset is
 3,681 bytes with SHA-256
 `526c6799d3b4bb1e9098e9068bd66521d8bdba06d8df01381dd6dc10c371ee67`
-and matches commit `4dc4432`. [Fix CI run 33216883872](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33216883872)
+and matches commit `4dc4432`. [Fix CI run 33216883872](https://github.com/YuSaZh/Imagine./actions/runs/33216883872)
 passed all 17 jobs, and the corrected helper validates the published digest's
 real amd64/arm64 SPDX and SLSA v1 output.
 

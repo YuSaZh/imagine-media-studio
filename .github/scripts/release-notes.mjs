@@ -38,7 +38,7 @@ export function formatReleaseNotes(changelog, version, digest) {
     `Pull the tested multi-platform image by digest:\n\n` +
     `\`${RELEASE_IMAGE}@${digest}\`\n\n` +
     `Installation, upgrade, rollback, and attestation verification are documented in ` +
-    `[RELEASE.md](https://github.com/YuSaZh/imagine-media-studio/blob/v${version}/RELEASE.md).\n`;
+    `[RELEASE.md](https://github.com/YuSaZh/Imagine./blob/v${version}/RELEASE.md).\n`;
 }
 
 export function resolveTaskOwnedReleaseNotesPath(runnerTemp) {

@@ -1,0 +1,9 @@
+{
+  "nodeImage": "node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df",
+  "browserImage": "mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e",
+  "dockerImage": "docker:29.7.1-cli@sha256:27a51d5ab1cd38d9eeaba7b415b8c07bc10c31e1cf1ec8d78f6413fcfab3f44f",
+  "pnpmVersion": "11.23.0",
+  "playwrightVersion": "1.62.1",
+  "fontsNotoCoreVersion": "20201225-2",
+  "fontsNotoCjkVersion": "1:20230817+repack1-3"
+}

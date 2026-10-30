@@ -4,8 +4,9 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import projects from '../ci-projects.json' with { type: 'json' };
+import coverage from '../browser-coverage.json' with { type: 'json' };
 
-export const representativeProjects = ['workspace-1440x900', 'workspace-390x844'];
+export const representativeProjects = coverage.representativeProjects;
 export function selectProjects(event, files = []) {
   // Unknown scope fails open to more coverage, never to fewer release gates.
   if (event !== 'pull_request' || files.length === 0) return projects;

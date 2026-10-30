@@ -8,6 +8,7 @@
 | Topic | Entry |
 | --- | --- |
 | Contributor and Agent workflow | [CONTRIBUTING.md](../CONTRIBUTING.md), [AGENTS.md](../AGENTS.md), and its directory guide index |
+| Pinned local/GitHub CI environment, scheduling and build caches | [CI toolchain](../.github/ci/README.md) |
 | Runtime architecture and enduring boundaries | [Architecture overview](./architecture/overview.md) |
 | Production UI and desktop/mobile behavior | [Workspace specification](./design-spec/workspace.md) |
 | Built-in media models, aliases and operation limits | [Model capabilities](./model-capabilities.md) |

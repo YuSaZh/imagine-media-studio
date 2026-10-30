@@ -53,7 +53,7 @@ test('sidebar and mobile header search animate and respect reduced motion', asyn
   await expect(animated).toHaveCSS('transition-duration', '0s');
 });
 
-test('site identity uploads persist and appear in the header favicon and login', async ({ page }, info) => {
+test('site identity uploads persist and appear in the header favicon and login', { tag: '@workflow' }, async ({ page }, info) => {
   await open(page, '/settings', false);
   const appearance = page.getByRole('region', { name: '网站外观', exact: true });
   await appearance.getByRole('textbox', { name: '网站名称', exact: true }).fill('星海 Studio');

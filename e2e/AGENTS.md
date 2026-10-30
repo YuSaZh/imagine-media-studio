@@ -19,6 +19,12 @@ Read the [root guide](../AGENTS.md), [frontend guide](../apps/web/AGENTS.md), an
   shared layout, navigation, PWA, or geometry changes need all configured projects.
   Include narrow screens, long labels, mode switching, popovers, and scroll behavior
   when affected. Keep accessible-name and keyboard/focus checks meaningful.
+- Browser acceptance uses full scenarios on 1440×900 and 390×844, with responsive,
+  geometry, accessibility, animation, scroll and touch cases on all eight projects.
+  A reviewed viewport-independent business scenario may use `{ tag: '@workflow' }`
+  to run only on the two full projects. Mixed business/layout cases keep all
+  viewports; do not remove their assertions to fit a test-count target. Untagged
+  cases default to all eight, and the release contract verifies real collection.
 - Normal workflow tests block Service Workers; PWA tests deliberately enable them.
   Do not remove offline/cache/auth assertions to reduce test flakiness.
 - CI permits one retry and reports flakes separately; a failed retry still blocks

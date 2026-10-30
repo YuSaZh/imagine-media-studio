@@ -79,13 +79,13 @@ The final development-host checks used only non-runtime validation. No applicati
 
 ## Remote Acceptance
 
-GitHub Actions run [32877168438](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32877168438) completed all final PR4 jobs successfully:
+GitHub Actions run [32877168438](https://github.com/YuSaZh/Imagine./actions/runs/32877168438) completed all final PR4 jobs successfully:
 
 | Job | Result | Evidence |
 |---|---|---|
-| Quality | Pass | [Job 97897808924](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32877168438/job/97897808924) |
-| Single-container smoke | Pass | [Job 97897808696](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32877168438/job/97897808696) |
-| Playwright | Pass | [Job 97897808923](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32877168438/job/97897808923) |
+| Quality | Pass | [Job 97897808924](https://github.com/YuSaZh/Imagine./actions/runs/32877168438/job/97897808924) |
+| Single-container smoke | Pass | [Job 97897808696](https://github.com/YuSaZh/Imagine./actions/runs/32877168438/job/97897808696) |
+| Playwright | Pass | [Job 97897808923](https://github.com/YuSaZh/Imagine./actions/runs/32877168438/job/97897808923) |
 
 The remote checks validate the production build, browser flows, one-service Compose topology, bounded runtime behavior, and persistence boundaries. They do not constitute credentialed acceptance against OpenAI, Google, or xAI production endpoints.
 

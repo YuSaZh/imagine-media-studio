@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const execFile = promisify(execFileCallback);
 export const REQUIRED_CI_JOBS = [
+  'Prepare pinned CI toolchain',
   'Lint, typecheck, unit, build',
   ...projects.map(project => `Workspace browser gates: ${project}`),
   'Container integration and recovery',

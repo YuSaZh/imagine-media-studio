@@ -219,7 +219,7 @@ Write failures remain visible. Deletion requires confirmation and has no fictiti
 
 Run `pnpm run ci`, then `E2E_PORT=<unused-task-port> pnpm test:e2e --update-snapshots=none`. The single-container Docker API/archive/security smoke remains a separate gate. Default builds always ship this workspace.
 
-Historical replacement acceptance (2026-09-05): 108 unit-test files / 996 tests, lint, TypeScript, production bundle budget, 56 browser tests across eight viewports, and the complete isolated Docker upgrade/archive/media/adapter/persistence smoke passed. These counts describe that milestone, not the current revision. Normal workflow tests block Service Workers so intercepted responses remain deterministic; a separate PWA suite enables and verifies the real offline cache on every viewport.
+Historical replacement acceptance (2026-09-05): 108 unit-test files / 996 tests, lint, TypeScript, production bundle budget, 56 browser tests across eight viewports, and the complete isolated Docker upgrade/archive/media/adapter/persistence smoke passed. These counts describe that milestone, not the current revision. Normal workflow tests block Service Workers so intercepted responses remain deterministic. Current acceptance follows the [contributor coverage matrix](../../CONTRIBUTING.md#local-and-github-ci-parity): complete scenarios on desktop/mobile representatives, responsive and interaction checks on all eight viewports. The separate PWA suite enables and verifies the real offline cache on the representative desktop/mobile projects; installed-viewport and responsive PWA behavior retains its applicable viewport coverage.
 
 ## Test media
 

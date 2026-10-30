@@ -65,7 +65,7 @@ host, or persist a bypass in browser storage.
 ## GitHub Actions evidence
 
 Commit `20f2921` passed all 13 jobs in [GitHub Actions run
-33179394160](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33179394160),
+33179394160](https://github.com/YuSaZh/Imagine./actions/runs/33179394160),
 including quality/build, the single-container Docker smoke, the base browser
 suite, all eight PR 7 regression viewports, and both representative
 axe/performance jobs.

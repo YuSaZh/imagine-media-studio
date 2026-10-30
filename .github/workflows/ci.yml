@@ -32,47 +32,80 @@ jobs:
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node .github/scripts/ci-projects.mjs
 
+  toolchain:
+    name: Prepare pinned CI toolchain
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.identity.outputs.key }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - id: identity
+        run: node .github/scripts/ci-toolchain.mjs key >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .ci-cache/toolchain-${{ steps.identity.outputs.key }}.tar.gz
+          key: ci-toolchain-${{ steps.identity.outputs.key }}
+      - name: Build or verify the reusable toolchain archive
+        run: node .github/scripts/ci-toolchain.mjs prepare
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ci-toolchain-${{ steps.identity.outputs.key }}
+          path: .ci-cache/toolchain-${{ steps.identity.outputs.key }}.tar.gz
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 7
+
   quality:
+    needs: toolchain
     name: Lint, typecheck, unit, build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
-        with:
-          version: 11.23.0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run ci:quality
+          package-manager-cache: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: ci-toolchain-${{ needs.toolchain.outputs.key }}
+          path: .ci-cache
+      - run: node .github/scripts/ci-toolchain.mjs quality
+      - if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: quality-and-coverage-results
+          path: ci-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   workspace-e2e:
-    needs: projects
+    needs: [projects, toolchain]
     name: 'Workspace browser gates: ${{ matrix.project }}'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         project: ${{ fromJSON(needs.projects.outputs.projects) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
-        with:
-          version: 11.23.0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
-          cache: pnpm
-      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg fonts-noto-core fonts-noto-cjk
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+          package-manager-cache: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: ci-toolchain-${{ needs.toolchain.outputs.key }}
+          path: .ci-cache
       - name: Check live workflows, accessibility and visual baseline
         env:
           CI_BROWSER_PROJECT: ${{ matrix.project }}
-        run: pnpm run ci:browser "$CI_BROWSER_PROJECT"
+        run: node .github/scripts/ci-toolchain.mjs browser "$CI_BROWSER_PROJECT"
       - if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -83,17 +116,19 @@ jobs:
           retention-days: 7
 
   docker-smoke:
+    needs: toolchain
     name: Container integration and recovery
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
-        with:
-          version: 11.23.0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           package-manager-cache: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: ci-toolchain-${{ needs.toolchain.outputs.key }}
+          path: .ci-cache
       - name: Build and verify isolated source container
-        run: node .github/scripts/ci.mjs docker
+        run: node .github/scripts/ci-toolchain.mjs docker

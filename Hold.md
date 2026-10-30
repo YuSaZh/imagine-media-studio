@@ -56,7 +56,7 @@ The former same-UID gate replacement window no longer applies: the runtime/offli
 
 - **Affects:** PR 7 performance polish.
 - **Historical context:** The production entry chunk was `571.55 kB` in the final PR 5 remote quality build, above Vite's 500 kB advisory threshold.
-- **Resolution:** PR 7 route-split Settings, Library, and Mask editor and added a hard `500,000` raw-byte entry budget. Commit `a58ab7b` builds an entry of `334,651` bytes and passed [GitHub Actions run `33174754136`](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33174754136).
+- **Resolution:** PR 7 route-split Settings, Library, and Mask editor and added a hard `500,000` raw-byte entry budget. Commit `a58ab7b` builds an entry of `334,651` bytes and passed [GitHub Actions run `33174754136`](https://github.com/YuSaZh/Imagine./actions/runs/33174754136).
 - **Disposition:** The bundle advisory is closed; future regressions fail the production build.
 
 ### PR 7 update controls
@@ -70,7 +70,7 @@ The former same-UID gate replacement window no longer applies: the runtime/offli
 
 - **Affects:** PR 6 remote verification evidence.
 - **Historical context:** [GitHub incident `y1t7p9fzrlj2`](https://www.githubstatus.com/incidents/y1t7p9fzrlj2) and [GitHub incident `kfspvrz14xr0`](https://www.githubstatus.com/incidents/kfspvrz14xr0) previously prevented the expected PR 6 run from being generated.
-- **Resolution:** Commit `79a30f2` passed [GitHub Actions run `33140963119`](https://github.com/YuSaZh/imagine-media-studio/actions/runs/33140963119). Its Quality, single-container smoke, and Playwright jobs all concluded successfully; detailed job evidence is recorded in [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md).
+- **Resolution:** Commit `79a30f2` passed [GitHub Actions run `33140963119`](https://github.com/YuSaZh/Imagine./actions/runs/33140963119). Its Quality, single-container smoke, and Playwright jobs all concluded successfully; detailed job evidence is recorded in [`docs/architecture/pr6-verification.md`](./docs/architecture/pr6-verification.md).
 - **Disposition:** The outage-related PR 6 hold and its run placeholders are closed.
 
 ## Current operational boundaries

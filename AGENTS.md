@@ -69,7 +69,10 @@ Directory guides must not weaken the runtime and secret boundaries below.
   Follow [CI parity rules](./CONTRIBUTING.md#local-and-github-ci-parity).
 - Browser CI allows one retry and reports flaky cases separately. Reduced
   representative coverage is for server/document-only PRs; main and release
-  acceptance retain all eight viewports. Do not weaken assertions or conceal flakes.
+  acceptance retain all eight viewports: 1440×900 and 390×844 run every scenario;
+  the other six run responsive/interaction scenarios. Only reviewed `@workflow`
+  cases omit duplicate viewports; new untagged tests run on all eight. See the
+  contributor coverage policy. Do not weaken assertions or conceal flakes.
 - A failed release attempt does not by itself require a version bump. Preserve
   the requested unreleased version; replacing its remote tag requires explicit
   maintainer authorization and confirmation that no release artifacts were published.

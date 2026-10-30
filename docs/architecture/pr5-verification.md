@@ -71,13 +71,13 @@ Playwright execution and Docker smoke remain GitHub Actions-only. No application
 
 The run below validates the original PR 5 delivery baseline. The v2 `NetworkFirst` session-isolation hardening has new unit and browser acceptance coverage in this checkout and requires the next GitHub Actions run before it is treated as remotely closed.
 
-GitHub Actions run [32952151047](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32952151047) completed all three final jobs successfully:
+GitHub Actions run [32952151047](https://github.com/YuSaZh/Imagine./actions/runs/32952151047) completed all three final jobs successfully:
 
 | Job | Result | Evidence |
 |---|---|---|
-| Quality | Pass | [Job 98125731479](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32952151047/job/98125731479) |
-| Single-container API, video, and persistence smoke | Pass | [Job 98125731264](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32952151047/job/98125731264) |
-| Playwright PR 1, PR 3, PR 4 settings, and PR 5 video/PWA | Pass | [Job 98125731421](https://github.com/YuSaZh/imagine-media-studio/actions/runs/32952151047/job/98125731421) |
+| Quality | Pass | [Job 98125731479](https://github.com/YuSaZh/Imagine./actions/runs/32952151047/job/98125731479) |
+| Single-container API, video, and persistence smoke | Pass | [Job 98125731264](https://github.com/YuSaZh/Imagine./actions/runs/32952151047/job/98125731264) |
+| Playwright PR 1, PR 3, PR 4 settings, and PR 5 video/PWA | Pass | [Job 98125731421](https://github.com/YuSaZh/Imagine./actions/runs/32952151047/job/98125731421) |
 
 The remote quality job reported 72 test files / 546 tests passed and completed the production build. The final Web entry chunk was 571.55 kB, producing the known non-blocking Vite advisory. The remote Playwright job reported 39 passed and 8 skipped across the four configured viewports; the complete PR 5 generation flow is intentionally limited to the 1440x900 desktop and 390x844 mobile projects. One existing PR 3 persistent Mask test was flaky on an initial attempt but passed on retry, and the job completed successfully.
 

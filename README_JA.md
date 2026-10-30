@@ -10,7 +10,7 @@
 
 コンテナひとつ · GPU 不要 · PC・スマートフォン対応 · 日本語 / English / 中文
 
-[![Release](https://img.shields.io/github/v/release/YuSaZh/imagine-media-studio?style=flat-square)](https://github.com/YuSaZh/imagine-media-studio/releases/latest) [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&logo=docker&logoColor=white)](https://github.com/YuSaZh/imagine-media-studio/pkgs/container/imagine-media-studio) [![CI](https://github.com/YuSaZh/imagine-media-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/YuSaZh/imagine-media-studio/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-MIT-22a06b?style=flat-square)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/YuSaZh/Imagine.?style=flat-square)](https://github.com/YuSaZh/Imagine./releases/latest) [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&logo=docker&logoColor=white)](https://github.com/YuSaZh/Imagine./pkgs/container/imagine-media-studio) [![CI](https://github.com/YuSaZh/Imagine./actions/workflows/ci.yml/badge.svg)](https://github.com/YuSaZh/Imagine./actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-MIT-22a06b?style=flat-square)](./LICENSE)
 
 [简体中文](./README.md) · [English](./README_EN.md) · **日本語**
 
@@ -70,6 +70,8 @@ mkdir -m 700 data
 初期ユーザー名は `admin`、ランダム生成されたパスワードは `.env` の `ADMIN_PASSWORD` で確認できます。**更新時も `.env` と元の `APP_SECRET` を保持してください。** 保存済み API キーの復号に必要です。
 
 ### 2 · `compose.yaml` として保存
+
+GitHub リポジトリ名は `Imagine.` です。公開済みイメージは引き続き以下の `ghcr.io/yusazh/imagine-media-studio` で利用できます。
 
 ```yaml
 services:
@@ -131,9 +133,9 @@ docker compose up -d
 <a id="documentation"></a>
 ## 詳しく知る
 
-- [変更履歴](./CHANGELOG.md) · [リリース](https://github.com/YuSaZh/imagine-media-studio/releases) · [既知の制限](./Hold.md)
+- [変更履歴](./CHANGELOG.md) · [リリース](https://github.com/YuSaZh/Imagine./releases) · [既知の制限](./Hold.md)
 - [モデルの対応機能](./docs/model-capabilities.md) · [デプロイとデータ管理](./RELEASE.md) · [ドキュメント一覧](./docs/README.md)
-- [開発・コントリビュート](./CONTRIBUTING.md) · [不具合の報告](https://github.com/YuSaZh/imagine-media-studio/issues)
+- [開発・コントリビュート](./CONTRIBUTING.md) · [不具合の報告](https://github.com/YuSaZh/Imagine./issues)
 
 ---
 
